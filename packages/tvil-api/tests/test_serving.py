@@ -153,3 +153,45 @@ class TestClientServing:
     )
     def test_api_paths_are_distinguished_from_client_paths(self, path: str, expected: bool) -> None:
         assert is_api_path(path) is expected
+
+
+class TestClientLocation:
+    """Where the client is found must not depend on how the package is installed."""
+
+    def test_an_explicit_setting_wins(self, tmp_path: Path) -> None:
+        from tvil_api.app import _web_dir
+        from tvil_core.settings import Settings
+
+        chosen = tmp_path / "somewhere-else"
+        assert _web_dir(Settings(_env_file=None, web_dir=chosen)) == chosen
+
+    def test_falls_back_to_the_working_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """This is the container layout: the client sits beside the working dir.
+
+        Deriving the path by counting parents from the module only works in a
+        source checkout; installed into a virtualenv it lands inside the venv
+        and the client silently stops being served.
+        """
+        from tvil_api.app import _web_dir
+        from tvil_core.settings import Settings
+
+        web = tmp_path / "web"
+        web.mkdir()
+        (web / "index.html").write_text("<html></html>", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        assert _web_dir(Settings(_env_file=None)) == web
+
+    def test_finds_the_source_tree_when_run_from_elsewhere(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tvil_api.app import _web_dir
+        from tvil_core.settings import Settings
+
+        monkeypatch.chdir(tmp_path)  # no web/ here
+
+        found = _web_dir(Settings(_env_file=None))
+
+        assert (found / "index.html").is_file()

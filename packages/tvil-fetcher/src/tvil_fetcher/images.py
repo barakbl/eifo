@@ -153,11 +153,15 @@ class ImageFetcher:
         destination = poster_dir(self._images_dir, title.id)
         largest = destination / f"{POSTER_VARIANTS[-1].name}.jpg"
 
-        if largest.exists() and not force:
+        # Only a title that already claims this file may skip the download.
+        #
+        # Paths are keyed by title id, and ids are reused: rebuild the catalog
+        # and id 13 becomes a different title while the old id 13 poster is
+        # still on disk. Adopting whatever file happens to sit at the path put
+        # an Israeli talk-show still on an animated film. A title with no
+        # recorded poster always fetches its own.
+        if largest.exists() and not force and title.poster_path is not None:
             result.skipped += 1
-            if title.poster_path is None:
-                title.poster_path = relative_path(self._images_dir, largest)
-                return True
             return False
 
         try:

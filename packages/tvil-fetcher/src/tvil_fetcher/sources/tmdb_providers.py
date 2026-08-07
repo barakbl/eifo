@@ -20,6 +20,15 @@ from tvil_core.enums import OfferType, SourceKind, TitleKind
 from tvil_fetcher.sources.base import FetchContext, RawItem, SourceInfo, SourcePlugin
 from tvil_fetcher.tmdb import TmdbClient, image_url
 
+#: Where a viewer is sent for a specific title.
+#:
+#: The JustWatch export behind this data carries no per-provider deep links, so
+#: a service's own homepage was used at first — a "Watch" button that did not
+#: take you to the thing you clicked. TMDB publishes a per-title watch page
+#: instead, which names every service carrying it in the region. The slug is
+#: optional: TMDB redirects the bare id to the canonical URL.
+WATCH_URL_TEMPLATE = "https://www.themoviedb.org/{media}/{tmdb_id}/watch?locale={region}"
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderSource:
@@ -179,9 +188,7 @@ class TmdbProvidersPlugin(SourcePlugin):
                 year=hit.year,
                 tmdb_id=hit.tmdb_id,
                 offer_type=OfferType.STREAM,
-                # JustWatch's export has no per-title deep links; send viewers
-                # to the service itself rather than inventing a URL.
-                deep_link_url=source.website_url,
+                deep_link_url=watch_url(kind, hit.tmdb_id, tmdb.region),
                 poster_url=image_url(hit.poster_path) if hit.poster_path else None,
                 extra={"provider_id": provider_id},
             )
@@ -193,6 +200,12 @@ class TmdbProvidersPlugin(SourcePlugin):
                 kind.value,
                 max_pages,
             )
+
+
+def watch_url(kind: TitleKind, tmdb_id: int, region: str) -> str:
+    """The page listing where this specific title can be watched."""
+    media = "movie" if kind is TitleKind.MOVIE else "tv"
+    return WATCH_URL_TEMPLATE.format(media=media, tmdb_id=tmdb_id, region=region)
 
 
 def _source_for(key: str) -> ProviderSource | None:

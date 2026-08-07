@@ -183,29 +183,48 @@ class TestImageFetcher:
         assert result.downloaded == 2
 
     @respx.mock
-    def test_recovers_the_path_when_the_file_is_already_on_disk(
+    def test_never_adopts_a_file_left_by_a_different_title(
         self, session_factory: sessionmaker[Session], http: HttpClient, tmp_path: Path
     ) -> None:
-        """A run interrupted after writing but before committing self-heals."""
+        """Paths are keyed by title id, and ids are reused across rebuilds.
+
+        Adopting whatever file already sits at the path put an unrelated
+        programme's artwork on a film. A title with no recorded poster must
+        fetch its own, whatever is on disk.
+        """
         respx.get(POSTER_URL).mock(return_value=httpx.Response(200, content=png_bytes()))
+        images_dir = tmp_path / "images"
         with session_factory() as session:
             title = add_title(session)
-        images_dir = tmp_path / "images"
-        ImageFetcher(http, images_dir).fetch_missing(session_factory())
 
-        with session_factory() as session:
-            stored = session.get(Title, title.id)
-            assert stored is not None
-            stored.poster_path = None
-            session.commit()
+        # A previous catalog's poster, left behind at this id's path.
+        stale = images_dir / "posters" / str(title.id)
+        stale.mkdir(parents=True)
+        (stale / "w500.jpg").write_bytes(b"a different title's artwork")
 
         result = ImageFetcher(http, images_dir).fetch_missing(session_factory())
 
-        assert result.skipped == 1
+        assert result.downloaded == 1
+        assert (stale / "w500.jpg").read_bytes() != b"a different title's artwork"
+
+    @respx.mock
+    def test_a_title_that_already_claims_its_poster_is_skipped(
+        self, session_factory: sessionmaker[Session], http: HttpClient, tmp_path: Path
+    ) -> None:
+        """The genuinely idempotent case still costs no download."""
+        route = respx.get(POSTER_URL).mock(
+            return_value=httpx.Response(200, content=png_bytes())
+        )
+        images_dir = tmp_path / "images"
         with session_factory() as session:
-            recovered = session.get(Title, title.id)
-            assert recovered is not None
-            assert recovered.poster_path == f"posters/{title.id}/w500.jpg"
+            add_title(session)
+        fetcher = ImageFetcher(http, images_dir)
+        fetcher.fetch_missing(session_factory())
+
+        second = fetcher.fetch_missing(session_factory())
+
+        assert second.skipped == 0  # nothing is due once poster_path is set
+        assert route.call_count == 1
 
 
 class TestPendingSelection:

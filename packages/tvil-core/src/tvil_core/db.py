@@ -42,6 +42,19 @@ def _sqlite_path(db_url: str) -> Path | None:
     return Path(raw)
 
 
+def ensure_sqlite_parent(db_url: str) -> None:
+    """Create the directory a file-backed SQLite database will live in.
+
+    SQLite will not create a missing parent directory: it reports only
+    "unable to open database file", which is an unhelpful first experience on a
+    fresh install where ``data/`` does not exist yet. Every path that opens a
+    database — including migrations, which build their own engine — calls this.
+    """
+    path = _sqlite_path(db_url)
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+
 def create_engine_from_settings(settings: Settings | None = None, *, echo: bool = False) -> Engine:
     """Build an engine, creating the SQLite parent directory if needed.
 
@@ -51,9 +64,7 @@ def create_engine_from_settings(settings: Settings | None = None, *, echo: bool 
     settings = settings or get_settings()
     db_url = settings.db_url
 
-    path = _sqlite_path(db_url)
-    if path is not None:
-        path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_sqlite_parent(db_url)
 
     engine = create_engine(db_url, echo=echo, future=True)
 

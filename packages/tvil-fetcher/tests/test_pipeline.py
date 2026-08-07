@@ -319,3 +319,76 @@ class TestSourceLifecycle:
         run_sync(session, settings, sync_ctx, [item("פאודה")])
 
         assert deactivate_missing_sources(session, [INFO.key]) == []
+
+
+class TestRepeatedItems:
+    """Sources repeat themselves; a sync must survive it.
+
+    Paginated APIs return a title again when the underlying result set shifts
+    between pages, and two listings can resolve to the same canonical title.
+    """
+
+    def test_the_same_title_twice_in_one_run(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        result = run_sync(session, settings, sync_ctx, [item("פאודה"), item("פאודה")])
+
+        assert result.status is FetchStatus.OK
+        assert len(session.scalars(select(Availability)).all()) == 1
+
+    def test_a_repeat_counts_as_an_update_not_a_second_row(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        result = run_sync(session, settings, sync_ctx, [item("פאודה"), item("פאודה")])
+
+        assert result.availability_created == 1
+        assert result.availability_updated == 1
+
+    def test_a_repeat_with_a_deep_link_keeps_the_link(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        run_sync(
+            session,
+            settings,
+            sync_ctx,
+            [item("פאודה"), item("פאודה", deep_link_url="https://x.example/f")],
+        )
+
+        assert session.scalars(select(Availability)).one().deep_link_url == "https://x.example/f"
+
+    def test_repeats_across_offer_types_are_still_separate_rows(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        run_sync(
+            session,
+            settings,
+            sync_ctx,
+            [
+                item("פאודה", offer_type=OfferType.STREAM),
+                item("פאודה", offer_type=OfferType.RENT),
+                item("פאודה", offer_type=OfferType.STREAM),
+            ],
+        )
+
+        assert len(session.scalars(select(Availability)).all()) == 2
+
+
+class TestFailureRecovery:
+    def test_a_mid_flush_failure_still_records_the_run(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        """Without a rollback, recording the failure would itself raise."""
+
+        class Exploding(SourcePlugin):
+            def sources(self) -> list[SourceInfo]:
+                return [INFO]
+
+            def fetch(self, ctx: FetchContext) -> Iterator[RawItem]:
+                yield item("פאודה")
+                raise RuntimeError("connection reset mid-stream")
+
+        result = run_sync(session, settings, sync_ctx, plugin=Exploding())
+
+        assert result.status is FetchStatus.FAILED
+        run = session.scalars(select(FetchRun)).one()
+        assert run.status is FetchStatus.FAILED

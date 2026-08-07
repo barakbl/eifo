@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from tvil_core.enums import FetchPhase, FetchStatus
+from tvil_core.enums import FetchPhase, FetchStatus, OfferType
 from tvil_core.models import Availability, FetchRun, Source, Title
 from tvil_core.types import utcnow
 from tvil_fetcher.match import MatchStats, TitleMatcher
@@ -105,9 +105,14 @@ def sync_source(
     except TooManyErrorsError as exc:
         logger.error("%s", exc)
         result.status = FetchStatus.FAILED
+        session.rollback()
     except Exception:
         logger.exception("source %r failed", info.key)
         result.status = FetchStatus.FAILED
+        # A failure mid-flush leaves the session needing a rollback; without one
+        # even recording the failure would raise, turning a bad source into a
+        # crashed run.
+        session.rollback()
 
     result.errors = list(ctx.errors)
     result.matched_by = matcher.stats.as_dict()
@@ -140,6 +145,13 @@ def _ingest(
 ) -> None:
     titles_before = _title_count(session)
 
+    # Rows added but not yet flushed are invisible to a SELECT, so a title seen
+    # twice in one stream would be inserted twice and break the unique
+    # constraint. Sources repeat themselves routinely — paginated APIs return a
+    # title again when the underlying result set shifts between pages, and two
+    # listings can resolve to the same canonical title.
+    written: dict[tuple[int, int, OfferType], Availability] = {}
+
     for item in items:
         result.items_seen += 1
         match = matcher.match(item)
@@ -155,6 +167,7 @@ def _ingest(
             source=source,
             item=item,
             seen_at=run_started_at,
+            written=written,
         )
         if created:
             result.availability_created += 1
@@ -197,33 +210,44 @@ def upsert_availability(
     source: Source,
     item: RawItem,
     seen_at: dt.datetime,
+    written: dict[tuple[int, int, OfferType], Availability] | None = None,
 ) -> bool:
     """Record that a title is offered right now. Returns True if newly created.
 
     Seeing an item again clears any strikes against it and revives a row that
     had been retired, which is what makes re-runs idempotent.
-    """
-    availability = session.scalar(
-        select(Availability).where(
-            Availability.title_id == title.id,
-            Availability.source_id == source.id,
-            Availability.offer_type == item.offer_type,
-        )
-    )
 
+    Args:
+        written: rows already created in this run, keyed by the unique triple.
+            Pending inserts are invisible to a SELECT, so without this a source
+            that lists the same title twice would insert it twice.
+    """
+    key = (title.id, source.id, item.offer_type)
+
+    availability = written.get(key) if written is not None else None
     if availability is None:
-        session.add(
-            Availability(
-                title_id=title.id,
-                source_id=source.id,
-                offer_type=item.offer_type,
-                deep_link_url=item.deep_link_url,
-                first_seen=seen_at,
-                last_seen=seen_at,
-                is_current=True,
-                miss_count=0,
+        availability = session.scalar(
+            select(Availability).where(
+                Availability.title_id == title.id,
+                Availability.source_id == source.id,
+                Availability.offer_type == item.offer_type,
             )
         )
+
+    if availability is None:
+        availability = Availability(
+            title_id=title.id,
+            source_id=source.id,
+            offer_type=item.offer_type,
+            deep_link_url=item.deep_link_url,
+            first_seen=seen_at,
+            last_seen=seen_at,
+            is_current=True,
+            miss_count=0,
+        )
+        session.add(availability)
+        if written is not None:
+            written[key] = availability
         return True
 
     availability.last_seen = seen_at

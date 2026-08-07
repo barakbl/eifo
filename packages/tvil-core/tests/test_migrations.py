@@ -96,3 +96,19 @@ def test_downgrade_removes_the_schema(tmp_path: Path) -> None:
     finally:
         engine.dispose()
     assert remaining & EXPECTED_TABLES == set()
+
+
+def test_migrating_creates_a_missing_database_directory(tmp_path: Path) -> None:
+    """A fresh install has no data/ yet, and SQLite will not create one.
+
+    Migrations build their own engine rather than going through
+    create_engine_from_settings, so they must ensure the directory themselves —
+    otherwise the very first documented command fails with nothing more helpful
+    than "unable to open database file".
+    """
+    nested = tmp_path / "data" / "nested"
+    assert not nested.exists()
+
+    upgrade(f"sqlite:///{nested / 'tvil.db'}")
+
+    assert (nested / "tvil.db").exists()

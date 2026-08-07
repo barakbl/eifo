@@ -28,9 +28,18 @@ __all__ = [
 
 def _builtin_enrichers() -> list[Enricher]:
     # Imported lazily so one broken provider cannot break the whole CLI.
+    from tvil_fetcher.enrichers.rt import RottenTomatoesEnricher
+    from tvil_fetcher.enrichers.seret import SeretEnricher
     from tvil_fetcher.enrichers.tmdb_meta import TmdbMetadataEnricher
 
-    return [TmdbMetadataEnricher()]
+    # TMDB first: it fills the imdb_id and names the others resolve against.
+    return [TmdbMetadataEnricher(), SeretEnricher(), RottenTomatoesEnricher()]
+
+
+#: Providers switched off unless configuration enables them. Seret has no
+#: working title search, so it cannot resolve a title to a page on its own
+#: (see tvil_fetcher.enrichers.seret).
+DISABLED_BY_DEFAULT = frozenset({"seret"})
 
 
 def _entry_point_enrichers() -> list[Enricher]:
@@ -54,5 +63,6 @@ def discover_enrichers(settings: Settings | None = None) -> list[Enricher]:
     if settings is None:
         return enrichers
 
-    disabled = set(settings.enrich.disabled)
+    disabled = DISABLED_BY_DEFAULT - set(settings.enrich.enabled)
+    disabled |= set(settings.enrich.disabled)
     return [enricher for enricher in enrichers if enricher.key not in disabled]

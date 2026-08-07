@@ -80,6 +80,8 @@ class EnrichConfig(BaseModel):
     batch_size: int = 500
     #: Providers switched off, by enricher key.
     disabled: list[str] = Field(default_factory=list)
+    #: Providers switched on that are otherwise off by default.
+    enabled: list[str] = Field(default_factory=list)
 
 
 class ScheduleConfig(BaseModel):

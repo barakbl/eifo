@@ -15,7 +15,7 @@ from apscheduler.triggers.cron import CronTrigger
 from tvil_core.db import create_engine_from_settings, make_session_factory, require_schema
 from tvil_core.settings import Settings
 from tvil_fetcher.http import HttpClient
-from tvil_fetcher.runner import fetch_images, sync_all
+from tvil_fetcher.runner import enrich_all, fetch_images, sync_all
 
 logger = logging.getLogger("tvil.fetch.daemon")
 
@@ -35,11 +35,17 @@ def _phases(settings: Settings) -> list[tuple[str, str, Callable[[], None]]]:
     def sync() -> None:
         _run_phase(settings, "sync")
 
+    def enrich() -> None:
+        _run_phase(settings, "enrich")
+
     def images() -> None:
         _run_phase(settings, "images")
 
+    # Ordered by dependency: enrichment needs the titles sync creates, and the
+    # image phase needs the artwork URLs enrichment fills in.
     return [
         ("sync", settings.schedule.sync, sync),
+        ("enrich", settings.schedule.enrich, enrich),
         ("images", settings.schedule.images, images),
     ]
 
@@ -53,6 +59,8 @@ def _run_phase(settings: Settings, phase: str) -> None:
         with HttpClient() as http:
             if phase == "sync":
                 sync_all(session_factory, settings, http=http)
+            elif phase == "enrich":
+                enrich_all(session_factory, settings, http=http)
             else:
                 fetch_images(session_factory, settings, http=http)
     except Exception:

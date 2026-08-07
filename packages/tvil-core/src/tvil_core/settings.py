@@ -69,6 +69,21 @@ class ScoresConfig(BaseModel):
     min_providers: int = 2
 
 
+class EnrichConfig(BaseModel):
+    """How often ratings are refreshed (docs.internal/06-enrichment.md)."""
+
+    #: Ratings older than this are refetched.
+    refresh_days: int = 14
+    #: Titles currently available somewhere are worth keeping fresher.
+    hot_refresh_days: int = 3
+    #: Titles per run, so a scheduled enrich has a bounded runtime.
+    batch_size: int = 500
+    #: Providers switched off, by enricher key.
+    disabled: list[str] = Field(default_factory=list)
+    #: Providers switched on that are otherwise off by default.
+    enabled: list[str] = Field(default_factory=list)
+
+
 class ScheduleConfig(BaseModel):
     """Daemon schedule; ignored when the phases are driven by system cron."""
 
@@ -103,6 +118,7 @@ class Settings(BaseSettings):
 
     sources: dict[str, SourceConfig] = Field(default_factory=dict)
     scores: ScoresConfig = Field(default_factory=ScoresConfig)
+    enrich: EnrichConfig = Field(default_factory=EnrichConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
 
     @classmethod

@@ -7,12 +7,13 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import Session, sessionmaker
 
 from tvil_core.db import create_engine_from_settings, make_session_factory
 from tvil_core.enums import FetchPhase, FetchStatus, OfferType, SourceKind, TitleKind
-from tvil_core.migrate import upgrade
+from tvil_core.migrate import alembic_config, upgrade
 from tvil_core.models import Availability, FetchRun, MatchReview, Source, Title
 from tvil_core.settings import Settings, get_settings
 from tvil_fetcher.cli import EXIT_FATAL, EXIT_OK, build_parser, main
@@ -72,9 +73,12 @@ class TestDatabaseCommands:
     def test_current_reports_the_head_revision(
         self, migrated: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        """Compared against the actual head so a new migration cannot break this."""
+        head = ScriptDirectory.from_config(alembic_config("sqlite://")).get_current_head()
+
         assert main(["db", "current"]) == EXIT_OK
 
-        assert "0002_poster_source_url" in capsys.readouterr().out
+        assert capsys.readouterr().out.strip() == head
 
 
 class TestCommandsRequireAMigratedDatabase:

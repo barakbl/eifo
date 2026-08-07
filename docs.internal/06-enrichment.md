@@ -33,18 +33,38 @@ fresh), or on `--force`.
 - Link: `imdb.com/title/{tt}/`.
 - License: IMDb non-commercial terms — fine for this project; noted in the UI footer.
 
-### Rotten Tomatoes (`rt`) — scrape (no public API)
-- Resolve via RT search (title + year), then parse the title page's embedded JSON-LD /
-  score payload. Two ratings per title: `rt_critics` (Tomatometer) and `rt_audience`.
-- Low rate limit (0.5 rps), aggressive caching, and a "not found" memo (don't re-search
-  misses for 90 days). Many Israeli titles won't exist on RT — that's expected and fine.
-- Link: the resolved RT page.
+### Rotten Tomatoes (`rt`) — no public API
+Verified against the live site (August 2026):
+- Scores come from the embedded `media-scorecard-json` payload: `criticsScore.score` →
+  `rt_critics` and `audienceScore.score` → `rt_audience`, both 0–100 percentages sent as
+  strings. `ratingCount` is null on audience blocks, so `reviewCount` is the real figure.
+- `hideAudienceScore` is respected: if RT declines to show a number, neither do we.
+- **`/search` is robots-disallowed**, so search-based resolution is not available to a
+  compliant crawler. Instead the English title is turned into RT's slug form and requested
+  directly; RT redirects near-miss slugs to the right film, and a genuine absence answers
+  404, which is a clean "not found". A title with no Latin name has no slug and is skipped.
+- Many Israeli titles are simply not on RT — expected, and not an error.
 
-### Seret (`seret`) — scrape; primary Israeli provider
-- seret.co.il carries critic and viewer scores for films and series, incl. Israeli content
-  that global providers miss. Resolve by Hebrew name + year via site search; parse critic
-  score → `seret_critics`, viewer score → `seret_viewers` (native 1–10 scale).
-- Link: the Seret title page. Same politeness + not-found memo as RT.
+### Seret (`seret`) — primary Israeli provider — **implemented but off by default**
+Verified against the live site (August 2026):
+- Scores come from **schema.org JSON-LD**, not CSS selectors: `aggregateRating.ratingValue`
+  is the viewer score (0–10, with `ratingCount`) → `seret_viewers`, and an
+  `additionalProperty` entry holding the site's composite editorial score →
+  `seret_critics`.
+- Films and series are **different endpoints with different id parameters**
+  (`s_movies.asp?MID=` vs `s_series.asp?SID=`) and declare different JSON-LD types
+  (`Movie` / `TVSeries`). Handling only one silently loses the other.
+- Pages are **windows-1255**, not UTF-8. A wrong decode turns every Hebrew name to
+  mojibake and breaks matching.
+- `sameAs` carries an IMDb link, which settles identity far more reliably than comparing
+  names — used first whenever both sides have one.
+
+**Why it is disabled by default:** Seret publishes no working title search. The
+`SearchAction` its own homepage advertises, the real form POST, and the autocomplete
+endpoint all return a generic current-releases listing rather than results, so a title
+cannot be resolved to a page id. Everything downstream of an id is implemented and tested;
+resolution needs sitemap-based indexing, deferred to a follow-up. Switch it on with
+`[enrich] enabled = ["seret"]` once that exists.
 
 ### EDB (`edb`) — scrape; optional secondary Israeli provider (config-off by default)
 Same pattern as Seret. Exists mainly to prove the "Israeli providers are pluggable" claim.
@@ -58,6 +78,16 @@ Same pattern as Seret. Exists mainly to prove the "Israeli providers are pluggab
 
 `score_raw` keeps the native value for display ("8.4/10", "92%"); `score_normalized` is
 what aggregation uses.
+
+Two rules that are easy to get subtly wrong:
+
+- **Halves round up, always.** Python's built-in `round` rounds halves to *even*, which
+  would normalise 7.25 → 72 but 7.35 → 74. A user-visible score must not depend on the
+  parity of the preceding digit, so normalisation and the weighted mean both use an
+  explicit half-up rounding helper.
+- **A score outside its provider's scale is rejected, not stored.** Reading a percentage
+  as a 0–10 value (or vice versa) is the likeliest parser bug, and storing it would quietly
+  skew the aggregate. The rating is dropped and the error recorded in `fetch_runs.stats`.
 
 ## Aggregate score
 
@@ -80,8 +110,10 @@ Rules:
 - Vote-count damping: a provider rating with < 50 votes gets its weight halved (protects
   against a 10/10-from-3-votes skew).
 - `score_israeli` = same formula over Israeli providers only (`seret_*`, `edb`) — this is
-  the dedicated Israeli-ratings aggregate; shown alongside the global one for local
-  content.
+  the dedicated Israeli-ratings aggregate, shown alongside the global one for local
+  content. It deliberately needs only **one** provider: the whole point of a separate
+  Israeli score is to surface local opinion, and requiring two would hide it for most
+  titles, since Seret is the only Israeli provider enabled by default.
 - `aggregate_scores.components` stores every input (provider, normalized, weight applied),
   so the UI can show "how was this computed" and tests can assert exact math.
 - Recomputed at the end of every `enrich` run for titles whose ratings changed.

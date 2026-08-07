@@ -72,6 +72,16 @@ enabled = false
 # Score aggregation — see docs.internal/06-enrichment.md
 # ---------------------------------------------------------------------------
 
+# How often ratings are refreshed, and which providers are switched on.
+[enrich]
+refresh_days = 14        # ratings older than this are refetched
+hot_refresh_days = 3     # titles currently available somewhere stay fresher
+batch_size = 500         # titles per run, bounding a scheduled enrich
+disabled = []            # enricher keys to switch off, e.g. ["rt"]
+# Seret is off by default: the site publishes no working title search, so a
+# title cannot be resolved to a page id. See docs.internal/06-enrichment.md.
+enabled = []             # providers that are otherwise off, e.g. ["seret"]
+
 [scores.weights]
 imdb = 3.0
 rt_critics = 2.0

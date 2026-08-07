@@ -66,11 +66,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     mount_images(app, Path(settings.images_dir))
     # Registered last: its catch-all route must not shadow the API.
-    mount_client(app, _web_dir())
+    mount_client(app, _web_dir(settings))
 
     return app
 
 
-def _web_dir() -> Path:
-    """Where the static client lives, relative to the installed package."""
-    return Path(__file__).resolve().parents[4] / "web"
+def _web_dir(settings: Settings) -> Path:
+    """Where the static client lives.
+
+    Counting parent directories from the module only works in a source
+    checkout; once the package is installed into a virtualenv the same
+    arithmetic lands inside the venv, and the client silently stops being
+    served. So the location is looked for rather than derived: an explicit
+    setting first, then the working directory (which is how the container is
+    laid out), then the source tree.
+    """
+    if settings.web_dir is not None:
+        return settings.web_dir
+
+    candidates = (
+        Path.cwd() / "web",
+        Path(__file__).resolve().parents[4] / "web",
+    )
+    for candidate in candidates:
+        if (candidate / "index.html").is_file():
+            return candidate
+
+    return candidates[0]

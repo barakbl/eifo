@@ -105,6 +105,8 @@ class Settings(BaseSettings):
 
     db_url: str = "sqlite:///data/tvil.db"
     images_dir: Path = Path("data/images")
+    #: Where the static web client lives; found automatically when unset.
+    web_dir: Path | None = None
     public_origin: str = "http://localhost:8000"
     stale_after_hours: int = 48
 

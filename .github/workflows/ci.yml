@@ -45,6 +45,9 @@ jobs:
           uv run pytest packages/tvil-api packages/tvil-fetcher
           --cov=tvil_api --cov=tvil_fetcher --cov-fail-under=85
 
+      - name: Client logic tests
+        run: node --test "web/tests/*.test.js"
+
       - name: Migrations apply from scratch
         run: |
           TVIL_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run tvil-fetch db upgrade

@@ -36,8 +36,11 @@ is a function `(el, params) => teardown`, state flows one way (store → render)
   by what I have" requirement; "All" is one tap away. Plus: type (movie/series), genre,
   minimum score, sort.
 - **Grid:** responsive poster cards (2-col mobile → 6-col desktop). Card = poster
-  (lazy-loaded, aspect 2:3, skeleton shimmer while loading), title in UI language, year,
-  aggregate score pill, tiny source logos row.
+  (aspect 2:3, skeleton shimmer while loading), title in UI language, year, aggregate score
+  pill, and the source spine.
+- **The first screen of posters loads eagerly**, the rest lazily. Lazy-loading images that
+  are already visible only delays the largest paint, which is exactly what the performance
+  budget measures.
 - Infinite scroll (IntersectionObserver) over the paginated API. Filters serialize to the
   URL hash — every view is shareable/bookmarkable.
 
@@ -69,14 +72,30 @@ Read-only lists + ratings of a public user. Notes never shown.
 - **Tokens first:** all colors/spacing/type in `tokens.css` custom properties; components
   never hardcode values. Dark theme is the default; light theme via
   `prefers-color-scheme` + manual toggle (`data-theme` on `<html>`).
-- **Type:** system stack (`-apple-system, "Segoe UI", Roboto, "Heebo", sans-serif`) —
-  Heebo (self-hosted, no CDN) covers Hebrew nicely. Scale: 14/16/20/28/36.
+- **Type:** `system-ui` first, which carries a Hebrew face on every target platform, plus a
+  monospace stack for data (scores, counts, dates) so figures read as figures. Self-hosting
+  Heebo is a follow-up — it needs the actual font files, and a CDN link is not an option.
 - **Feel:** generous whitespace, 8px spacing grid, 12px radii, subtle shadows, one accent
   color; score pills color-coded (≥75 green, 50–74 amber, <50 red, neutral gray when null).
+- **Palette:** indigo ink with a warm amber accent — evening light rather than the neutral
+  grey of a dashboard. Deliberately not near-black plus an acid accent.
+
 - **Motion:** 150ms ease transitions only (hover lift on cards, toggle states). No
-  gratuitous animation.
+  gratuitous animation, and `prefers-reduced-motion` disables it entirely.
 - **Empty/error states** are designed, not default: friendly empty-list illustrations,
   retry buttons on fetch failure, offline banner.
+
+### The signature: the source spine
+
+Every card carries a segmented colour bar along the poster's bottom edge, one segment per
+service currently offering that title, using the same hue as that service's filter chip.
+Scanning the grid you read **availability as colour** before you read titles — which is the
+question the product exists to answer. It is the one loud element; everything around it
+stays quiet.
+
+Source colours live in `tokens.css` as `--source-<key>`. They carry information rather than
+mood, so they are chosen for distinguishability, and the spine is always paired with a text
+label (the offer list, the card's accessible name) — never colour alone.
 
 ## RTL & i18n
 

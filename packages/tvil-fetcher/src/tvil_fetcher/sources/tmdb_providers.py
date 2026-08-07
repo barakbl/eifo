@@ -33,72 +33,60 @@ class ProviderSource:
     provider_names: tuple[str, ...]
 
 
-#: The Israeli market as of 2026. Provider ids are resolved by name at runtime
-#: rather than hard-coded, because TMDB renumbers and renames providers and a
-#: stale id silently yields an empty catalog.
+#: Services TMDB actually reports for region IL, verified against the live API
+#: in August 2026. Provider ids are resolved by name at runtime rather than
+#: hard-coded, because TMDB renumbers and renames providers and a stale id fails
+#: silently as an empty catalog.
+#:
+#: **The Israeli operators are not here, and cannot be.** JustWatch — whose data
+#: this is — does not track yes+, Sting TV, HOT, Cellcom TV or Partner TV at
+#: all: they appear nowhere in TMDB's region-IL provider list, so every one of
+#: them returned zero. Reaching them needs a dedicated plugin per operator, the
+#: way Mako has one. See docs.internal/03-sources.md.
 PROVIDER_SOURCES: tuple[ProviderSource, ...] = (
     ProviderSource(
         key="netflix_il",
         name="Netflix",
         kind=SourceKind.SUBSCRIPTION,
         website_url="https://www.netflix.com/il/",
-        provider_names=("Netflix", "Netflix Standard with Ads"),
-    ),
-    ProviderSource(
-        key="disney_plus_il",
-        name="Disney+",
-        kind=SourceKind.SUBSCRIPTION,
-        website_url="https://www.disneyplus.com/",
-        provider_names=("Disney Plus", "Disney+"),
+        provider_names=("Netflix",),
     ),
     ProviderSource(
         key="prime_video_il",
         name="Prime Video",
         kind=SourceKind.SUBSCRIPTION,
         website_url="https://www.primevideo.com/",
-        provider_names=("Amazon Prime Video", "Prime Video"),
+        provider_names=("Amazon Prime Video",),
     ),
     ProviderSource(
         key="apple_tv_plus",
-        name="Apple TV+",
+        name="Apple TV",
         kind=SourceKind.SUBSCRIPTION,
         website_url="https://tv.apple.com/il",
-        provider_names=("Apple TV+", "Apple TV Plus"),
+        # TMDB lists no "Apple TV+"; "Apple TV" is the subscription and
+        # "Apple TV Store" is the separate rent-and-buy storefront.
+        provider_names=("Apple TV",),
     ),
     ProviderSource(
-        key="yes_plus",
-        name="yes+",
+        key="hbo_max_il",
+        name="HBO Max",
         kind=SourceKind.SUBSCRIPTION,
-        website_url="https://www.yes.co.il/",
-        provider_names=("yes+", "Yes Plus", "yes VOD"),
+        website_url="https://www.hbomax.com/",
+        provider_names=("HBO Max",),
     ),
     ProviderSource(
-        key="sting_tv",
-        name="Sting TV",
+        key="mubi_il",
+        name="MUBI",
         kind=SourceKind.SUBSCRIPTION,
-        website_url="https://www.stingtv.co.il/",
-        provider_names=("Sting TV", "STINGTV"),
+        website_url="https://mubi.com/",
+        provider_names=("MUBI",),
     ),
     ProviderSource(
-        key="hot",
-        name="HOT",
+        key="crunchyroll_il",
+        name="Crunchyroll",
         kind=SourceKind.SUBSCRIPTION,
-        website_url="https://www.hot.net.il/",
-        provider_names=("HOT", "Hot Israel", "NEXT TV"),
-    ),
-    ProviderSource(
-        key="cellcom_tv",
-        name="Cellcom TV",
-        kind=SourceKind.SUBSCRIPTION,
-        website_url="https://cellcomtv.co.il/",
-        provider_names=("Cellcom tv", "Cellcom TV"),
-    ),
-    ProviderSource(
-        key="partner_tv",
-        name="Partner TV",
-        kind=SourceKind.SUBSCRIPTION,
-        website_url="https://www.partner.co.il/tv/",
-        provider_names=("Partner TV", "Partner"),
+        website_url="https://www.crunchyroll.com/",
+        provider_names=("Crunchyroll",),
     ),
 )
 

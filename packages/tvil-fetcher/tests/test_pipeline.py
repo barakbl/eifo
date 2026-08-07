@@ -13,6 +13,7 @@ from tvil_core.enums import FetchStatus, OfferType, SourceKind, TitleKind
 from tvil_core.models import Availability, FetchRun, Source, Title
 from tvil_core.settings import Settings
 from tvil_fetcher.pipeline import (
+    COMMIT_EVERY,
     MISS_LIMIT,
     deactivate_missing_sources,
     sync_source,
@@ -392,3 +393,46 @@ class TestFailureRecovery:
         assert result.status is FetchStatus.FAILED
         run = session.scalars(select(FetchRun)).one()
         assert run.status is FetchStatus.FAILED
+
+
+class TestLockHolding:
+    """SQLite allows one writer, so a sync must not hold the lock for its whole run."""
+
+    def _distinct(self, count: int) -> list[RawItem]:
+        """Items the matcher will keep separate.
+
+        Generated names alone are not enough — "תוכנית 1" and "תוכנית 2" are
+        near-identical, and the matcher is right to collapse them — so each
+        item carries its own external id.
+        """
+        return [item(f"תוכנית {index}", tmdb_id=1000 + index) for index in range(count)]
+
+    def test_commits_during_a_long_source_rather_than_only_at_the_end(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        """Matching makes network calls; one transaction per source would keep
+        the write lock held for minutes and lock out everything else."""
+        commits = 0
+        original = session.commit
+
+        def counting_commit() -> None:
+            nonlocal commits
+            commits += 1
+            original()
+
+        session.commit = counting_commit  # type: ignore[method-assign]
+
+        run_sync(session, settings, sync_ctx, self._distinct(COMMIT_EVERY * 2 + 10))
+
+        assert commits > 1
+
+    def test_committing_as_it_goes_does_not_change_the_outcome(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        count = COMMIT_EVERY * 2 + 50
+
+        result = run_sync(session, settings, sync_ctx, self._distinct(count))
+
+        assert result.status is FetchStatus.OK
+        assert result.items_seen == count
+        assert len(session.scalars(select(Availability)).all()) == count

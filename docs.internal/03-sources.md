@@ -19,28 +19,39 @@ down in favor of yes+ in early 2026); that churn is exactly why the plugin desig
 
 ## Launch catalog
 
-### Paid TV / streaming operators (strategy: `tmdb-providers`, fallback `scrape`)
+### ⛔ The Israeli operators are NOT reachable through TMDB
 
-| key | Name | Type | Notes |
-|---|---|---|---|
-| `yes_plus` | yes+ | subscription | yes's OTT service (replaced satellite, 2026) |
-| `sting_tv` | Sting TV | subscription | yes's budget OTT brand |
-| `hot` | HOT / NEXT | subscription | cable + NEXT OTT brand |
-| `cellcom_tv` | Cellcom TV | subscription | |
-| `partner_tv` | Partner TV | subscription | |
-| `free_tv` | Free TV | subscription | Keshet/REG streaming venture — verify status at build time |
+**This was the project's central assumption and it is false.** Verified against the live
+TMDB API in August 2026: JustWatch — whose data TMDB republishes — tracks **33 providers**
+for region `IL`, and **not one of them is an Israeli operator**. yes+, Sting TV, HOT,
+Cellcom TV and Partner TV appear nowhere in the list. A sync against them completes
+cleanly and returns zero titles every time, which is worse than failing: it looks like a
+working service that happens to be empty.
 
-### International services with Israeli catalogs (strategy: `tmdb-providers`)
+They have been removed from the `tmdb-providers` harvester. Reaching them requires a
+dedicated plugin per operator, the way Mako has one — which means finding, for each, a
+catalog surface that serves an honestly-identified client (see the policy below and what
+happened with Kan and Reshet 13).
 
-| key | Name | Notes |
+Disney+ is also absent from TMDB's IL list despite being available in Israel.
+
+### International services (strategy: `tmdb-providers`) — verified working
+
+| key | TMDB name | Notes |
 |---|---|---|
-| `netflix_il` | Netflix (Israel catalog) | |
-| `disney_plus_il` | Disney+ | |
-| `prime_video_il` | Prime Video | |
-| `apple_tv_plus` | Apple TV+ | |
+| `netflix_il` | Netflix | |
+| `prime_video_il` | Amazon Prime Video | our display name differs from TMDB's |
+| `apple_tv_plus` | Apple TV | TMDB lists no "Apple TV+"; "Apple TV Store" is the separate rent/buy storefront |
+| `hbo_max_il` | HBO Max | |
+| `mubi_il` | MUBI | films only |
+| `crunchyroll_il` | Crunchyroll | |
 
-These map 1:1 to JustWatch provider IDs for region `IL`; the `tmdb-providers` harvester
-declares all of them (one plugin, many source keys).
+One plugin declares all of these. Provider ids are resolved **by name at runtime** rather
+than hard-coded, because TMDB renumbers and renames providers and a stale id fails silently
+as an empty catalog — which is exactly the failure mode above.
+
+Other providers TMDB lists for IL and worth considering: Shahid VIP, Zee5, iQIYI, Rakuten
+Viki, Plex, Curiosity Stream.
 
 ### Free broadcaster VODs (strategy: `public-api` / `scrape`)
 

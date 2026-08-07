@@ -10,6 +10,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from helpers import SeedSource
+from seed import Seeded, seed_catalog
 from sqlalchemy.orm import Session, sessionmaker
 
 from tvil_api.app import create_app
@@ -81,3 +82,10 @@ def seed_source(session_factory: sessionmaker[Session]) -> SeedSource:
             session.commit()
 
     return _seed
+
+
+@pytest.fixture
+def catalog(session_factory: sessionmaker[Session]) -> Seeded:
+    """A seeded catalog covering the states the API must distinguish."""
+    with session_factory() as session:
+        return seed_catalog(session)

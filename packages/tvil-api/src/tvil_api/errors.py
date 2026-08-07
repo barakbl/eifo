@@ -10,9 +10,11 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from tvil_api.static import client_fallback, is_api_path
 
 PROBLEM_MEDIA_TYPE = "application/problem+json"
 
@@ -41,8 +43,16 @@ def problem_response(
     return JSONResponse(status_code=status, content=body, media_type=PROBLEM_MEDIA_TYPE)
 
 
-async def _http_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+async def _http_exception_handler(request: Request, exc: Exception) -> Response:
     assert isinstance(exc, StarletteHTTPException)
+
+    # A 404 outside the API is a client deep link: hand back the app rather
+    # than a problem document the browser cannot render.
+    if exc.status_code == 404 and not is_api_path(request.url.path):
+        fallback = client_fallback(request.app)
+        if fallback is not None:
+            return fallback
+
     detail = exc.detail if isinstance(exc.detail, str) else None
     return problem_response(
         status=exc.status_code,

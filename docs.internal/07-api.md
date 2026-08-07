@@ -82,8 +82,21 @@ GET /api/v1/users/{handle}/items       watched/want lists + ratings; notes NEVER
 
 ## Static
 
-- `GET /images/{...}` → `data/images/` (FileResponse / StaticFiles).
-- `GET /` and unmatched non-API paths → `web/` static app (SPA fallback to index.html).
+- `GET /images/{...}` → `data/images/`, served immutable (`max-age=31536000`): a path
+  embeds its variant, so changed artwork is a changed URL.
+- `GET /` → the client's `index.html`; `css/`, `js/` and `assets/` are mounted verbatim.
+- **The SPA fallback is a 404 handler, not a catch-all route.** A catch-all sits in the
+  routing table shadowing anything registered after it, and would turn a genuinely missing
+  API path into a 200 page. Instead, a 404 whose path is not under an API prefix returns
+  `index.html`; a 404 under `/api/`, `/docs`, `/openapi.json` or `/images/` stays a
+  problem document.
+
+## Caching
+
+Catalog reads (`/titles`, `/sources`, `/genres`) carry a weak `ETag` over the response body
+and `Cache-Control: public, max-age=300`; a matching `If-None-Match` is answered `304`.
+Catalog data changes daily at most, so the same grid is requested far more often than it
+changes.
 
 ## Implementation notes
 

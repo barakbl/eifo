@@ -9,6 +9,7 @@ from __future__ import annotations
 from alembic import context
 from sqlalchemy import Connection, engine_from_config, pool
 
+from tvil_core.migrate import include_object
 from tvil_core.models import Base
 from tvil_core.settings import get_settings
 
@@ -31,6 +32,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         render_as_batch=True,
         compare_type=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -43,6 +45,7 @@ def _run(connection: Connection) -> None:
         # SQLite cannot ALTER most things; batch mode rebuilds tables instead.
         render_as_batch=True,
         compare_type=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()

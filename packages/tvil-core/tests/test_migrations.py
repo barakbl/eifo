@@ -9,7 +9,13 @@ from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, create_engine, inspect
 
-from tvil_core.migrate import alembic_config, current_revision, downgrade, upgrade
+from tvil_core.migrate import (
+    alembic_config,
+    current_revision,
+    downgrade,
+    include_object,
+    upgrade,
+)
 from tvil_core.models import Base
 
 EXPECTED_TABLES = {
@@ -63,7 +69,13 @@ def test_migrated_schema_matches_the_models(tmp_path: Path) -> None:
         with engine.connect() as connection:
             context = MigrationContext.configure(
                 connection,
-                opts={"compare_type": True, "render_as_batch": True},
+                opts={
+                    "compare_type": True,
+                    "render_as_batch": True,
+                    # Search infrastructure is built by a migration rather than
+                    # declared as a model; excluded here exactly as in env.py.
+                    "include_object": include_object,
+                },
             )
             diff = compare_metadata(context, Base.metadata)
     finally:

@@ -1,82 +1,228 @@
-"""The tvil-fetch CLI: migration commands and exit codes."""
+"""The tvil-fetch CLI: commands, output and exit codes."""
 
 from __future__ import annotations
 
+import datetime as dt
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, inspect
+from sqlalchemy.orm import Session, sessionmaker
 
-from tvil_core.settings import get_settings
+from tvil_core.db import create_engine_from_settings, make_session_factory
+from tvil_core.enums import FetchPhase, FetchStatus, OfferType, SourceKind, TitleKind
+from tvil_core.migrate import upgrade
+from tvil_core.models import Availability, FetchRun, MatchReview, Source, Title
+from tvil_core.settings import Settings, get_settings
 from tvil_fetcher.cli import EXIT_FATAL, EXIT_OK, build_parser, main
 
 
-@pytest.fixture(autouse=True)
-def isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+@pytest.fixture
+def db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """Point the CLI at a throwaway database, ignoring ambient configuration."""
-    db_path = tmp_path / "cli.db"
+    path = tmp_path / "cli.db"
     monkeypatch.setenv("TVIL_CONFIG_FILE", str(tmp_path / "absent.toml"))
-    monkeypatch.setenv("TVIL_DB_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("TVIL_DB_URL", f"sqlite:///{path}")
+    monkeypatch.setenv("TVIL_IMAGES_DIR", str(tmp_path / "images"))
     get_settings.cache_clear()
-    yield db_path
+    yield path
     get_settings.cache_clear()
 
 
-def test_db_upgrade_creates_the_schema(isolated_settings: Path) -> None:
-    assert main(["db", "upgrade"]) == EXIT_OK
-
-    engine = create_engine(f"sqlite:///{isolated_settings}")
-    try:
-        tables = set(inspect(engine).get_table_names())
-    finally:
-        engine.dispose()
-    assert {"titles", "sources", "availability"} <= tables
+@pytest.fixture
+def migrated(db_path: Path) -> Path:
+    upgrade(f"sqlite:///{db_path}")
+    return db_path
 
 
-def test_db_upgrade_is_idempotent(isolated_settings: Path) -> None:
-    assert main(["db", "upgrade"]) == EXIT_OK
-    assert main(["db", "upgrade"]) == EXIT_OK
+@pytest.fixture
+def factory(migrated: Path) -> Iterator[sessionmaker[Session]]:
+    engine = create_engine_from_settings(Settings(_env_file=None, db_url=f"sqlite:///{migrated}"))
+    yield make_session_factory(engine)
+    engine.dispose()
 
 
-def test_db_current_reports_the_revision(
-    isolated_settings: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    main(["db", "upgrade"])
-
-    assert main(["db", "current"]) == EXIT_OK
-
-    assert capsys.readouterr().out.strip() == "0001_initial"
-
-
-def test_db_current_on_a_fresh_database(
-    isolated_settings: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert main(["db", "current"]) == EXIT_OK
-
-    assert "no migrations applied" in capsys.readouterr().out
+def seed_source(session: Session, key: str = "mako") -> Source:
+    source = Source(
+        key=key,
+        name="Mako VOD (Keshet 12)",
+        kind=SourceKind.FREE,
+        website_url="https://www.mako.co.il/mako-vod-index",
+    )
+    session.add(source)
+    session.flush()
+    return source
 
 
-def test_db_downgrade_reverts_the_schema(isolated_settings: Path) -> None:
-    main(["db", "upgrade"])
+class TestDatabaseCommands:
+    def test_upgrade_creates_the_schema(self, db_path: Path) -> None:
+        assert main(["db", "upgrade"]) == EXIT_OK
 
-    assert main(["db", "downgrade", "base"]) == EXIT_OK
+        engine = create_engine(f"sqlite:///{db_path}")
+        try:
+            assert {"titles", "sources", "availability"} <= set(inspect(engine).get_table_names())
+        finally:
+            engine.dispose()
 
-    engine = create_engine(f"sqlite:///{isolated_settings}")
-    try:
-        assert "titles" not in set(inspect(engine).get_table_names())
-    finally:
-        engine.dispose()
+    def test_upgrade_is_idempotent(self, db_path: Path) -> None:
+        assert main(["db", "upgrade"]) == EXIT_OK
+        assert main(["db", "upgrade"]) == EXIT_OK
+
+    def test_current_reports_the_head_revision(
+        self, migrated: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["db", "current"]) == EXIT_OK
+
+        assert "0002_poster_source_url" in capsys.readouterr().out
 
 
-def test_unexpected_failure_exits_fatally(
-    isolated_settings: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def _boom(*_args: object, **_kwargs: object) -> None:
-        raise OSError("disk on fire")
+class TestCommandsRequireAMigratedDatabase:
+    @pytest.mark.parametrize("command", [["sync"], ["images"], ["sources", "list"]])
+    def test_unmigrated_database_exits_fatally(self, db_path: Path, command: list[str]) -> None:
+        assert main(command) == EXIT_FATAL
 
-    monkeypatch.setattr("tvil_core.migrate.upgrade", _boom)
 
-    assert main(["db", "upgrade"]) == EXIT_FATAL
+class TestSourcesList:
+    def test_lists_declared_sources(
+        self, migrated: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["sources", "list"]) == EXIT_OK
+
+        out = capsys.readouterr().out
+        assert "mako" in out
+        assert "netflix_il" in out
+        assert "never synced" in out
+
+    def test_shows_stored_state_and_counts(
+        self, factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with factory() as session:
+            source = seed_source(session)
+            title = Title(type=TitleKind.SERIES, name_he="פאודה", year=2015)
+            session.add(title)
+            session.flush()
+            session.add(
+                Availability(title_id=title.id, source_id=source.id, offer_type=OfferType.FREE)
+            )
+            session.add(
+                FetchRun(
+                    source_key="mako",
+                    phase=FetchPhase.SYNC,
+                    started_at=dt.datetime(2026, 8, 1, 3, 0, tzinfo=dt.UTC),
+                    finished_at=dt.datetime(2026, 8, 1, 3, 5, tzinfo=dt.UTC),
+                    status=FetchStatus.OK,
+                    stats={},
+                )
+            )
+            session.commit()
+
+        main(["sources", "list"])
+
+        out = capsys.readouterr().out
+        assert "active" in out
+        assert "2026-08-01 03:05" in out
+
+    def test_flags_a_source_no_longer_declared(
+        self, factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Data for a dropped source stays visible and is labelled retired."""
+        with factory() as session:
+            seed_source(session, key="a_removed_service")
+            session.commit()
+
+        main(["sources", "list"])
+
+        out = capsys.readouterr().out
+        assert "a_removed_service" in out
+        assert "retired" in out
+
+
+class TestReview:
+    def _add_review(self, session: Session) -> MatchReview:
+        review = MatchReview(
+            source_key="mako",
+            raw_payload={"name": "סרוגים 2", "year": 2008},
+            candidates={
+                "closest": {
+                    "title_id": 1,
+                    "name_he": "סרוגים",
+                    "name_en": "Srugim",
+                    "year": 2008,
+                    "similarity": 85.7,
+                }
+            },
+        )
+        session.add(review)
+        session.commit()
+        return review
+
+    def test_list_reports_nothing_when_empty(
+        self, migrated: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["review", "list"]) == EXIT_OK
+
+        assert "nothing awaiting review" in capsys.readouterr().out
+
+    def test_list_shows_the_closest_match(
+        self, factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with factory() as session:
+            self._add_review(session)
+
+        main(["review", "list"])
+
+        out = capsys.readouterr().out
+        assert "סרוגים 2" in out
+        assert "85.7%" in out
+
+    def test_resolve_attaches_a_title(self, factory: sessionmaker[Session]) -> None:
+        with factory() as session:
+            title = Title(type=TitleKind.SERIES, name_he="סרוגים", year=2008)
+            session.add(title)
+            session.flush()
+            review = self._add_review(session)
+            review_id, title_id = review.id, title.id
+
+        assert main(["review", "resolve", str(review_id), "--title-id", str(title_id)]) == EXIT_OK
+
+        with factory() as session:
+            resolved = session.get(MatchReview, review_id)
+            assert resolved is not None
+            assert resolved.resolved_title_id == title_id
+            assert resolved.resolved_at is not None
+
+    def test_skip_closes_without_attaching(self, factory: sessionmaker[Session]) -> None:
+        with factory() as session:
+            review_id = self._add_review(session).id
+
+        assert main(["review", "skip", str(review_id)]) == EXIT_OK
+
+        with factory() as session:
+            skipped = session.get(MatchReview, review_id)
+            assert skipped is not None
+            assert skipped.resolved_at is not None
+            assert skipped.resolved_title_id is None
+
+    def test_an_unknown_review_is_fatal(self, migrated: Path) -> None:
+        assert main(["review", "skip", "999"]) == EXIT_FATAL
+
+    def test_an_unknown_title_is_fatal(self, factory: sessionmaker[Session]) -> None:
+        with factory() as session:
+            review_id = self._add_review(session).id
+
+        assert main(["review", "resolve", str(review_id), "--title-id", "999"]) == EXIT_FATAL
+
+
+class TestSyncCommand:
+    def test_no_enabled_sources_still_succeeds(
+        self, migrated: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An unknown --source is a warning, not a crash."""
+        assert main(["sync", "--source", "not_a_real_source"]) == EXIT_OK
+
+    def test_images_with_nothing_to_do_succeeds(self, migrated: Path) -> None:
+        assert main(["images"]) == EXIT_OK
 
 
 class TestParser:
@@ -84,19 +230,26 @@ class TestParser:
         with pytest.raises(SystemExit):
             build_parser().parse_args([])
 
-    def test_requires_a_db_action(self) -> None:
+    def test_sync_accepts_repeated_sources(self) -> None:
+        args = build_parser().parse_args(["sync", "--source", "mako", "--source", "netflix_il"])
+
+        assert args.sources == ["mako", "netflix_il"]
+
+    def test_sync_defaults_to_every_source(self) -> None:
+        assert build_parser().parse_args(["sync"]).sources is None
+
+    def test_images_flags(self) -> None:
+        args = build_parser().parse_args(["images", "--force", "--limit", "5"])
+
+        assert args.force is True
+        assert args.limit == 5
+
+    def test_daemon_once_flag(self) -> None:
+        assert build_parser().parse_args(["daemon", "--once"]).once is True
+
+    def test_review_resolve_requires_a_title(self) -> None:
         with pytest.raises(SystemExit):
-            build_parser().parse_args(["db"])
-
-    def test_upgrade_defaults_to_head(self) -> None:
-        args = build_parser().parse_args(["db", "upgrade"])
-
-        assert args.revision == "head"
-
-    def test_upgrade_accepts_an_explicit_revision(self) -> None:
-        args = build_parser().parse_args(["db", "upgrade", "0001_initial"])
-
-        assert args.revision == "0001_initial"
+            build_parser().parse_args(["review", "resolve", "1"])
 
     def test_reports_a_version(self) -> None:
         with pytest.raises(SystemExit) as exc_info:

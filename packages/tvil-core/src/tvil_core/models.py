@@ -89,6 +89,9 @@ class Title(TimestampMixin, Base):
     # Paths relative to settings.images_dir, not URLs.
     poster_path: Mapped[str | None] = mapped_column(String(500))
     backdrop_path: Mapped[str | None] = mapped_column(String(500))
+    # Where the artwork can be downloaded from; the image pipeline reads this
+    # and writes the stored location to poster_path.
+    poster_source_url: Mapped[str | None] = mapped_column(String(1000))
 
     runtime_minutes: Mapped[int | None]
     seasons: Mapped[int | None]

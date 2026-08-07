@@ -6,9 +6,10 @@ from pathlib import Path
 
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, create_engine, inspect
 
-from tvil_core.migrate import current_revision, downgrade, upgrade
+from tvil_core.migrate import alembic_config, current_revision, downgrade, upgrade
 from tvil_core.models import Base
 
 EXPECTED_TABLES = {
@@ -37,9 +38,12 @@ def test_upgrade_creates_every_table(tmp_path: Path) -> None:
 
 
 def test_upgrade_stamps_the_head_revision(tmp_path: Path) -> None:
+    """Compared against the actual head so adding a migration cannot break this."""
+    head = ScriptDirectory.from_config(alembic_config("sqlite://")).get_current_head()
+
     engine = _migrated_engine(tmp_path)
     try:
-        assert current_revision(engine) == "0001_initial"
+        assert current_revision(engine) == head
     finally:
         engine.dispose()
 

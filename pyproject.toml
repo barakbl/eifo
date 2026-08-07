@@ -85,6 +85,11 @@ warn_return_any = true
 module = ["tvil_core.migrations.*"]
 ignore_errors = true
 
+# Third-party packages that ship no type information.
+[[tool.mypy.overrides]]
+module = ["apscheduler.*"]
+ignore_missing_imports = true
+
 # ---------------------------------------------------------------- pytest
 
 [tool.pytest.ini_options]

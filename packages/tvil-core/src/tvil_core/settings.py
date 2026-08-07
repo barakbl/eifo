@@ -45,6 +45,8 @@ class SourceConfig(BaseModel):
 
     enabled: bool = True
     rate_limit_rps: float | None = None
+    #: Cap on paginated result pages per media type; None uses the plugin default.
+    max_pages: int | None = None
 
 
 class ScoreWeights(BaseModel):

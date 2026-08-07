@@ -21,6 +21,7 @@ stale_after_hours = 48
 # Covered by the tmdb-providers harvester (JustWatch data, region IL) — S1.
 [sources.netflix_il]
 enabled = true
+# max_pages = 50   # pages per media type; raise for a fuller catalog
 
 [sources.disney_plus_il]
 enabled = true
@@ -46,11 +47,14 @@ enabled = true
 [sources.partner_tv]
 enabled = true
 
-# Free broadcaster VODs — dedicated scraper plugins (S1+).
+# Free broadcaster VODs — dedicated plugins.
 [sources.mako]
 enabled = true
 rate_limit_rps = 0.5
 
+# Not implemented: Kan and Reshet 13 serve a bot-check to non-browser clients,
+# and Now 14 turned out to be a news site with no VOD catalog. See
+# docs.internal/03-sources.md for what was verified.
 [sources.kan]
 enabled = false
 

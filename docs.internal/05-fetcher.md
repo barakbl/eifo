@@ -110,8 +110,16 @@ Order of attempts, first hit wins:
    A TMDB hit that resolves to an existing title's `tmdb_id` merges into it.
 3. **Local fuzzy** — same similarity test against existing titles (for items TMDB doesn't
    know, e.g. local reality shows).
-4. **Unmatched** — if the source is TMDB-less and steps 2–3 fail: create a new local title
-   when the item has (name + year + kind) confidence, else park it in `match_reviews`.
+4. **Unmatched** — decided by how close the *nearest* stored title is:
+   - similarity ≥ 90 → matched at step 3;
+   - similarity 75–90 → **park in `match_reviews`** with the near-miss recorded;
+   - below 75 → create a new title.
+
+   Review means *ambiguity*, not missing metadata. Requiring a year to create a title was
+   tried and rejected: Mako's catalog carries no years at all, so it would have parked an
+   entire source. The 75–90 band is where guessing actually corrupts data — a live Mako
+   sync parks cases like "חתונה ממבט שני" against "חתונה ממבט ראשון" (80%) and "המתמחים"
+   against "המתחזים" (83%), which are genuinely different shows.
 
 Matching MUST be deterministic and logged (`stats.matched_by = {external_id: n, tmdb: n,
 fuzzy: n, created: n, review: n}`), so a matching regression is visible in one

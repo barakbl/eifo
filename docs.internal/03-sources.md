@@ -44,17 +44,40 @@ declares all of them (one plugin, many source keys).
 
 ### Free broadcaster VODs (strategy: `public-api` / `scrape`)
 
-JustWatch coverage of local free VODs is partial at best, so these get dedicated plugins:
+JustWatch coverage of local free VODs is partial at best, so these get dedicated plugins.
+**The findings below were verified against the live sites in August 2026** — re-check before
+relying on them, but do not re-litigate them from scratch.
 
-| key | Name | Site | Notes |
+| key | Name | Site | Status |
 |---|---|---|---|
-| `kan` | Kan 11 / Kan Box | kan.org.il | public broadcaster, free VOD |
-| `mako` | Mako VOD (Keshet 12) | mako.co.il | free VOD, registration-gated playback (we only need metadata) |
-| `reshet13` | Reshet 13 | 13tv.co.il | free VOD |
-| `now14` | Now 14 | now14.co.il | free VOD |
+| `mako` | Mako VOD (Keshet 12) | mako.co.il | ✅ **implemented** — see below |
+| `kan` | Kan 11 / Kan Box | kan.org.il | ⛔ Cloudflare returns 403 to non-browser clients, including for `robots.txt` |
+| `reshet13` | Reshet 13 | 13tv.co.il | ⛔ returns 403 to non-browser clients |
+| `now14` | Now 14 | now14.co.il → c14.co.il | ⚠️ reachable and permissive (`Allow: /wp-json/`), but it is a **news** site: its WordPress API exposes no VOD post type |
 
-Each of these plugins ships with recorded HTML/JSON fixtures so its parser is tested
-offline ([10-quality.md](10-quality.md)).
+Kan and Reshet 13 are not blocked by policy but by bot protection. Getting past it would
+mean misrepresenting the client, which this project does not do — so they stay unimplemented
+rather than being worked around.
+
+#### Mako VOD — verified specifics
+
+Mako's VOD section is a Next.js app, so the catalog is structured data, not markup:
+
+- **Read the rendered page**, `https://www.mako.co.il/mako-vod-index`, and parse the
+  `__NEXT_DATA__` script tag. Catalog entries live at `props.pageProps.programs.items[]`.
+- **Do not use `/_next/data/<buildId>/mako-vod-index.json`.** It carries the identical
+  object, but answers only browser-looking clients: with our identifying User-Agent it
+  302s to a bot-check interstitial. The rendered page has no such gate. (This is why the
+  plugin makes one request and needs no `buildId` at all.)
+- **Fields available:** Hebrew `title`, `pageUrl` (site-relative), `pic` (absolute artwork
+  URL), `itemVcmId`. There is **no English title and no year anywhere** in the catalog
+  payload — enrichment supplies both later. The index is series/programmes only, no films.
+- **robots.txt permits this.** `Disallow: /vod-index/` does *not* match `/mako-vod-index`
+  — different paths. Genuinely disallowed and therefore untouched: `/AjaxPage`, and any
+  `/mako-vod-*` URL carrying an `sCh` parameter.
+
+Each broadcaster plugin ships with recorded fixtures so its parser is tested offline
+([10-quality.md](10-quality.md)).
 
 ## Ratings providers (not "sources" — see [06-enrichment.md](06-enrichment.md))
 
@@ -73,6 +96,10 @@ offline ([10-quality.md](10-quality.md)).
 - **Politeness.** Respect `robots.txt`; ≤ 1 request/second/host (configurable per source);
   exponential backoff on 429/5xx; identifying User-Agent with a contact URL; conditional
   requests (ETag/Last-Modified) where supported.
+- **Ask as ourselves.** The User-Agent always identifies TVIL. If a site serves us a
+  bot-check interstitial, that is an answer: find a route it is willing to serve to an
+  honest client, or leave the source unimplemented. Spoofing a browser to defeat bot
+  protection is out of bounds, whatever it would unlock.
 - **Resilience.** A parser that finds a page layout it doesn't recognize MUST fail that
   item loudly (logged, counted in `fetch_runs`) rather than storing garbage. A source whose
   sync yields < 20% of its previous item count is treated as a failed sync (layout change

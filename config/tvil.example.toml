@@ -1,0 +1,87 @@
+# TVIL configuration — copy to config/tvil.toml and edit.
+#
+# This file holds NO secrets. API keys and OAuth credentials come from the
+# environment only (TVIL_* variables, see .env.example).
+# Precedence: built-in defaults <- this file <- TVIL_* environment variables.
+
+db_url = "sqlite:///data/tvil.db"
+images_dir = "data/images"
+public_origin = "http://localhost:8000"
+
+# Titles whose availability data is older than this are reported as stale by
+# GET /api/v1/meta (the health endpoint).
+stale_after_hours = 48
+
+# ---------------------------------------------------------------------------
+# Sources — one table per tracked service. Flipping `enabled = false` retires a
+# source: the next sync marks it inactive and ALL of its data is kept, badged in
+# the UI as "no longer tracked". See docs.internal/03-sources.md.
+# ---------------------------------------------------------------------------
+
+# Covered by the tmdb-providers harvester (JustWatch data, region IL) — S1.
+[sources.netflix_il]
+enabled = true
+
+[sources.disney_plus_il]
+enabled = true
+
+[sources.prime_video_il]
+enabled = true
+
+[sources.apple_tv_plus]
+enabled = true
+
+[sources.yes_plus]
+enabled = true
+
+[sources.sting_tv]
+enabled = true
+
+[sources.hot]
+enabled = true
+
+[sources.cellcom_tv]
+enabled = true
+
+[sources.partner_tv]
+enabled = true
+
+# Free broadcaster VODs — dedicated scraper plugins (S1+).
+[sources.mako]
+enabled = true
+rate_limit_rps = 0.5
+
+[sources.kan]
+enabled = false
+
+[sources.reshet13]
+enabled = false
+
+[sources.now14]
+enabled = false
+
+# Verify this service still exists before enabling — the Israeli market shifts.
+[sources.free_tv]
+enabled = false
+
+# ---------------------------------------------------------------------------
+# Score aggregation — see docs.internal/06-enrichment.md
+# ---------------------------------------------------------------------------
+
+[scores.weights]
+imdb = 3.0
+rt_critics = 2.0
+rt_audience = 1.0
+tmdb = 1.0
+seret_critics = 2.0
+seret_viewers = 1.5
+edb = 0.5
+
+# ---------------------------------------------------------------------------
+# Daemon schedule (ignored when using system cron)
+# ---------------------------------------------------------------------------
+
+[schedule]
+sync = "03:00"
+enrich = "04:30"
+images = "05:30"

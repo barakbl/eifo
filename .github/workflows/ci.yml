@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Tests build their own throwaway databases; never touch a real one.
+  TVIL_CONFIG_FILE: config/does-not-exist.toml
+
+jobs:
+  quality:
+    name: Lint, types and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install the workspace
+        run: uv sync --locked
+
+      - name: Ruff (lint)
+        run: uv run ruff check .
+
+      - name: Ruff (format)
+        run: uv run ruff format --check .
+
+      - name: mypy
+        run: uv run mypy
+
+      - name: Tests — tvil-core (coverage gate 90%)
+        run: uv run pytest packages/tvil-core --cov=tvil_core --cov-fail-under=90
+
+      - name: Tests — tvil-api and tvil-fetcher (coverage gate 85%)
+        run: >
+          uv run pytest packages/tvil-api packages/tvil-fetcher
+          --cov=tvil_api --cov=tvil_fetcher --cov-fail-under=85
+
+      - name: Migrations apply from scratch
+        run: |
+          TVIL_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run tvil-fetch db upgrade
+          TVIL_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run tvil-fetch db current
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t tvil:ci .

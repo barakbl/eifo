@@ -42,6 +42,13 @@ MISS_LIMIT = 2
 VOLUME_GUARD_RATIO = 0.20
 #: Below this many items the ratio is noise, so the guard stays out of the way.
 VOLUME_GUARD_MIN_ITEMS = 50
+#: Items ingested between commits.
+#:
+#: SQLite allows one writer at a time. Matching makes network calls, so holding
+#: a single transaction for a whole source would keep the write lock for minutes
+#: and lock out anything else touching the database — including the next phase
+#: of the same run. Committing as we go keeps each lock short.
+COMMIT_EVERY = 200
 
 
 @dataclass(slots=True)
@@ -173,6 +180,12 @@ def _ingest(
             result.availability_created += 1
         else:
             result.availability_updated += 1
+
+        # Release the write lock regularly. A partially ingested source is safe:
+        # the run is recorded as failed, so nothing sweeps, and the next run
+        # upserts the rest.
+        if result.items_seen % COMMIT_EVERY == 0:
+            session.commit()
 
     session.flush()
     result.titles_created = _title_count(session) - titles_before

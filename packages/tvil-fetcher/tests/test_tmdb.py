@@ -156,10 +156,17 @@ class TestProviderHarvester:
     def _ctx(self, http: HttpClient, key: str, **overrides: Any) -> FetchContext:
         return FetchContext(source_key=key, http=http, settings=self._settings(**overrides))
 
-    def test_declares_the_israeli_market(self) -> None:
+    def test_declares_only_services_tmdb_actually_carries_in_israel(self) -> None:
+        """JustWatch does not track the Israeli operators, so they are not here.
+
+        Declaring yes+, HOT, Cellcom TV, Partner TV or Sting TV would produce a
+        source that syncs cleanly and stays permanently empty, which reads as a
+        working feature with no content rather than as a missing one.
+        """
         keys = {source.key for source in TmdbProvidersPlugin().sources()}
 
-        assert {"netflix_il", "cellcom_tv", "yes_plus", "partner_tv", "hot"} <= keys
+        assert {"netflix_il", "prime_video_il", "apple_tv_plus"} <= keys
+        assert not keys & {"yes_plus", "hot", "cellcom_tv", "partner_tv", "sting_tv"}
         assert len(keys) == len(PROVIDER_SOURCES)
 
     @respx.mock
@@ -189,10 +196,12 @@ class TestProviderHarvester:
         assert items[0].poster_url == "https://image.tmdb.org/t/p/w500/p.jpg"
 
     @respx.mock
-    def test_matches_a_provider_under_an_alternative_name(self, http: HttpClient) -> None:
+    def test_matches_a_provider_whose_tmdb_name_differs_from_ours(self, http: HttpClient) -> None:
+        """We call it Prime Video; TMDB calls it Amazon Prime Video."""
         respx.get(f"{BASE_URL}/watch/providers/movie").mock(
             return_value=httpx.Response(
-                200, json={"results": [{"provider_id": 337, "provider_name": "Disney Plus"}]}
+                200,
+                json={"results": [{"provider_id": 119, "provider_name": "Amazon Prime Video"}]},
             )
         )
         respx.get(f"{BASE_URL}/watch/providers/tv").mock(
@@ -202,9 +211,9 @@ class TestProviderHarvester:
             return_value=httpx.Response(200, json={"total_pages": 1, "results": []})
         )
 
-        list(TmdbProvidersPlugin().fetch(self._ctx(http, "disney_plus_il")))
+        list(TmdbProvidersPlugin().fetch(self._ctx(http, "prime_video_il")))
 
-        assert route.calls.last.request.url.params["with_watch_providers"] == "337"
+        assert route.calls.last.request.url.params["with_watch_providers"] == "119"
 
     @respx.mock
     def test_an_unmatched_provider_yields_nothing_without_failing(self, http: HttpClient) -> None:
@@ -215,7 +224,7 @@ class TestProviderHarvester:
         respx.get(f"{BASE_URL}/watch/providers/tv").mock(
             return_value=httpx.Response(200, json={"results": []})
         )
-        ctx = self._ctx(http, "cellcom_tv")
+        ctx = self._ctx(http, "mubi_il")
 
         assert list(TmdbProvidersPlugin().fetch(ctx)) == []
         assert ctx.error_count == 0

@@ -112,6 +112,10 @@ def _configure_logging(verbose: bool) -> None:
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s %(message)s",
     )
+    # httpx logs whole request URLs, and TMDB takes its key as a query
+    # parameter — so at INFO the key would be written to every log file and
+    # into anything those files get pasted into.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 # -- commands -------------------------------------------------------------

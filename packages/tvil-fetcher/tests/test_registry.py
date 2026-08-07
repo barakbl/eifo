@@ -89,7 +89,7 @@ class TestBuiltinPlugins:
 
         assert "mako" in declared
         assert "netflix_il" in declared
-        assert "cellcom_tv" in declared
+        assert "prime_video_il" in declared
 
     def test_every_declared_source_has_a_website(self) -> None:
         for source in declared_sources(discover_plugins()).values():

@@ -18,13 +18,13 @@ stale_after_hours = 48
 # the UI as "no longer tracked". See docs.internal/03-sources.md.
 # ---------------------------------------------------------------------------
 
-# Covered by the tmdb-providers harvester (JustWatch data, region IL) — S1.
+# Covered by the tmdb-providers harvester (JustWatch data, region IL).
+# The Israeli operators (yes+, Sting TV, HOT, Cellcom TV, Partner TV) are NOT
+# here: JustWatch does not track them, so they would sync cleanly and stay
+# empty forever. See docs.internal/03-sources.md.
 [sources.netflix_il]
 enabled = true
 # max_pages = 50   # pages per media type; raise for a fuller catalog
-
-[sources.disney_plus_il]
-enabled = true
 
 [sources.prime_video_il]
 enabled = true
@@ -32,20 +32,14 @@ enabled = true
 [sources.apple_tv_plus]
 enabled = true
 
-[sources.yes_plus]
+[sources.hbo_max_il]
 enabled = true
 
-[sources.sting_tv]
+[sources.mubi_il]
 enabled = true
 
-[sources.hot]
-enabled = true
-
-[sources.cellcom_tv]
-enabled = true
-
-[sources.partner_tv]
-enabled = true
+[sources.crunchyroll_il]
+enabled = false
 
 # Free broadcaster VODs — dedicated plugins.
 [sources.mako]

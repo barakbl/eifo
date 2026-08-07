@@ -59,6 +59,16 @@ Same pattern as Seret. Exists mainly to prove the "Israeli providers are pluggab
 `score_raw` keeps the native value for display ("8.4/10", "92%"); `score_normalized` is
 what aggregation uses.
 
+Two rules that are easy to get subtly wrong:
+
+- **Halves round up, always.** Python's built-in `round` rounds halves to *even*, which
+  would normalise 7.25 → 72 but 7.35 → 74. A user-visible score must not depend on the
+  parity of the preceding digit, so normalisation and the weighted mean both use an
+  explicit half-up rounding helper.
+- **A score outside its provider's scale is rejected, not stored.** Reading a percentage
+  as a 0–10 value (or vice versa) is the likeliest parser bug, and storing it would quietly
+  skew the aggregate. The rating is dropped and the error recorded in `fetch_runs.stats`.
+
 ## Aggregate score
 
 Weighted mean of available normalized scores; weights in `tvil.toml`:
@@ -80,8 +90,10 @@ Rules:
 - Vote-count damping: a provider rating with < 50 votes gets its weight halved (protects
   against a 10/10-from-3-votes skew).
 - `score_israeli` = same formula over Israeli providers only (`seret_*`, `edb`) — this is
-  the dedicated Israeli-ratings aggregate; shown alongside the global one for local
-  content.
+  the dedicated Israeli-ratings aggregate, shown alongside the global one for local
+  content. It deliberately needs only **one** provider: the whole point of a separate
+  Israeli score is to surface local opinion, and requiring two would hide it for most
+  titles, since Seret is the only Israeli provider enabled by default.
 - `aggregate_scores.components` stores every input (provider, normalized, weight applied),
   so the UI can show "how was this computed" and tests can assert exact math.
 - Recomputed at the end of every `enrich` run for titles whose ratings changed.

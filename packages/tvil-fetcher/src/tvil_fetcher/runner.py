@@ -15,6 +15,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tvil_core.enums import FetchStatus
 from tvil_core.settings import Settings
+from tvil_fetcher.enrich import EnrichResultTally, enrich_titles, recompute_all_aggregates
+from tvil_fetcher.enrichers import discover_enrichers
+from tvil_fetcher.enrichers.imdb import ImdbDatasetLoader
 from tvil_fetcher.http import HttpClient
 from tvil_fetcher.images import ImageFetcher, ImageResult
 from tvil_fetcher.pipeline import SyncResult, deactivate_missing_sources, sync_source
@@ -94,6 +97,44 @@ def sync_all(
             logger.info("retired sources (data kept): %s", ", ".join(report.retired_sources))
 
     return report
+
+
+def enrich_all(
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    *,
+    http: HttpClient,
+    force: bool = False,
+    limit: int | None = None,
+    skip_imdb: bool = False,
+) -> EnrichResultTally:
+    """Run the per-title enrichers, then the IMDb bulk pass, then rescore.
+
+    IMDb goes last because it depends on ``imdb_id`` values the TMDB enricher
+    fills in, and it runs as one bulk join rather than per title.
+    """
+    enrichers = discover_enrichers(settings)
+    logger.info("enriching with: %s", ", ".join(e.key for e in enrichers) or "nothing")
+
+    with session_factory() as session:
+        ctx = FetchContext(source_key="enrich", http=http, settings=settings)
+        tally = enrich_titles(session, enrichers, ctx, settings, force=force, limit=limit)
+
+    if not skip_imdb:
+        with session_factory() as session:
+            imdb = ImdbDatasetLoader(http).run(session)
+            tally.by_enricher["imdb"] = imdb.created + imdb.updated
+        # IMDb writes ratings directly, so aggregates need recomputing after it.
+        with session_factory() as session:
+            tally.aggregates_computed += recompute_all_aggregates(session, settings)
+
+    logger.info(
+        "enrich: %d titles, %d ratings, %d aggregates",
+        tally.titles_seen,
+        tally.ratings_written,
+        tally.aggregates_computed,
+    )
+    return tally
 
 
 def fetch_images(

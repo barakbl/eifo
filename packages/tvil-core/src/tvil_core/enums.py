@@ -27,6 +27,32 @@ class OfferType(StrEnum):
     FREE = "free"
 
 
+class RatingProvider(StrEnum):
+    """Where a score came from.
+
+    Adding a member is half of adding a ratings provider; the other half is a
+    weight in ``[scores.weights]`` (docs.internal/06-enrichment.md).
+    """
+
+    IMDB = "imdb"
+    TMDB = "tmdb"
+    RT_CRITICS = "rt_critics"
+    RT_AUDIENCE = "rt_audience"
+    SERET_CRITICS = "seret_critics"
+    SERET_VIEWERS = "seret_viewers"
+    EDB = "edb"
+
+    @property
+    def is_israeli(self) -> bool:
+        """Whether this provider feeds the separate Israeli aggregate."""
+        return self in _ISRAELI_PROVIDERS
+
+
+_ISRAELI_PROVIDERS = frozenset(
+    {RatingProvider.SERET_CRITICS, RatingProvider.SERET_VIEWERS, RatingProvider.EDB}
+)
+
+
 class FetchPhase(StrEnum):
     """Which fetcher phase a run belongs to."""
 

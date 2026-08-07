@@ -27,7 +27,14 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
-from tvil_core.enums import FetchPhase, FetchStatus, OfferType, SourceKind, TitleKind
+from tvil_core.enums import (
+    FetchPhase,
+    FetchStatus,
+    OfferType,
+    RatingProvider,
+    SourceKind,
+    TitleKind,
+)
 from tvil_core.types import UtcDateTime, utcnow
 
 
@@ -104,6 +111,15 @@ class Title(TimestampMixin, Base):
     genres: Mapped[list[Genre]] = relationship(
         secondary="title_genres",
         back_populates="titles",
+    )
+    ratings: Mapped[list[ExternalRating]] = relationship(
+        back_populates="title",
+        cascade="all, delete-orphan",
+    )
+    aggregate: Mapped[AggregateScore | None] = relationship(
+        back_populates="title",
+        cascade="all, delete-orphan",
+        uselist=False,
     )
 
     @property
@@ -212,6 +228,59 @@ class Availability(Base):
             f"<Availability title={self.title_id} source={self.source_id} "
             f"current={self.is_current}>"
         )
+
+
+class ExternalRating(Base):
+    """One provider's score for one title.
+
+    ``score_raw`` keeps the provider's own scale for display ("8.4/10", "92%");
+    ``score_normalized`` is the 0-100 value aggregation works from.
+    """
+
+    __tablename__ = "external_ratings"
+    __table_args__ = (
+        UniqueConstraint("title_id", "provider", name="uq_rating_provider"),
+        Index("ix_external_ratings_title", "title_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title_id: Mapped[int] = mapped_column(ForeignKey("titles.id", ondelete="CASCADE"))
+    provider: Mapped[RatingProvider] = mapped_column(_enum(RatingProvider, "rating_provider"))
+
+    score_raw: Mapped[float]
+    score_normalized: Mapped[int]
+    vote_count: Mapped[int | None]
+    #: Always shown next to the score: a rating without its source is a rumour.
+    url: Mapped[str | None] = mapped_column(String(1000))
+    fetched_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+
+    title: Mapped[Title] = relationship(back_populates="ratings")
+
+    def __repr__(self) -> str:
+        return f"<ExternalRating {self.provider} {self.score_raw} title={self.title_id}>"
+
+
+class AggregateScore(Base):
+    """The combined score for a title, plus how it was arrived at."""
+
+    __tablename__ = "aggregate_scores"
+
+    title_id: Mapped[int] = mapped_column(
+        ForeignKey("titles.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    #: Null until enough providers agree to make an average meaningful.
+    score: Mapped[int | None]
+    #: Israeli providers only; shown alongside the global score for local content.
+    score_israeli: Mapped[int | None]
+    #: Every input and the weight it was given, so the UI can show its working.
+    components: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    computed_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+
+    title: Mapped[Title] = relationship(back_populates="aggregate")
+
+    def __repr__(self) -> str:
+        return f"<AggregateScore title={self.title_id} score={self.score}>"
 
 
 class FetchRun(Base):

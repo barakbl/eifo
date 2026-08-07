@@ -27,7 +27,7 @@ from tvil_core.settings import MissingSettingsError, Settings, get_settings
 from tvil_core.types import utcnow
 from tvil_fetcher.http import HttpClient
 from tvil_fetcher.registry import declared_sources, discover_plugins
-from tvil_fetcher.runner import fetch_images, sync_all
+from tvil_fetcher.runner import enrich_all, fetch_images, sync_all
 from tvil_fetcher.sources.base import SourceInfo
 
 EXIT_OK = 0
@@ -56,11 +56,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="limit to this source; repeatable",
     )
 
+    enrich = subcommands.add_parser("enrich", help="refresh ratings and metadata")
+    enrich.add_argument(
+        "--force",
+        action="store_true",
+        help="re-enrich regardless of how fresh the ratings are",
+    )
+    enrich.add_argument("--limit", type=int, default=None, help="stop after N titles")
+    enrich.add_argument(
+        "--skip-imdb",
+        action="store_true",
+        help="skip the IMDb dataset download (tens of megabytes)",
+    )
+
     images = subcommands.add_parser("images", help="download missing artwork")
     images.add_argument("--force", action="store_true", help="re-download existing artwork")
     images.add_argument("--limit", type=int, default=None, help="stop after N titles")
 
-    subcommands.add_parser("all", help="sync, then fetch artwork")
+    subcommands.add_parser("all", help="sync, enrich, then fetch artwork")
 
     sources = subcommands.add_parser("sources", help="inspect configured sources")
     sources.add_subparsers(dest="sources_command", required=True).add_parser(
@@ -142,13 +155,28 @@ def _cmd_images(args: argparse.Namespace, settings: Settings) -> int:
     return EXIT_PARTIAL if result.failed else EXIT_OK
 
 
+def _cmd_enrich(args: argparse.Namespace, settings: Settings) -> int:
+    with _database(settings) as session_factory, HttpClient() as http:
+        tally = enrich_all(
+            session_factory,
+            settings,
+            http=http,
+            force=args.force,
+            limit=args.limit,
+            skip_imdb=args.skip_imdb,
+        )
+    return EXIT_PARTIAL if tally.errors else EXIT_OK
+
+
 def _cmd_all(_args: argparse.Namespace, settings: Settings) -> int:
-    """Sync then fetch artwork. Enrichment joins this sequence in stage S2."""
+    """Sync, enrich, then fetch artwork — the whole cycle in dependency order."""
     with _database(settings) as session_factory, HttpClient() as http:
         report = sync_all(session_factory, settings, http=http)
+        tally = enrich_all(session_factory, settings, http=http)
         images = fetch_images(session_factory, settings, http=http)
 
-    return EXIT_PARTIAL if (report.failed or images.failed) else EXIT_OK
+    failed = report.failed or tally.errors or images.failed
+    return EXIT_PARTIAL if failed else EXIT_OK
 
 
 def _cmd_sources(_args: argparse.Namespace, settings: Settings) -> int:
@@ -292,6 +320,7 @@ def _print_table(headers: tuple[str, ...], rows: Sequence[Sequence[str]]) -> Non
 _COMMANDS = {
     "db": _cmd_db,
     "sync": _cmd_sync,
+    "enrich": _cmd_enrich,
     "images": _cmd_images,
     "all": _cmd_all,
     "sources": _cmd_sources,

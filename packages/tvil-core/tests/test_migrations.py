@@ -1,0 +1,82 @@
+"""Migrations must produce exactly the schema the models describe."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from alembic.autogenerate import compare_metadata
+from alembic.runtime.migration import MigrationContext
+from sqlalchemy import Engine, create_engine, inspect
+
+from tvil_core.migrate import current_revision, downgrade, upgrade
+from tvil_core.models import Base
+
+EXPECTED_TABLES = {
+    "availability",
+    "fetch_runs",
+    "genres",
+    "match_reviews",
+    "sources",
+    "title_genres",
+    "titles",
+}
+
+
+def _migrated_engine(tmp_path: Path) -> Engine:
+    db_url = f"sqlite:///{tmp_path / 'migrated.db'}"
+    upgrade(db_url)
+    return create_engine(db_url)
+
+
+def test_upgrade_creates_every_table(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        assert set(inspect(engine).get_table_names()) >= EXPECTED_TABLES
+    finally:
+        engine.dispose()
+
+
+def test_upgrade_stamps_the_head_revision(tmp_path: Path) -> None:
+    engine = _migrated_engine(tmp_path)
+    try:
+        assert current_revision(engine) == "0001_initial"
+    finally:
+        engine.dispose()
+
+
+def test_unmigrated_database_has_no_revision(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'blank.db'}")
+    try:
+        assert current_revision(engine) is None
+    finally:
+        engine.dispose()
+
+
+def test_migrated_schema_matches_the_models(tmp_path: Path) -> None:
+    """The drift guard: a model change without a migration fails here."""
+    engine = _migrated_engine(tmp_path)
+    try:
+        with engine.connect() as connection:
+            context = MigrationContext.configure(
+                connection,
+                opts={"compare_type": True, "render_as_batch": True},
+            )
+            diff = compare_metadata(context, Base.metadata)
+    finally:
+        engine.dispose()
+
+    assert diff == [], f"models and migrations have diverged: {diff}"
+
+
+def test_downgrade_removes_the_schema(tmp_path: Path) -> None:
+    db_url = f"sqlite:///{tmp_path / 'reversible.db'}"
+    upgrade(db_url)
+
+    downgrade(db_url, "base")
+
+    engine = create_engine(db_url)
+    try:
+        remaining = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+    assert remaining & EXPECTED_TABLES == set()

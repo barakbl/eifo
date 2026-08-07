@@ -9,6 +9,7 @@ from __future__ import annotations
 from alembic import context
 from sqlalchemy import Connection, engine_from_config, pool
 
+from tvil_core.db import ensure_sqlite_parent
 from tvil_core.migrate import include_object
 from tvil_core.models import Base
 from tvil_core.settings import get_settings
@@ -25,6 +26,7 @@ def _database_url() -> str:
 
 
 def run_migrations_offline() -> None:
+    ensure_sqlite_parent(_database_url())
     context.configure(
         url=_database_url(),
         target_metadata=target_metadata,
@@ -59,6 +61,7 @@ def run_migrations_online() -> None:
 
     section = config.get_section(config.config_ini_section, {})
     section["sqlalchemy.url"] = _database_url()
+    ensure_sqlite_parent(_database_url())
     engine = engine_from_config(section, prefix="sqlalchemy.", poolclass=pool.NullPool)
     with engine.connect() as connection:
         _run(connection)

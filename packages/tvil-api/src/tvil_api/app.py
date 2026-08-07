@@ -5,12 +5,15 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 
 from tvil_api import __version__
+from tvil_api.caching import CatalogCacheMiddleware
 from tvil_api.errors import install_error_handlers
-from tvil_api.routers import meta
+from tvil_api.routers import catalog, meta
+from tvil_api.static import mount_client, mount_images
 from tvil_core.db import create_engine_from_settings, make_session_factory, require_schema
 from tvil_core.settings import Settings, get_settings
 
@@ -57,6 +60,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.session_factory = make_session_factory(engine)
 
     install_error_handlers(app)
+    app.add_middleware(CatalogCacheMiddleware)
     app.include_router(meta.router, prefix=API_PREFIX)
+    app.include_router(catalog.router, prefix=API_PREFIX)
+
+    mount_images(app, Path(settings.images_dir))
+    # Registered last: its catch-all route must not shadow the API.
+    mount_client(app, _web_dir())
 
     return app
+
+
+def _web_dir() -> Path:
+    """Where the static client lives, relative to the installed package."""
+    return Path(__file__).resolve().parents[4] / "web"

@@ -43,18 +43,19 @@ services:
       retries: 3
       start_period: 10s
 
-  # The scheduled catalog fetcher arrives with the source plugins in stage S1:
-  #
-  # fetcher:
-  #   build: .
-  #   image: tvil:latest
-  #   restart: unless-stopped
-  #   command: ["tvil-fetch", "daemon"]
-  #   volumes:
-  #     - ./data:/app/data
-  #     - ./config:/app/config:ro
-  #   env_file:
-  #     - .env
-  #   depends_on:
-  #     migrate:
-  #       condition: service_completed_successfully
+  # Keeps the catalog current: sync, enrich and artwork on the schedule in
+  # config/tvil.toml. Drop this service and drive the phases from host cron
+  # instead if you would rather not have a long-running process.
+  fetcher:
+    build: .
+    image: tvil:latest
+    restart: unless-stopped
+    command: ["tvil-fetch", "daemon"]
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config:ro
+    env_file:
+      - .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully

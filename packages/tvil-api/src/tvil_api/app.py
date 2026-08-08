@@ -12,7 +12,8 @@ from fastapi import FastAPI
 from tvil_api import __version__
 from tvil_api.caching import CatalogCacheMiddleware
 from tvil_api.errors import install_error_handlers
-from tvil_api.routers import catalog, meta
+from tvil_api.logging_privacy import install_log_filters
+from tvil_api.routers import auth, catalog, me, meta
 from tvil_api.static import mount_client, mount_images
 from tvil_core.db import create_engine_from_settings, make_session_factory, require_schema
 from tvil_core.settings import Settings, get_settings
@@ -60,9 +61,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.session_factory = make_session_factory(engine)
 
     install_error_handlers(app)
+    install_log_filters()
     app.add_middleware(CatalogCacheMiddleware)
     app.include_router(meta.router, prefix=API_PREFIX)
     app.include_router(catalog.router, prefix=API_PREFIX)
+    app.include_router(auth.router, prefix=API_PREFIX)
+    app.include_router(me.router, prefix=API_PREFIX)
 
     mount_images(app, Path(settings.images_dir))
     # Registered last: its catch-all route must not shadow the API.

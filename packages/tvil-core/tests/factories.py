@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from tvil_core.enums import SourceKind, TitleKind
-from tvil_core.models import Source, Title
+from tvil_core.enums import AuthProvider, SourceKind, TitleKind
+from tvil_core.models import Source, Title, User
 
 
 def make_title(**overrides: Any) -> Title:
@@ -30,3 +30,15 @@ def make_source(**overrides: Any) -> Source:
     }
     values.update(overrides)
     return Source(**values)
+
+
+def make_user(**overrides: Any) -> User:
+    """A Google account with nothing but the defaults."""
+    values: dict[str, Any] = {
+        "auth_provider": AuthProvider.GOOGLE,
+        "auth_subject": "108100000000000000001",
+        "email": "viewer@example.com",
+        "display_name": "צופה",
+    }
+    values.update(overrides)
+    return User(**values)

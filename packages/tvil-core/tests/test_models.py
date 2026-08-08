@@ -5,18 +5,28 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
-from factories import make_source, make_title
+from factories import make_source, make_title, make_user
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.orm import Session
 
-from tvil_core.enums import FetchPhase, FetchStatus, OfferType, TitleKind
+from tvil_core.enums import (
+    AuthProvider,
+    FetchPhase,
+    FetchStatus,
+    ItemStatus,
+    OfferType,
+    TitleKind,
+)
 from tvil_core.models import (
     Availability,
     FetchRun,
     Genre,
     MatchReview,
     Title,
+    User,
+    UserItem,
+    UserSession,
 )
 
 
@@ -213,3 +223,146 @@ class TestMatchReview:
         review = session.scalars(select(MatchReview)).one()
         assert review.resolved_at is None
         assert review.raw_payload["year"] == 2024
+
+
+class TestUser:
+    def test_is_private_with_no_services_by_default(self, session: Session) -> None:
+        """The privacy default is schema-level, not something a caller opts into."""
+        session.add(make_user())
+        session.commit()
+
+        user = session.scalars(select(User)).one()
+        assert user.is_public is False
+        assert user.my_source_ids == []
+        assert user.handle is None
+
+    def test_the_same_subject_twice_on_one_provider_is_rejected(self, session: Session) -> None:
+        session.add_all([make_user(), make_user(display_name="שוב")])
+
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+    def test_the_same_subject_on_another_provider_is_a_separate_account(
+        self, session: Session
+    ) -> None:
+        """No cross-provider linking: two providers means two accounts."""
+        session.add_all([make_user(), make_user(auth_provider=AuthProvider.X, email=None)])
+        session.commit()
+
+        assert len(session.scalars(select(User)).all()) == 2
+
+    def test_handles_are_unique(self, session: Session) -> None:
+        session.add_all(
+            [
+                make_user(handle="tal"),
+                make_user(auth_subject="other", handle="tal"),
+            ]
+        )
+
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+    def test_email_is_optional(self, session: Session) -> None:
+        """X does not always return one, and nothing here depends on it."""
+        session.add(make_user(auth_provider=AuthProvider.X, email=None))
+        session.commit()
+
+        assert session.scalars(select(User)).one().email is None
+
+
+class TestUserItem:
+    def test_records_a_list_entry_with_a_rating_and_note(self, session: Session) -> None:
+        user, title = _user_and_title(session)
+        session.add(
+            UserItem(
+                user_id=user.id,
+                title_id=title.id,
+                status=ItemStatus.WATCHED,
+                rating=9,
+                note="לצפות שוב",
+            )
+        )
+        session.commit()
+
+        item = session.scalars(select(UserItem)).one()
+        assert item.status is ItemStatus.WATCHED
+        assert item.rating == 9
+        assert item.is_empty is False
+
+    def test_a_rating_needs_no_list(self, session: Session) -> None:
+        user, title = _user_and_title(session)
+        session.add(UserItem(user_id=user.id, title_id=title.id, rating=7))
+        session.commit()
+
+        assert session.scalars(select(UserItem)).one().status is None
+
+    def test_rejects_a_rating_outside_one_to_ten(self, session: Session) -> None:
+        user, title = _user_and_title(session)
+        session.add(UserItem(user_id=user.id, title_id=title.id, rating=11))
+
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+    def test_rejects_an_over_long_note(self, session: Session) -> None:
+        """Validation also lives in the schema, so no writer can bypass it."""
+        user, title = _user_and_title(session)
+        session.add(UserItem(user_id=user.id, title_id=title.id, note="א" * 2001))
+
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+    def test_one_row_per_user_and_title(self, session: Session) -> None:
+        user, title = _user_and_title(session)
+        session.add_all(
+            [
+                UserItem(user_id=user.id, title_id=title.id, rating=5),
+                UserItem(user_id=user.id, title_id=title.id, rating=6),
+            ]
+        )
+
+        with pytest.raises(IntegrityError):
+            session.commit()
+
+    def test_an_untouched_row_reports_itself_empty(self, session: Session) -> None:
+        assert UserItem(status=None, rating=None, note="").is_empty is True
+
+
+class TestUserSession:
+    def test_deleting_a_user_takes_sessions_and_items_with_it(self, session: Session) -> None:
+        """Account deletion has to be complete, so the cascade is tested, not assumed."""
+        user, title = _user_and_title(session)
+        session.add_all(
+            [
+                UserSession(
+                    token_hash="a" * 64,
+                    user_id=user.id,
+                    expires_at=dt.datetime(2030, 1, 1, tzinfo=dt.UTC),
+                ),
+                UserItem(user_id=user.id, title_id=title.id, status=ItemStatus.WANT_TO_WATCH),
+            ]
+        )
+        session.commit()
+
+        session.delete(user)
+        session.commit()
+
+        assert session.scalars(select(UserSession)).all() == []
+        assert session.scalars(select(UserItem)).all() == []
+
+    def test_deleting_a_title_removes_it_from_lists(self, session: Session) -> None:
+        user, title = _user_and_title(session)
+        session.add(UserItem(user_id=user.id, title_id=title.id, rating=8))
+        session.commit()
+
+        session.delete(title)
+        session.commit()
+
+        assert session.scalars(select(UserItem)).all() == []
+
+
+def _user_and_title(session: Session) -> tuple[User, Title]:
+    user = make_user()
+    title = make_title()
+    session.add_all([user, title])
+    session.flush()
+    return user, title

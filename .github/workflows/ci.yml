@@ -53,6 +53,25 @@ jobs:
           TVIL_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run tvil-fetch db upgrade
           TVIL_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run tvil-fetch db current
 
+  privacy:
+    # Its own job so a privacy regression is named on the pull request rather
+    # than buried in a line of the main test run (docs.internal/10-quality.md).
+    name: Privacy suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install the workspace
+        run: uv sync --locked
+
+      - name: No identity leaks, no-store on user routes, no query strings in logs
+        run: uv run pytest packages/tvil-api/tests/test_privacy.py
+
   docker:
     name: Docker image builds
     runs-on: ubuntu-latest

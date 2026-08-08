@@ -23,9 +23,12 @@ EXPECTED_TABLES = {
     "fetch_runs",
     "genres",
     "match_reviews",
+    "sessions",
     "sources",
     "title_genres",
     "titles",
+    "user_items",
+    "users",
 }
 
 

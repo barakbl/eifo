@@ -1,8 +1,7 @@
 """Database schema.
 
-Only the catalog side of the model lives here for now (stage S0/S1). Ratings,
-aggregate scores and user data arrive in later stages with their own migrations;
-see docs.internal/04-data-model.md for the full target schema.
+Catalog, ratings and user data; see docs.internal/04-data-model.md for the
+reference table-by-table description.
 
 Enum columns are stored as their string *values* in a VARCHAR with a CHECK
 constraint (``native_enum=False``) so the schema behaves identically on SQLite
@@ -28,8 +27,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
 from tvil_core.enums import (
+    AuthProvider,
     FetchPhase,
     FetchStatus,
+    ItemStatus,
     OfferType,
     RatingProvider,
     SourceKind,
@@ -281,6 +282,126 @@ class AggregateScore(Base):
 
     def __repr__(self) -> str:
         return f"<AggregateScore title={self.title_id} score={self.score}>"
+
+
+#: Length limits shared by the schema and the API's request validation, so the
+#: two can never disagree about what a valid value is.
+DISPLAY_NAME_MAX_LENGTH = 100
+HANDLE_MAX_LENGTH = 30
+NOTE_MAX_LENGTH = 2000
+RATING_MIN = 1
+RATING_MAX = 10
+
+
+class User(Base):
+    """An account.
+
+    Identity is whatever the provider gave us and nothing more: no password to
+    leak, and ``email`` is nullable because X does not always supply one and
+    nothing here depends on having it.
+    """
+
+    __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("auth_provider", "auth_subject", name="uq_users_identity"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    auth_provider: Mapped[AuthProvider] = mapped_column(_enum(AuthProvider, "auth_provider"))
+    auth_subject: Mapped[str] = mapped_column(String(255))
+    email: Mapped[str | None] = mapped_column(String(320))
+
+    display_name: Mapped[str] = mapped_column(String(DISPLAY_NAME_MAX_LENGTH))
+    #: Required before a profile can go public, and unique across accounts.
+    handle: Mapped[str | None] = mapped_column(String(HANDLE_MAX_LENGTH), unique=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(1000))
+    #: Private by default. Going public is an explicit, informed choice (S7).
+    is_public: Mapped[bool] = mapped_column(default=False)
+    #: Source ids behind the "my services" filter preset.
+    my_source_ids: Mapped[list[Any]] = mapped_column(default=list)
+
+    created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+    last_login_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+
+    sessions: Mapped[list[UserSession]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    items: Mapped[list[UserItem]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:
+        return f"<User {self.id} {self.auth_provider}:{self.auth_subject}>"
+
+
+class UserSession(Base):
+    """A logged-in browser.
+
+    Sessions are server-side rather than self-contained tokens precisely so that
+    logging out and deleting an account revoke access immediately instead of
+    when some signed token happens to expire. Only the SHA-256 of the cookie
+    value is stored: a database copy cannot be replayed as a login.
+    """
+
+    __tablename__ = "sessions"
+    __table_args__ = (Index("ix_sessions_expires_at", "expires_at"),)
+
+    #: Hex SHA-256 of the token held by the cookie; the token itself is never stored.
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+
+    created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+    expires_at: Mapped[dt.datetime]
+    last_used_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+
+    user: Mapped[User] = relationship(back_populates="sessions")
+
+    def __repr__(self) -> str:
+        return f"<UserSession user={self.user_id} expires={self.expires_at}>"
+
+
+class UserItem(Base):
+    """What one user has to say about one title.
+
+    ``status`` is nullable because rating or noting a title without filing it
+    under a list is a real thing people do.
+    """
+
+    __tablename__ = "user_items"
+    __table_args__ = (
+        UniqueConstraint("user_id", "title_id", name="uq_user_item"),
+        CheckConstraint(
+            f"rating IS NULL OR (rating >= {RATING_MIN} AND rating <= {RATING_MAX})",
+            name="ck_user_items_rating_range",
+        ),
+        CheckConstraint(
+            f"note IS NULL OR length(note) <= {NOTE_MAX_LENGTH}",
+            name="ck_user_items_note_length",
+        ),
+        Index("ix_user_items_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    title_id: Mapped[int] = mapped_column(ForeignKey("titles.id", ondelete="CASCADE"))
+
+    status: Mapped[ItemStatus | None] = mapped_column(_enum(ItemStatus, "item_status"))
+    rating: Mapped[int | None]
+    #: Private always, including on a public profile — a memo, not a review.
+    note: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+    updated_at: Mapped[dt.datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+    user: Mapped[User] = relationship(back_populates="items")
+
+    @property
+    def is_empty(self) -> bool:
+        """Whether nothing is left worth keeping a row for."""
+        return self.status is None and self.rating is None and not self.note
+
+    def __repr__(self) -> str:
+        return f"<UserItem user={self.user_id} title={self.title_id} {self.status}>"
 
 
 class FetchRun(Base):

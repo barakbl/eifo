@@ -1,13 +1,14 @@
 /* One title in full: ratings with their sources, and where to watch it. */
 
-import { getTitle } from "../api.js";
+import { getTitle, listMyItems } from "../api.js";
+import { noteEditor, titleActions } from "../account.js";
 import { formatDate, offerState, sourceColorVar } from "../format.js";
 import { displayName, secondaryName } from "../i18n.js";
 import { el, ratingPill, replace, scorePill, stateBlock } from "../ui.js";
 
-export function createTitleView({ mount, app, router }) {
+export function createTitleView({ mount, app, router, items }) {
   return async function render(route) {
-    const { t, language } = app.get();
+    const { t, language, user } = app.get();
     const id = route.params[0];
 
     replace(mount, el("div", { class: "shell state" }, el("div", { class: "state__mark" })));
@@ -32,13 +33,21 @@ export function createTitleView({ mount, app, router }) {
       return null;
     }
 
-    replace(mount, buildDetail(title, { t, language }));
+    // The user's own entry for this one title, so a deep link into a title page
+    // shows the right toggle state without loading their whole list.
+    if (user && !items.get(title.id)) {
+      await listMyItems({}, { pageSize: 100 })
+        .then((page) => items.replaceAll(page.items))
+        .catch(() => {});
+    }
+
+    replace(mount, buildDetail(title, { t, language, user, items }));
     document.title = `${displayName(title, language)} · TVIL`;
     return null;
   };
 }
 
-function buildDetail(title, { t, language }) {
+function buildDetail(title, { t, language, user, items }) {
   const name = displayName(title, language);
   const alternate = secondaryName(title, language);
 
@@ -69,10 +78,36 @@ function buildDetail(title, { t, language }) {
         ),
         overview ? el("p", { class: "detail__overview", text: overview }) : null,
         aggregateBlock(title, t),
+        userSection(title, { t, user, items }),
       ]),
     ]),
     ratingsSection(title, { t, language }),
     offersSection(title, { t, language }),
+  ]);
+}
+
+/** Lists, rating and note — or an invitation to sign in and have them. */
+function userSection(title, { t, user, items }) {
+  if (!user) {
+    return el("p", { class: "actions__prompt", text: t("item.signInToTrack") });
+  }
+
+  const problem = el("p", { class: "actions__problem", role: "status" });
+
+  return el("div", { class: "actions__block" }, [
+    titleActions({
+      titleId: title.id,
+      items,
+      t,
+      onError: () => {
+        problem.textContent = t("item.saveFailed");
+      },
+      onChange: () => {
+        problem.textContent = "";
+      },
+    }),
+    noteEditor({ titleId: title.id, items, t }),
+    problem,
   ]);
 }
 

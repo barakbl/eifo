@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import datetime as dt
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
 from tvil_api.schemas import (
     AggregateOut,
     AvailabilityOut,
@@ -16,9 +19,20 @@ from tvil_api.schemas import (
     SourceOut,
     TitleCard,
     TitleDetail,
+    UserItemOut,
+    UserOut,
 )
 from tvil_core.enums import RatingProvider
-from tvil_core.models import AggregateScore, Availability, ExternalRating, Genre, Source, Title
+from tvil_core.models import (
+    AggregateScore,
+    Availability,
+    ExternalRating,
+    Genre,
+    Source,
+    Title,
+    User,
+    UserItem,
+)
 
 IMAGES_PREFIX = "/images"
 
@@ -132,6 +146,60 @@ def to_detail(title: Title) -> TitleDetail:
         ratings=[to_rating(rating) for rating in title.ratings],
         aggregate=to_aggregate(title.aggregate),
     )
+
+
+def to_user(user: User) -> UserOut:
+    """A user for their own eyes.
+
+    Building this from named fields rather than the ORM object is what keeps
+    ``email`` and the provider identity out of every response by construction.
+    """
+    return UserOut(
+        id=user.id,
+        display_name=user.display_name,
+        handle=user.handle,
+        avatar_url=user.avatar_url,
+        is_public=user.is_public,
+        my_source_ids=list(user.my_source_ids or []),
+        created_at=user.created_at,
+    )
+
+
+def to_user_item(item: UserItem, *, title: Title | None = None) -> UserItemOut:
+    return UserItemOut(
+        title_id=item.title_id,
+        status=item.status,
+        rating=item.rating,
+        note=item.note,
+        updated_at=item.updated_at,
+        title=to_card(title) if title is not None else None,
+    )
+
+
+def hydrate_titles(session: Session, title_ids: list[int]) -> list[Title]:
+    """Load titles with everything a card or detail page needs, in order.
+
+    One query with eager loads rather than lazy relationships: a 24-card grid
+    should cost a couple of round trips, not dozens. Results are re-ordered to
+    match ``title_ids``, since ``IN`` does not preserve the ordering a sort
+    query established.
+    """
+    if not title_ids:
+        return []
+
+    titles = session.scalars(
+        select(Title)
+        .where(Title.id.in_(title_ids))
+        .options(
+            selectinload(Title.availability).selectinload(Availability.source),
+            selectinload(Title.genres),
+            selectinload(Title.ratings),
+            selectinload(Title.aggregate),
+        )
+    ).all()
+
+    by_id = {title.id: title for title in titles}
+    return [by_id[title_id] for title_id in title_ids if title_id in by_id]
 
 
 def to_source(

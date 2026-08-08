@@ -87,7 +87,7 @@ ignore_errors = true
 
 # Third-party packages that ship no type information.
 [[tool.mypy.overrides]]
-module = ["apscheduler.*"]
+module = ["apscheduler.*", "authlib.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------- pytest

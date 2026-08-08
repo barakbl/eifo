@@ -8,15 +8,29 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from tvil_core.enums import (
+    AuthProvider,
     FetchStatus,
+    ItemStatus,
     OfferType,
     RatingProvider,
     SourceKind,
     TitleKind,
 )
+from tvil_core.models import (
+    DISPLAY_NAME_MAX_LENGTH,
+    HANDLE_MAX_LENGTH,
+    NOTE_MAX_LENGTH,
+    RATING_MAX,
+    RATING_MIN,
+)
+
+#: Handles appear in a public URL, so they are restricted to what reads
+#: unambiguously in one: no case, no punctuation, nothing to homoglyph with.
+HANDLE_PATTERN = r"^[a-z0-9_]+$"
+HANDLE_MIN_LENGTH = 3
 
 
 class Page[T](BaseModel):
@@ -63,6 +77,9 @@ class MetaResponse(BaseModel):
     title_count: int
     sources: list[SourceFreshness]
     attribution: list[Attribution]
+    #: Sign-in providers this deployment is configured for; the client renders a
+    #: button per entry, and none at all on a deployment without accounts.
+    login_providers: list[AuthProvider] = Field(default_factory=list)
 
 
 class SourceOut(BaseModel):
@@ -155,3 +172,71 @@ class TitleDetail(TitleCard):
     backdrop_url: str | None = None
     ratings: list[RatingOut] = Field(default_factory=list)
     aggregate: AggregateOut = Field(default_factory=AggregateOut)
+
+
+class UserOut(BaseModel):
+    """A user, as they are allowed to be seen.
+
+    The omissions are the point: no ``email``, no ``auth_provider``, no
+    ``auth_subject``. This model is the only way a user reaches a response, so
+    the identity we were handed at login cannot leak by accident — asserted by
+    the privacy suite against the full response body.
+    """
+
+    id: int
+    display_name: str
+    handle: str | None = None
+    avatar_url: str | None = None
+    is_public: bool
+    my_source_ids: list[int] = Field(default_factory=list)
+    created_at: dt.datetime
+
+
+class MeResponse(BaseModel):
+    """The signed-in user plus the CSRF token for their session.
+
+    Bundled because every client needs both at boot, and a token that arrives
+    with the user it belongs to cannot be paired with the wrong session.
+    """
+
+    user: UserOut
+    csrf_token: str
+
+
+class UserItemOut(BaseModel):
+    """One title in a user's lists, from that user's point of view."""
+
+    title_id: int
+    status: ItemStatus | None = None
+    rating: int | None = None
+    #: Private always, even on a public profile.
+    note: str | None = None
+    updated_at: dt.datetime
+    #: Populated when the list is being browsed, absent on a write's echo.
+    title: TitleCard | None = None
+
+
+class ProfilePatch(BaseModel):
+    """A partial profile update; absent fields are left alone."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=DISPLAY_NAME_MAX_LENGTH)
+    handle: str | None = Field(
+        default=None,
+        min_length=HANDLE_MIN_LENGTH,
+        max_length=HANDLE_MAX_LENGTH,
+        pattern=HANDLE_PATTERN,
+    )
+    is_public: bool | None = None
+    my_source_ids: list[int] | None = None
+
+
+class ItemUpsert(BaseModel):
+    """A partial update to one list entry; an explicit null clears a field."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: ItemStatus | None = None
+    rating: int | None = Field(default=None, ge=RATING_MIN, le=RATING_MAX)
+    note: str | None = Field(default=None, max_length=NOTE_MAX_LENGTH)

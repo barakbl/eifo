@@ -212,9 +212,7 @@ class TestImageFetcher:
         self, session_factory: sessionmaker[Session], http: HttpClient, tmp_path: Path
     ) -> None:
         """The genuinely idempotent case still costs no download."""
-        route = respx.get(POSTER_URL).mock(
-            return_value=httpx.Response(200, content=png_bytes())
-        )
+        route = respx.get(POSTER_URL).mock(return_value=httpx.Response(200, content=png_bytes()))
         images_dir = tmp_path / "images"
         with session_factory() as session:
             add_title(session)

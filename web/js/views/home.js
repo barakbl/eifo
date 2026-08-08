@@ -22,7 +22,7 @@ const AVAILABILITY = ["current", "any", "gone"];
 export function createHomeView({ mount, app, router }) {
   return async function render(route) {
     const filters = paramsToFilters(route.search);
-    const { t, language, sources } = app.get();
+    const { t, language, sources, user } = app.get();
 
     const state = {
       filters,
@@ -39,8 +39,8 @@ export function createHomeView({ mount, app, router }) {
     const sentinel = el("div", { class: "sentinel" });
     const region = el("section", { class: "results shell" }, [status, grid, sentinel]);
 
-    const filterBar = buildFilterBar({ state, sources, t, language, onChange: apply });
-    replace(mount, filterBar, region);
+    const filterBar = buildFilterBar({ state, sources, user, t, onChange: apply });
+    replace(mount, filterBar.node, region);
 
     let observer = null;
     let requestToken = 0;
@@ -50,6 +50,9 @@ export function createHomeView({ mount, app, router }) {
       state.page = 1;
       state.loaded = [];
       state.done = false;
+      // A change can come from anywhere in the bar — the "my services" preset
+      // sets several chips at once — so the whole bar re-reads the state.
+      filterBar.sync();
       // Filters live in the URL so a filtered view can be shared or reloaded.
       router.replaceSearch(filtersToParams(state.filters).toString());
       load({ reset: true });
@@ -177,25 +180,22 @@ function titleCard(title, language, index = 0) {
   );
 }
 
-function buildFilterBar({ state, sources, t, language, onChange }) {
-  const active = new Set(state.filters.sources);
+function buildFilterBar({ state, sources, user, t, onChange }) {
+  const chosen = () => new Set(state.filters.sources);
 
-  const chips = sources.map((source) => {
-    const pressed = active.has(source.key);
-    return el(
+  const chips = sources.map((source) =>
+    el(
       "button",
       {
         class: "chip",
         type: "button",
-        "aria-pressed": String(pressed),
+        "aria-pressed": String(chosen().has(source.key)),
+        "data-source": source.key,
         style: { "--source-color": sourceColorVar(source.key) },
-        onClick: (event) => {
-          const next = new Set(active);
+        onClick: () => {
+          const next = chosen();
           if (next.has(source.key)) next.delete(source.key);
           else next.add(source.key);
-          active.clear();
-          for (const key of next) active.add(key);
-          event.currentTarget.setAttribute("aria-pressed", String(next.has(source.key)));
           onChange({ sources: [...next] });
         },
       },
@@ -206,8 +206,8 @@ function buildFilterBar({ state, sources, t, language, onChange }) {
           ? el("span", { class: "chip__count", text: String(source.title_count) })
           : null,
       ],
-    );
-  });
+    ),
+  );
 
   const selects = [
     select({
@@ -230,15 +230,64 @@ function buildFilterBar({ state, sources, t, language, onChange }) {
     }),
   ];
 
-  return el(
+  const mine = myServicesChip({ user, sources, state, t, onChange });
+
+  const node = el(
     "div",
     { class: "filters" },
     el("div", { class: "filters__row shell" }, [
       el("span", { class: "filters__label", text: t("filters.services") }),
+      mine,
       ...chips,
       ...selects,
     ]),
   );
+
+  /** Re-read the pressed state of every chip from the filters. */
+  function sync() {
+    const active = chosen();
+    for (const chip of chips) {
+      chip.setAttribute("aria-pressed", String(active.has(chip.dataset.source)));
+    }
+    mine?.setAttribute?.("aria-pressed", String(presetApplied({ user, sources, state })));
+  }
+
+  return { node, sync };
+}
+
+function myServicesChip({ user, sources, state, t, onChange }) {
+  if (!user) return null;
+
+  const preset = presetKeys(user, sources);
+  if (!preset.length) {
+    return el("a", {
+      class: "chip chip--hint",
+      href: "#/settings",
+      text: t("filters.myServicesEmpty"),
+    });
+  }
+
+  return el("button", {
+    class: "chip chip--mine",
+    type: "button",
+    "aria-pressed": String(presetApplied({ user, sources, state })),
+    text: t("filters.myServices"),
+    onClick: () =>
+      onChange({ sources: presetApplied({ user, sources, state }) ? [] : preset }),
+  });
+}
+
+/** The user's saved services, as source keys the catalog understands. */
+function presetKeys(user, sources) {
+  const byId = new Map(sources.map((source) => [source.id, source.key]));
+  return (user?.my_source_ids ?? []).map((id) => byId.get(id)).filter(Boolean);
+}
+
+/** Whether the current filter is exactly the saved preset. */
+function presetApplied({ user, sources, state }) {
+  const preset = presetKeys(user, sources);
+  const active = new Set(state.filters.sources);
+  return preset.length > 0 && preset.length === active.size && preset.every((k) => active.has(k));
 }
 
 function select({ values, current, label, onChange }) {

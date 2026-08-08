@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from tvil_api.security import LoginNotConfiguredError
 from tvil_api.static import client_fallback, is_api_path
 
 PROBLEM_MEDIA_TYPE = "application/problem+json"
@@ -87,14 +88,31 @@ def _serialisable_errors(exc: RequestValidationError) -> list[dict[str, Any]]:
     ]
 
 
+async def _login_not_configured_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """A deployment without credentials serves the catalog but cannot sign anyone in.
+
+    That is a deliberate configuration, not a bug, so it answers 503 with the
+    name of the missing setting rather than a stack trace.
+    """
+    assert isinstance(exc, LoginNotConfiguredError)
+    return problem_response(
+        status=503,
+        title="Login unavailable",
+        detail=str(exc),
+    )
+
+
 _TITLES = {
     400: "Bad request",
     401: "Authentication required",
     403: "Forbidden",
     404: "Not found",
     409: "Conflict",
+    422: "Invalid request",
     429: "Too many requests",
     500: "Internal server error",
+    502: "Upstream error",
+    503: "Service unavailable",
 }
 
 
@@ -102,3 +120,4 @@ def install_error_handlers(app: FastAPI) -> None:
     """Register the problem-details handlers on an application."""
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(RequestValidationError, _validation_exception_handler)
+    app.add_exception_handler(LoginNotConfiguredError, _login_not_configured_handler)

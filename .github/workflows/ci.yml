@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Tests build their own throwaway databases; never touch a real one.
+  TVIL_CONFIG_FILE: config/does-not-exist.toml
+
+jobs:
+  quality:
+    name: Lint, types and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install the workspace
+        run: uv sync --locked
+
+      - name: Ruff (lint)
+        run: uv run ruff check .
+
+      - name: Ruff (format)
+        run: uv run ruff format --check .
+
+      - name: mypy
+        run: uv run mypy
+
+      - name: Tests — tvil-core (coverage gate 90%)
+        run: uv run pytest packages/tvil-core --cov=tvil_core --cov-fail-under=90
+
+      - name: Tests — tvil-api and tvil-fetcher (coverage gate 85%)
+        run: >
+          uv run pytest packages/tvil-api packages/tvil-fetcher
+          --cov=tvil_api --cov=tvil_fetcher --cov-fail-under=85
+
+      - name: Client logic tests
+        run: node --test "web/tests/*.test.js"
+
+      - name: Migrations apply from scratch
+        run: |
+          TVIL_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run tvil-fetch db upgrade
+          TVIL_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run tvil-fetch db current
+
+  privacy:
+    # Its own job so a privacy regression is named on the pull request rather
+    # than buried in a line of the main test run (docs.internal/10-quality.md).
+    name: Privacy suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install the workspace
+        run: uv sync --locked
+
+      - name: No identity leaks, no-store on user routes, no query strings in logs
+        run: uv run pytest packages/tvil-api/tests/test_privacy.py
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t tvil:ci .
+
+  badge:
+    # The test count comes from the suite itself rather than being typed into
+    # the README, where it would start drifting the same afternoon.
+    #
+    # The number is written into a static shields.io URL rather than served
+    # from a JSON file here: shields fetches on its own servers, anonymously,
+    # so it cannot read anything in a private repository. A static badge needs
+    # no access at all, and keeps working if the repo is ever made public.
+    name: Refresh the test-count badge
+    needs: [quality, privacy]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install the workspace
+        run: uv sync --locked
+
+      - name: Count the tests
+        id: count
+        run: |
+          python_tests=$(uv run pytest --collect-only 2>/dev/null \
+            | grep -oE '[0-9]+ tests? collected' | grep -oE '^[0-9]+')
+          node_tests=$(node --test --test-reporter=tap "web/tests/*.test.js" \
+            | grep -oE '^# tests [0-9]+' | grep -oE '[0-9]+$')
+          echo "total=$((python_tests + node_tests))" >> "$GITHUB_OUTPUT"
+
+      - name: Write the count into the README badge
+        run: |
+          sed -i -E \
+            "s|(img\.shields\.io/badge/tests-)[^)]*|\1${{ steps.count.outputs.total }}%20passing-brightgreen|" \
+            README.md
+
+      - name: Commit it, if it moved
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --cached --quiet && echo "unchanged" && exit 0
+          # [skip ci] so a badge commit does not trigger another run of everything.
+          git commit -m "chore: ${{ steps.count.outputs.total }} tests [skip ci]"
+          git push

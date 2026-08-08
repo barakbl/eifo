@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from tvil_core.enums import TitleKind
 from tvil_core.models import MatchReview, Title
+from tvil_core.types import utcnow
 from tvil_fetcher.match import (
     MatchMethod,
     TitleMatcher,
@@ -273,6 +274,100 @@ class TestCreateAndReview:
 
         assert result.title is not None
         assert result.title.poster_source_url == "https://img.example/p.jpg"
+
+
+class TestHonouringReviewDecisions:
+    """A ruling in the review queue has to survive the next sync.
+
+    Without this the queue regrows every night no matter how diligently it is
+    worked, and the answer a human gave is silently discarded.
+    """
+
+    @staticmethod
+    def _park(session: Session, existing_name: str = "Srugim") -> tuple[Title, MatchReview]:
+        existing = Title(type=TitleKind.SERIES, name_en=existing_name, year=2008)
+        session.add(existing)
+        session.flush()
+
+        TitleMatcher(session).match(item(name="Srugim 2", year=2008))
+        return existing, session.scalars(select(MatchReview)).one()
+
+    def test_a_resolved_item_attaches_to_the_chosen_title_next_sync(self, session: Session) -> None:
+        existing, review = self._park(session)
+        review.resolved_title_id = existing.id
+        review.resolved_at = utcnow()
+        session.flush()
+
+        result = TitleMatcher(session).match(item(name="Srugim 2", year=2008))
+
+        assert result.method is MatchMethod.RESOLVED
+        assert result.title is existing
+
+    def test_a_resolved_item_is_not_parked_again(self, session: Session) -> None:
+        existing, review = self._park(session)
+        review.resolved_title_id = existing.id
+        review.resolved_at = utcnow()
+        session.flush()
+
+        TitleMatcher(session).match(item(name="Srugim 2", year=2008))
+
+        assert len(session.scalars(select(MatchReview)).all()) == 1
+
+    def test_a_skipped_item_becomes_a_title_of_its_own(self, session: Session) -> None:
+        """Skipping means "not that one", so it stops being a near-miss."""
+        _existing, review = self._park(session)
+        review.resolved_at = utcnow()
+        session.flush()
+
+        result = TitleMatcher(session).match(item(name="Srugim 2", year=2008))
+
+        assert result.method is MatchMethod.CREATED
+        assert result.title is not None
+        assert result.title.name_en == "Srugim 2"
+        assert len(session.scalars(select(MatchReview)).all()) == 1
+
+    def test_an_unresolved_review_does_not_count_as_a_decision(self, session: Session) -> None:
+        """Still waiting for a human means still waiting."""
+        self._park(session)
+
+        result = TitleMatcher(session).match(item(name="Srugim 2", year=2008))
+
+        assert result.method is MatchMethod.REVIEW
+
+    def test_a_decision_about_another_item_is_not_applied(self, session: Session) -> None:
+        existing, review = self._park(session)
+        review.resolved_title_id = existing.id
+        review.resolved_at = utcnow()
+        session.flush()
+
+        result = TitleMatcher(session).match(item(name="Srugim 3", year=2008))
+
+        assert result.method is MatchMethod.REVIEW
+
+    def test_a_decision_from_another_source_is_not_applied(self, session: Session) -> None:
+        """Two services can list different things under the same name."""
+        existing, review = self._park(session)
+        review.resolved_title_id = existing.id
+        review.resolved_at = utcnow()
+        session.flush()
+
+        result = TitleMatcher(session).match(
+            item(source_key="disney_plus_il", name="Srugim 2", year=2008)
+        )
+
+        assert result.method is MatchMethod.REVIEW
+
+    def test_a_resolution_to_a_since_deleted_title_is_ignored(self, session: Session) -> None:
+        existing, review = self._park(session)
+        review.resolved_title_id = existing.id
+        review.resolved_at = utcnow()
+        session.flush()
+        session.delete(existing)
+        session.flush()
+
+        result = TitleMatcher(session).match(item(name="Srugim 2", year=2008))
+
+        assert result.method is MatchMethod.CREATED
 
 
 class TestStats:

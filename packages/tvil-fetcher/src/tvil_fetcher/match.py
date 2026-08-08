@@ -57,6 +57,8 @@ class MatchMethod(StrEnum):
     FUZZY = "fuzzy"
     CREATED = "created"
     REVIEW = "review"
+    #: Matched from a ruling somebody made in the review queue.
+    RESOLVED = "resolved"
 
 
 @dataclass(slots=True)
@@ -158,6 +160,14 @@ class TitleMatcher:
             self.stats.record(result.method)
             return result
 
+        # Somebody has already ruled on this exact item. Asking again every
+        # night would make the review queue regrow no matter how diligently it
+        # is worked, and would silently discard the answer they gave.
+        decided = self._prior_decision(item)
+        if decided is not None:
+            self.stats.record(decided.method)
+            return decided
+
         # Nothing matched confidently. A near-miss is the interesting case: it
         # is probably a title we already hold under a slightly different name,
         # and guessing either way corrupts the catalog — so a human decides.
@@ -170,6 +180,42 @@ class TitleMatcher:
         title = self._create_title(item)
         self.stats.record(MatchMethod.CREATED)
         return MatchResult(title=title, method=MatchMethod.CREATED)
+
+    def _prior_decision(self, item: RawItem) -> MatchResult | None:
+        """Honour an earlier ``tvil-fetch review`` ruling on this same item.
+
+        Two rulings are possible and both are meaningful:
+
+        * **resolved to a title** — attach the offer to it, every sync from now on.
+        * **skipped** — the near-miss was wrong, so stop offering it and let the
+          item become a title of its own.
+
+        Returns None when nobody has ruled. A title that has since been deleted
+        leaves the item to be treated as new again rather than parked forever.
+        """
+        review = self._session.scalars(
+            select(MatchReview)
+            .where(
+                MatchReview.source_key == item.source_key,
+                MatchReview.resolved_at.is_not(None),
+                MatchReview.raw_payload["name"].as_string() == item.name,
+                MatchReview.raw_payload["kind"].as_string() == item.kind.value,
+            )
+            .order_by(MatchReview.resolved_at.desc())
+            .limit(1)
+        ).one_or_none()
+
+        if review is None:
+            return None
+
+        if review.resolved_title_id is None:
+            # Skipped: not the candidate we suggested. Let it stand on its own.
+            return MatchResult(title=self._create_title(item), method=MatchMethod.CREATED)
+
+        title = self._session.get(Title, review.resolved_title_id)
+        if title is None:
+            return None
+        return MatchResult(title=title, method=MatchMethod.RESOLVED)
 
     # -- strategies -------------------------------------------------------
 

@@ -12,10 +12,14 @@ The full specifications live in [`docs.internal/`](docs.internal/README.md).
 
 ## Status
 
-Stage **S0 — Foundation** is complete: the workspace, database schema and migrations, the
-`tvil-fetch` CLI, the API skeleton with `GET /api/v1/meta`, and the full quality toolchain.
-Source plugins (S1) and enrichment (S2) are next — see
+Stages **S0 — S5** are complete: the workspace and schema, the fetcher with its source
+plugins, enrichment and scores, the read-only catalog API, the web client, and accounts —
+sign-in with Google or X, watched / want-to-watch lists, 1–10 ratings, private notes, and
+the "my services" filter preset. Hardening (S6) is next — see
 [the staged plan](docs.internal/12-stages.md).
+
+Accounts are optional: a deployment with no OAuth credentials serves the catalog to
+everyone and simply offers no sign-in.
 
 ## Layout
 

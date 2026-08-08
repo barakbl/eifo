@@ -6,6 +6,18 @@
  */
 
 const BASE = "/api/v1";
+const CSRF_HEADER = "X-CSRF-Token";
+
+/* The CSRF token for this session, handed out by GET /me.
+ *
+ * Kept in a module variable rather than storage: it belongs to the session
+ * cookie, and anything that outlives the tab is one more thing to invalidate. */
+let csrfToken = "";
+
+/** Remember the token a `/me` response supplied. */
+export function setCsrfToken(token) {
+  csrfToken = token ?? "";
+}
 
 export class ApiError extends Error {
   constructor(message, { status = 0, detail = "", offline = false } = {}) {
@@ -45,12 +57,21 @@ export async function errorFromResponse(response) {
   return new ApiError(title, { status: response.status, detail });
 }
 
-async function request(path, { signal } = {}) {
+async function request(path, { signal, method = "GET", body } = {}) {
+  const headers = { Accept: "application/json" };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  // Every state-changing request carries the token; a read never needs one.
+  if (method !== "GET" && csrfToken) headers[CSRF_HEADER] = csrfToken;
+
   let response;
   try {
     response = await fetch(`${BASE}${path}`, {
       signal,
-      headers: { Accept: "application/json" },
+      method,
+      headers,
+      // The session lives in a cookie the page cannot read.
+      credentials: "same-origin",
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (cause) {
     if (cause?.name === "AbortError") throw cause;
@@ -58,7 +79,7 @@ async function request(path, { signal } = {}) {
   }
 
   if (!response.ok) throw await errorFromResponse(response);
-  return response.json();
+  return response.status === 204 ? null : response.json();
 }
 
 /** Build a titles query from filter state plus paging. */
@@ -88,4 +109,66 @@ export function listSources(options) {
 
 export function getMeta(options) {
   return request("/meta", options);
+}
+
+/* -- accounts ------------------------------------------------------------- */
+
+/** Where the login button points. A full navigation, not a fetch: OAuth is a
+ * redirect dance the browser has to perform itself. */
+export function loginUrl(provider) {
+  return `${BASE}/auth/login/${encodeURIComponent(provider)}`;
+}
+
+/**
+ * The signed-in user, or null.
+ *
+ * Doubles as the CSRF bootstrap, so it is the first call the app makes and the
+ * one every write depends on having succeeded.
+ */
+export async function getMe(options) {
+  try {
+    const me = await request("/me", options);
+    setCsrfToken(me.csrf_token);
+    return me.user;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      setCsrfToken("");
+      return null;
+    }
+    throw error;
+  }
+}
+
+export function patchMe(patch) {
+  return request("/me", { method: "PATCH", body: patch });
+}
+
+export function deleteMe() {
+  return request("/me", { method: "DELETE" });
+}
+
+export function logout() {
+  return request("/auth/logout", { method: "POST" });
+}
+
+/** Build a my-list query for one of the tabs. */
+export function myItemsQuery({ status = "", rated = false } = {}, { page = 1, pageSize = 24 } = {}) {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (rated) params.set("rated", "true");
+  params.set("page", String(page));
+  params.set("page_size", String(pageSize));
+  return params.toString();
+}
+
+export function listMyItems(filters, paging, options) {
+  return request(`/me/items?${myItemsQuery(filters, paging)}`, options);
+}
+
+export function putMyItem(titleId, patch) {
+  return request(`/me/items/${encodeURIComponent(titleId)}`, { method: "PUT", body: patch });
+}
+
+export function deleteMyItem(titleId) {
+  return request(`/me/items/${encodeURIComponent(titleId)}`, { method: "DELETE" });
 }

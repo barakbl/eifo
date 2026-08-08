@@ -7,6 +7,9 @@ dependencies = [
     "tvil-core",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
+    "authlib>=1.4",
+    "itsdangerous>=2.2",
+    "httpx>=0.28",
 ]
 
 [build-system]

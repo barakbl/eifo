@@ -53,6 +53,29 @@ _ISRAELI_PROVIDERS = frozenset(
 )
 
 
+class AuthProvider(StrEnum):
+    """Where an account's identity comes from.
+
+    Accounts are keyed on ``(provider, subject)`` and never linked across
+    providers: signing in with Google and with X gives two separate accounts
+    even for the same person (docs.internal/09-auth-privacy.md).
+    """
+
+    GOOGLE = "google"
+    X = "x"
+
+
+class ItemStatus(StrEnum):
+    """Where a title sits in a user's lists.
+
+    Null rather than a member of this enum is the third state: a title that was
+    rated or noted without being filed under either list.
+    """
+
+    WATCHED = "watched"
+    WANT_TO_WATCH = "want_to_watch"
+
+
 class FetchPhase(StrEnum):
     """Which fetcher phase a run belongs to."""
 

@@ -15,9 +15,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import Select, func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
-from tvil_api.converters import to_card, to_detail, to_genre, to_source
+from tvil_api.converters import hydrate_titles, to_card, to_detail, to_genre, to_source
 from tvil_api.deps import SessionDep
 from tvil_api.schemas import GenreOut, Page, SourceOut, TitleCard, TitleDetail
 from tvil_api.search import apply_text_search
@@ -87,7 +87,7 @@ def list_titles(
     title_ids = list(session.scalars(ordered).all())
 
     return Page(
-        items=[to_card(title) for title in _hydrate(session, title_ids)],
+        items=[to_card(title) for title in hydrate_titles(session, title_ids)],
         page=page,
         page_size=page_size,
         total=total,
@@ -96,7 +96,7 @@ def list_titles(
 
 @router.get("/titles/{title_id}", response_model=TitleDetail, summary="One title in full")
 def get_title(title_id: int, session: SessionDep) -> TitleDetail:
-    titles = _hydrate(session, [title_id])
+    titles = hydrate_titles(session, [title_id])
     if not titles:
         raise HTTPException(status_code=404, detail=f"No title with id {title_id}")
     return to_detail(titles[0])
@@ -206,30 +206,6 @@ def _apply_sort(statement: Select[tuple[int]], sort: Sort) -> Select[tuple[int]]
         .scalar_subquery()
     )
     return statement.order_by(first_seen.desc(), Title.id)
-
-
-def _hydrate(session: Session, title_ids: list[int]) -> list[Title]:
-    """Load a page of titles with everything a card or detail page needs.
-
-    Results are re-ordered to match ``title_ids``, since ``IN`` does not
-    preserve the ordering the sort query established.
-    """
-    if not title_ids:
-        return []
-
-    titles = session.scalars(
-        select(Title)
-        .where(Title.id.in_(title_ids))
-        .options(
-            selectinload(Title.availability).selectinload(Availability.source),
-            selectinload(Title.genres),
-            selectinload(Title.ratings),
-            selectinload(Title.aggregate),
-        )
-    ).all()
-
-    by_id = {title.id: title for title in titles}
-    return [by_id[title_id] for title_id in title_ids if title_id in by_id]
 
 
 def _current_counts_by_source(session: Session) -> dict[int, int]:

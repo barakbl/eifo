@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from tvil_api import __version__
 from tvil_api.deps import SessionDep, SettingsDep
+from tvil_api.oauth import configured_providers
 from tvil_api.schemas import Attribution, MetaResponse, SourceFreshness
 from tvil_core.enums import FetchPhase, FetchStatus
 from tvil_core.models import FetchRun, Source, Title
@@ -61,6 +62,8 @@ def get_meta(session: SessionDep, settings: SettingsDep) -> MetaResponse:
         title_count=title_count,
         sources=sources,
         attribution=ATTRIBUTION,
+        # So the client offers only the buttons that lead somewhere.
+        login_providers=configured_providers(settings),
     )
 
 

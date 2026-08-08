@@ -753,3 +753,319 @@ img {
     transform: none;
   }
 }
+
+/* -- account -------------------------------------------------------------- */
+
+.account {
+  position: relative;
+}
+
+.account__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  list-style: none;
+  white-space: nowrap;
+}
+
+.account__summary::-webkit-details-marker {
+  display: none;
+}
+
+.account__summary:hover {
+  border-color: var(--line-strong);
+}
+
+.account__name {
+  max-inline-size: 10ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account__panel {
+  position: absolute;
+  inset-block-start: calc(100% + var(--space-2));
+  inset-inline-end: 0;
+  z-index: 20;
+  display: grid;
+  min-inline-size: 12rem;
+  padding: var(--space-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+
+.account__item {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.account__item:hover {
+  background: var(--surface-sunken);
+}
+
+.avatar {
+  inline-size: 1.75rem;
+  block-size: 1.75rem;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface-sunken);
+}
+
+.avatar--initial {
+  display: inline-grid;
+  place-items: center;
+  background: var(--accent-quiet);
+  color: var(--accent);
+  font-weight: var(--weight-bold);
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-inline-size: var(--content-max);
+  margin: var(--space-4) auto 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--accent-quiet);
+  border-radius: var(--radius);
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+
+.notice__dismiss {
+  margin-inline-start: auto;
+  border: none;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font: inherit;
+}
+
+/* -- my lists ------------------------------------------------------------- */
+
+.page__title {
+  margin: var(--space-6) 0 var(--space-4);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-black);
+  letter-spacing: -0.02em;
+}
+
+.tabs {
+  display: flex;
+  gap: var(--space-2);
+  margin-block-end: var(--space-5);
+  border-block-end: 1px solid var(--line);
+}
+
+.tab {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-block-end: 2px solid transparent;
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.tab--on {
+  color: var(--fg);
+  border-block-end-color: var(--accent);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block-start: var(--space-3);
+}
+
+.actions__block {
+  margin-block-start: var(--space-5);
+}
+
+.actions__prompt,
+.actions__problem {
+  margin-block-start: var(--space-4);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+.actions__problem {
+  color: var(--danger);
+}
+
+.actions__problem:empty {
+  margin: 0;
+}
+
+.toggle {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.toggle:hover {
+  border-color: var(--line-strong);
+  color: var(--fg);
+}
+
+.toggle--on {
+  background: var(--accent-quiet);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.toggle--on::before {
+  content: "✓ ";
+}
+
+.rating-select {
+  min-inline-size: 9rem;
+}
+
+.mine {
+  color: var(--accent);
+  font-weight: var(--weight-bold);
+  font-size: var(--text-sm);
+}
+
+.note-editor {
+  margin-block-start: var(--space-4);
+  font-size: var(--text-sm);
+}
+
+.note-editor summary {
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.note {
+  display: block;
+  inline-size: 100%;
+  margin-block-start: var(--space-2);
+  padding: var(--space-3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--fg);
+  font: inherit;
+  resize: vertical;
+}
+
+.note-editor__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-block-start: var(--space-2);
+}
+
+.note__status {
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+}
+
+/* -- settings ------------------------------------------------------------- */
+
+.settings {
+  max-inline-size: 44rem;
+  padding-block-end: var(--space-8);
+}
+
+.settings__help {
+  margin: var(--space-2) 0 0;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  max-inline-size: 60ch;
+}
+
+.settings__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-block-start: var(--space-3);
+}
+
+.settings__field {
+  display: grid;
+  gap: var(--space-1);
+  margin-block: var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+
+.control--text {
+  inline-size: 100%;
+  max-inline-size: 24rem;
+  color: var(--fg);
+}
+
+.settings__switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block-start: var(--space-5);
+  font-size: var(--text-sm);
+}
+
+.settings__status {
+  min-block-size: 1.5rem;
+}
+
+.section--danger {
+  margin-block-start: var(--space-7);
+  padding: var(--space-5);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border-radius: var(--radius);
+}
+
+.section--danger .control--text {
+  margin-block: var(--space-4);
+}
+
+.button--danger {
+  background: var(--danger);
+  color: var(--surface);
+}
+
+.button--danger[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chip--mine[aria-pressed="true"] {
+  background: var(--accent-quiet);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chip--hint {
+  color: var(--fg-faint);
+  text-decoration: none;
+  font-style: italic;
+}

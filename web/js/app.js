@@ -1,11 +1,15 @@
 /* The app shell: header, language and theme, routing, footer attribution. */
 
-import { getMeta, listSources } from "./api.js";
+import { getMe, getMeta, listSources, logout, setCsrfToken } from "./api.js";
+import { accountMenu } from "./account.js";
 import { DEFAULT_LANGUAGE, directionOf, isSupported, translator } from "./i18n.js";
+import { createItemStore } from "./items.js";
 import { createRouter } from "./router.js";
 import { createStore, debounce } from "./store.js";
 import { el, replace, stateBlock } from "./ui.js";
 import { createHomeView } from "./views/home.js";
+import { createMyListView } from "./views/mylist.js";
+import { createSettingsView } from "./views/settings.js";
 import { createTitleView } from "./views/title.js";
 
 const SEARCH_DEBOUNCE_MS = 250;
@@ -16,7 +20,13 @@ const app = createStore({
   language: readLanguage(),
   t: translator(readLanguage()),
   sources: [],
+  user: null,
+  loginProviders: [],
 });
+
+/* One store for the signed-in user's entries, shared by every view: the title
+ * page and the list page must not disagree about what is on a list. */
+const items = createItemStore();
 
 function readLanguage() {
   const stored = safeRead(STORAGE_LANGUAGE);
@@ -85,7 +95,7 @@ function buildHeader({ router }) {
 
   input.addEventListener("input", (event) => onInput(event.currentTarget.value));
 
-  const language = app.get().language;
+  const { language, user, loginProviders } = app.get();
 
   return el(
     "header",
@@ -118,9 +128,46 @@ function buildHeader({ router }) {
             event.currentTarget.textContent = next === "dark" ? "☀" : "☾";
           },
         }),
+        accountMenu({ user, providers: loginProviders, t, onSignOut: () => signOut(router) }),
       ]),
     ]),
   );
+}
+
+async function signOut(router) {
+  try {
+    await logout();
+  } catch {
+    // The session may already be gone; either way this browser is signed out.
+  }
+  setCsrfToken("");
+  items.clear();
+  app.set({ user: null });
+  router.navigate("home");
+  start();
+}
+
+/**
+ * A one-line report on a sign-in that did not complete.
+ *
+ * The callback cannot render anything itself — it is a redirect — so it says
+ * what happened in the URL and the app says it out loud here.
+ */
+function loginNotice(t) {
+  const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+  const outcome = params.get("login");
+  if (outcome !== "cancelled" && outcome !== "failed") return null;
+
+  return el("div", { class: "notice", role: "status" }, [
+    el("span", { text: t(outcome === "cancelled" ? "auth.cancelled" : "auth.failed") }),
+    el("button", {
+      class: "notice__dismiss",
+      type: "button",
+      text: "✕",
+      "aria-label": t("empty.clear"),
+      onClick: (event) => event.currentTarget.closest(".notice")?.remove(),
+    }),
+  ]);
 }
 
 function buildFooter(meta) {
@@ -163,6 +210,8 @@ async function start() {
     {
       home: (route) => home(route),
       title: (route) => title(route),
+      me: (route) => mylist(route),
+      settings: (route) => settings(route),
       notFound: () => {
         const { t } = app.get();
         replace(
@@ -182,15 +231,18 @@ async function start() {
   );
 
   const home = createHomeView({ mount: main, app, router });
-  const title = createTitleView({ mount: main, app, router });
+  const title = createTitleView({ mount: main, app, router, items });
+  const mylist = createMyListView({ mount: main, app, router, items });
+  const settings = createSettingsView({ mount: main, app, router, onSignedOut: () => signOut(router) });
 
-  const [sources, meta] = await Promise.all([
+  const [sources, meta, user] = await Promise.all([
     listSources().catch(() => []),
     getMeta().catch(() => null),
+    getMe().catch(() => null),
   ]);
-  app.set({ sources });
+  app.set({ sources, user, loginProviders: meta?.login_providers ?? [] });
 
-  replace(root, buildHeader({ router }), main, buildFooter(meta));
+  replace(root, buildHeader({ router }), loginNotice(app.get().t), main, buildFooter(meta));
 
   if (!started) {
     started = true;

@@ -41,6 +41,13 @@ enabled = true
 [sources.crunchyroll_il]
 enabled = false
 
+# Not in JustWatch's IL provider list despite being available here, so it has
+# a dedicated plugin reading the sitemaps Disney publishes for the region.
+[sources.disney_plus_il]
+enabled = true
+# Two sitemap requests per sync; no need to be gentle, but be polite anyway.
+rate_limit_rps = 1.0
+
 # Free broadcaster VODs — dedicated plugins.
 [sources.mako]
 enabled = true

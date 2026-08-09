@@ -64,6 +64,37 @@ people actually trust, and puts a search box in front of it.
 Accounts are optional. Leave the OAuth credentials unset and TVIL serves the catalog to
 everyone with no sign-in at all.
 
+## A look at it
+
+<div align="center">
+
+<img src="docs/screenshots/app.jpg" width="90%" alt="The TVIL catalog — a grid of posters with search and service filters" />
+
+<sub><b>Browse the whole catalog — search as you type, filter by service, Hebrew or English.</b></sub>
+
+<br /><br />
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/home.jpg" alt="The services filter open, each service with its colour dot and a checkbox" />
+      <br /><sub><b>Filter by the services you actually pay for.</b></sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/screenshots/my-list.png" alt="A personal list showing rated titles" />
+      <br /><sub><b>Keep watched / want-to-watch lists and rate 1–10.</b></sub>
+    </td>
+  </tr>
+</table>
+
+<br />
+
+<img src="docs/screenshots/title.png" width="90%" alt="A title page with ratings from several providers and where to watch it" />
+
+<sub><b>Every title: its ratings side by side, and where to watch it in Israel.</b></sub>
+
+</div>
+
 ## Coverage
 
 Which services TVIL can read, and how. **✅** has its own catalog surface and per-title

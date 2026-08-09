@@ -370,6 +370,70 @@ class TestHonouringReviewDecisions:
         assert result.method is MatchMethod.CREATED
 
 
+class TestReparkingIsIdempotent:
+    """A re-sync must not pile up duplicate rows for an unresolved near-miss.
+
+    The prior fix kept *resolved* decisions; this keeps the *open* queue from
+    regrowing with duplicates every night, which would make it unworkable.
+    """
+
+    @staticmethod
+    def _seed_ambiguous(session: Session) -> None:
+        session.add(Title(type=TitleKind.SERIES, name_en="Srugim", year=2008))
+        session.flush()
+
+    def test_reparking_the_same_item_replaces_its_open_review(self, session: Session) -> None:
+        self._seed_ambiguous(session)
+
+        TitleMatcher(session).match(item(name="Srugim 2", year=2008))
+        TitleMatcher(session).match(item(name="Srugim 2", year=2008))
+        TitleMatcher(session).match(item(name="Srugim 2", year=2008))
+
+        reviews = session.scalars(select(MatchReview)).all()
+        assert len(reviews) == 1
+        assert reviews[0].raw_payload["name"] == "Srugim 2"
+
+    def test_it_heals_duplicates_a_previous_run_left(self, session: Session) -> None:
+        """Two stale unresolved rows collapse to one on the next park."""
+        self._seed_ambiguous(session)
+        for _ in range(2):
+            session.add(
+                MatchReview(
+                    source_key="mako",
+                    raw_payload={"name": "Srugim 2", "kind": "series"},
+                    candidates={},
+                )
+            )
+        session.flush()
+
+        TitleMatcher(session).match(item(name="Srugim 2", year=2008))
+
+        assert len(session.scalars(select(MatchReview)).all()) == 1
+
+    def test_a_resolved_review_is_not_replaced_by_reparking(self, session: Session) -> None:
+        """Only open rows are swept; a human's decision must survive a re-sync."""
+        self._seed_ambiguous(session)
+        TitleMatcher(session).match(item(name="Srugim 2", year=2008))
+        review = session.scalars(select(MatchReview)).one()
+        review.resolved_at = utcnow()  # skipped
+        session.flush()
+
+        # Re-syncing now honours the skip (creates its own title) and leaves the
+        # resolved row alone rather than deleting or duplicating it.
+        result = TitleMatcher(session).match(item(name="Srugim 2", year=2008))
+
+        assert result.method is MatchMethod.CREATED
+        assert len(session.scalars(select(MatchReview)).all()) == 1
+        assert session.scalars(select(MatchReview)).one().resolved_at is not None
+
+    def test_a_different_source_keeps_its_own_open_review(self, session: Session) -> None:
+        self._seed_ambiguous(session)
+        TitleMatcher(session).match(item(name="Srugim 2", year=2008))
+        TitleMatcher(session).match(item(source_key="disney_plus_il", name="Srugim 2", year=2008))
+
+        assert len(session.scalars(select(MatchReview)).all()) == 2
+
+
 class TestStats:
     def test_counts_each_method(self, session: Session) -> None:
         matcher = TitleMatcher(session)

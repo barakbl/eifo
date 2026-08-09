@@ -22,7 +22,7 @@ from enum import StrEnum
 from typing import Any
 
 from rapidfuzz import fuzz
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from tvil_core.enums import TitleKind
@@ -340,7 +340,24 @@ class TitleMatcher:
         candidate: Title | None = None,
         score: float = 0.0,
     ) -> None:
-        """Store an unresolved item, with what it nearly matched, for review."""
+        """Store an unresolved item, with what it nearly matched, for review.
+
+        Replaces any earlier *unresolved* park of the same item first, so a
+        re-sync refreshes the near-miss rather than piling up a duplicate row
+        for something nobody has ruled on yet. A resolved review is never
+        touched — that decision is honoured by ``_prior_decision`` and must
+        survive. This makes the open queue converge to one row per item on
+        every sync, healing duplicates a previous run may have left.
+        """
+        self._session.execute(
+            delete(MatchReview).where(
+                MatchReview.source_key == item.source_key,
+                MatchReview.resolved_at.is_(None),
+                MatchReview.raw_payload["name"].as_string() == item.name,
+                MatchReview.raw_payload["kind"].as_string() == item.kind.value,
+            )
+        )
+
         candidates: dict[str, Any] = {}
         if candidate is not None:
             candidates["closest"] = {

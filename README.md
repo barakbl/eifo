@@ -64,6 +64,36 @@ people actually trust, and puts a search box in front of it.
 Accounts are optional. Leave the OAuth credentials unset and TVIL serves the catalog to
 everyone with no sign-in at all.
 
+## Coverage
+
+Which services TVIL can read, and how. **✅** has its own catalog surface and per-title
+data; **◐** is tracked but with a caveat (coverage or freshness); **❌** has a real catalog
+but no surface an honest client can reach without a paying subscriber's login — so TVIL
+leaves it alone rather than spoof a browser or ride someone's subscription
+([why](#data-attribution-and-fair-use)).
+
+| Service | Supported | Plugin | Notes |
+|---|---|---|---|
+| **FreeTV** | ✅ Yes | `freetv` | Public RedGalaxy JSON API — no key. The largest source. `platform=BROWSER` is an undocumented convention, so a portal change could break it. |
+| **Disney+** (IL) | ✅ Yes | `disney_plus` | Reads Disney's public per-region sitemaps — no key. (Absent from JustWatch's IL data, so it needs its own plugin.) |
+| **Netflix** (IL) | ✅ Yes | `tmdb-providers` | Availability from JustWatch via the [TMDB API](#install) — **free key required**. The "watch" link goes to TMDB's per-title page, not the service's player; refreshed daily. |
+| **Prime Video** (IL) | ✅ Yes | `tmdb-providers` | As Netflix — JustWatch via TMDB, free key. |
+| **Apple TV** (IL) | ✅ Yes | `tmdb-providers` | As Netflix — JustWatch via TMDB, free key. |
+| **HBO Max** (IL) | ✅ Yes | `tmdb-providers` | As Netflix — JustWatch via TMDB, free key. |
+| **MUBI** (IL) | ✅ Yes | `tmdb-providers` | As Netflix — JustWatch via TMDB, free key. Films only. |
+| **Crunchyroll** (IL) | ✅ Yes | `tmdb-providers` | As Netflix — JustWatch via TMDB, free key. |
+| **Mako VOD** (Keshet 12) | ◐ Partial | `mako` | Free broadcaster VOD. **Scrapes** the site's embedded catalog data (no key) — may break if Mako changes its page. Series/programmes only, no films. |
+| **Cellcom TV** | ❌ No | — | Real VOD library, but only inside the subscriber app — no honest public surface. |
+| **HOT / NEXT** | ❌ No | — | Catalog API is reachable, but returns nothing without a paying subscriber's credential. |
+| **yes+** | ❌ No | — | Host resets honest clients at the TLS handshake, and the catalog needs subscriber auth. |
+| **Sting+** | ❌ No | — | Sibling of yes+ — same wall. |
+| **Partner TV** | ❌ No | — | App host is closed to honest clients; the web player is login-gated. |
+| **Kan 11 · Reshet 13** | ❌ No | — | Free public-broadcaster VODs, but both serve a bot-check (403) to non-browser clients, and TVIL won't spoof a browser to get past it. |
+
+Ratings come from IMDb (datasets), TMDB, Rotten Tomatoes and Seret — the last two by scraping,
+so they can lag or break when those sites change. Adding a service is a ~100-line plugin:
+see [Hack on it](#hack-on-it).
+
 ## Install
 
 You need a free [TMDB API key](https://www.themoviedb.org/settings/api). Everything else is

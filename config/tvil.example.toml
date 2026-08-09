@@ -48,6 +48,12 @@ enabled = true
 # Two sitemap requests per sync; no need to be gentle, but be polite anyway.
 rate_limit_rps = 1.0
 
+[sources.freetv]
+enabled = true
+# One public JSON API (RedGalaxy portal) carries the whole ~5,700-title catalog;
+# a full sweep is a few dozen requests. No auth. See the acquisition research doc.
+rate_limit_rps = 1.0
+
 # Free broadcaster VODs — dedicated plugins.
 [sources.mako]
 enabled = true
@@ -63,10 +69,6 @@ enabled = false
 enabled = false
 
 [sources.now14]
-enabled = false
-
-# Verify this service still exists before enabling — the Israeli market shifts.
-[sources.free_tv]
 enabled = false
 
 # ---------------------------------------------------------------------------

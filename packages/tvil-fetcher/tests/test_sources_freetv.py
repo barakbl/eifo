@@ -132,9 +132,7 @@ class TestFetch:
 
 class TestPagination:
     @respx.mock
-    def test_walks_every_page_until_the_total_is_reached(
-        self, freetv_ctx: FetchContext
-    ) -> None:
+    def test_walks_every_page_until_the_total_is_reached(self, freetv_ctx: FetchContext) -> None:
         movie = _movie(1)
         first = page([dict(movie, id=n) for n in range(100)], total=150, first=0)
         second = page([dict(movie, id=n) for n in range(100, 150)], total=150, first=100)

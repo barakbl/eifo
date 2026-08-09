@@ -181,33 +181,7 @@ function titleCard(title, language, index = 0) {
 }
 
 function buildFilterBar({ state, sources, user, t, onChange }) {
-  const chosen = () => new Set(state.filters.sources);
-
-  const chips = sources.map((source) =>
-    el(
-      "button",
-      {
-        class: "chip",
-        type: "button",
-        "aria-pressed": String(chosen().has(source.key)),
-        "data-source": source.key,
-        style: { "--source-color": sourceColorVar(source.key) },
-        onClick: () => {
-          const next = chosen();
-          if (next.has(source.key)) next.delete(source.key);
-          else next.add(source.key);
-          onChange({ sources: [...next] });
-        },
-      },
-      [
-        el("span", { class: "chip__dot", "aria-hidden": "true" }),
-        el("span", { text: source.name }),
-        source.title_count
-          ? el("span", { class: "chip__count", text: String(source.title_count) })
-          : null,
-      ],
-    ),
-  );
+  const combo = serviceCombo({ state, sources, user, t, onChange });
 
   const selects = [
     select({
@@ -230,51 +204,136 @@ function buildFilterBar({ state, sources, user, t, onChange }) {
     }),
   ];
 
-  const mine = myServicesChip({ user, sources, state, t, onChange });
-
   const node = el(
     "div",
     { class: "filters" },
-    el("div", { class: "filters__row shell" }, [
-      el("span", { class: "filters__label", text: t("filters.services") }),
-      mine,
-      ...chips,
-      ...selects,
-    ]),
+    el("div", { class: "filters__row shell" }, [combo.node, ...selects]),
   );
 
-  /** Re-read the pressed state of every chip from the filters. */
+  return { node, sync: combo.sync };
+}
+
+/**
+ * The services multi-select: a dropdown of every service, each with its colour
+ * dot and a checkbox, plus select-all / clear (and "my services" when signed in).
+ *
+ * Built on <details> so it opens, closes and takes keyboard focus with no JS of
+ * its own; the checkboxes are native for the same reason.
+ */
+function serviceCombo({ state, sources, user, t, onChange }) {
+  const chosen = () => new Set(state.filters.sources);
+  const boxes = new Map();
+
+  const options = sources.map((source) => {
+    const box = el("input", {
+      type: "checkbox",
+      class: "combo__check",
+      checked: chosen().has(source.key) || undefined,
+      onChange: () => {
+        const next = chosen();
+        if (box.checked) next.add(source.key);
+        else next.delete(source.key);
+        onChange({ sources: [...next] });
+      },
+    });
+    boxes.set(source.key, box);
+
+    return el(
+      "li",
+      {},
+      el(
+        "label",
+        { class: "combo__option", style: { "--source-color": sourceColorVar(source.key) } },
+        [
+          box,
+          el("span", { class: "combo__dot", "aria-hidden": "true" }),
+          el("span", { class: "combo__name", text: source.name }),
+          source.title_count
+            ? el("span", { class: "combo__count", text: String(source.title_count) })
+            : null,
+        ],
+      ),
+    );
+  });
+
+  const stack = el("span", { class: "combo__stack", "aria-hidden": "true" });
+  const label = el("span", { class: "combo__label" });
+  const trigger = el("summary", { class: "combo__trigger", "aria-label": t("filters.services") }, [
+    stack,
+    label,
+    el("span", { class: "combo__caret", "aria-hidden": "true", text: "▾" }),
+  ]);
+
+  const mine = myServicesAction({ user, sources, state, t, onChange });
+  const actions = el("div", { class: "combo__actions" }, [
+    el("button", {
+      class: "combo__action",
+      type: "button",
+      text: t("filters.selectAll"),
+      onClick: () => onChange({ sources: sources.map((s) => s.key) }),
+    }),
+    el("button", {
+      class: "combo__action combo__action--quiet",
+      type: "button",
+      text: t("filters.clear"),
+      onClick: () => onChange({ sources: [] }),
+    }),
+    mine,
+  ]);
+
+  const node = el("details", { class: "combo" }, [
+    trigger,
+    el("div", { class: "combo__panel" }, [actions, el("ul", { class: "combo__list" }, options)]),
+  ]);
+
   function sync() {
     const active = chosen();
-    for (const chip of chips) {
-      chip.setAttribute("aria-pressed", String(active.has(chip.dataset.source)));
+    for (const [key, box] of boxes) box.checked = active.has(key);
+
+    label.textContent = active.size
+      ? t("filters.servicesSome", { count: active.size })
+      : t("filters.servicesAll");
+    node.classList.toggle("combo--active", active.size > 0);
+
+    const selected = sources.filter((s) => active.has(s.key)).slice(0, 5);
+    replace(
+      stack,
+      selected.map((s) =>
+        el("span", { class: "combo__stackdot", style: { "--source-color": sourceColorVar(s.key) } }),
+      ),
+    );
+
+    if (mine && mine.dataset.mine) {
+      mine.classList.toggle("is-on", presetApplied({ user, sources, state }));
     }
-    mine?.setAttribute?.("aria-pressed", String(presetApplied({ user, sources, state })));
   }
 
+  sync();
   return { node, sync };
 }
 
-function myServicesChip({ user, sources, state, t, onChange }) {
+/** The "my services" preset, folded into the combo's action row when signed in. */
+function myServicesAction({ user, sources, state, t, onChange }) {
   if (!user) return null;
 
   const preset = presetKeys(user, sources);
   if (!preset.length) {
     return el("a", {
-      class: "chip chip--hint",
+      class: "combo__action combo__action--hint",
       href: "#/settings",
       text: t("filters.myServicesEmpty"),
     });
   }
 
-  return el("button", {
-    class: "chip chip--mine",
+  const button = el("button", {
+    class: "combo__action combo__action--mine",
     type: "button",
-    "aria-pressed": String(presetApplied({ user, sources, state })),
+    "data-mine": "1",
     text: t("filters.myServices"),
     onClick: () =>
       onChange({ sources: presetApplied({ user, sources, state }) ? [] : preset }),
   });
+  return button;
 }
 
 /** The user's saved services, as source keys the catalog understands. */

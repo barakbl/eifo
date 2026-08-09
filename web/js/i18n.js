@@ -16,6 +16,10 @@ const STRINGS = {
     "search.label": "חיפוש",
 
     "filters.services": "שירותים",
+    "filters.servicesAll": "כל השירותים",
+    "filters.servicesSome": "{count} שירותים",
+    "filters.selectAll": "בחירת הכול",
+    "filters.clear": "ניקוי",
     "filters.all": "הכול",
     "filters.type.any": "הכול",
     "filters.type.movie": "סרטים",
@@ -136,6 +140,10 @@ const STRINGS = {
     "search.label": "Search",
 
     "filters.services": "Services",
+    "filters.servicesAll": "All services",
+    "filters.servicesSome": "{count} services",
+    "filters.selectAll": "Select all",
+    "filters.clear": "Clear",
     "filters.all": "All",
     "filters.type.any": "All",
     "filters.type.movie": "Films",

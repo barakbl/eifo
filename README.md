@@ -9,7 +9,7 @@ good tonight — TVIL tells you where in Israel you can actually watch it, and w
 worth your evening.
 
 [![CI](https://github.com/barakbl/tvil/actions/workflows/ci.yml/badge.svg)](https://github.com/barakbl/tvil/actions/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-673%20passing-brightgreen)](https://github.com/barakbl/tvil/actions/workflows/ci.yml)
+[![tests](https://img.shields.io/badge/tests-690%20passing-brightgreen)](https://github.com/barakbl/tvil/actions/workflows/ci.yml)
 [![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 

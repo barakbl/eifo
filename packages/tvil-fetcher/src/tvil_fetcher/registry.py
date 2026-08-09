@@ -22,10 +22,11 @@ logger = logging.getLogger("tvil.fetch.registry")
 def _builtin_plugins() -> list[SourcePlugin]:
     # Imported lazily so a broken optional dependency cannot break the CLI.
     from tvil_fetcher.sources.disney_plus import DisneyPlusPlugin
+    from tvil_fetcher.sources.freetv import FreetvPlugin
     from tvil_fetcher.sources.mako import MakoPlugin
     from tvil_fetcher.sources.tmdb_providers import TmdbProvidersPlugin
 
-    return [TmdbProvidersPlugin(), DisneyPlusPlugin(), MakoPlugin()]
+    return [TmdbProvidersPlugin(), DisneyPlusPlugin(), FreetvPlugin(), MakoPlugin()]
 
 
 def _entry_point_plugins() -> list[SourcePlugin]:

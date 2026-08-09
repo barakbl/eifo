@@ -169,19 +169,25 @@
  * paired with a text label, never colour alone.
  */
 :root {
-  --source-netflix_il: #e5484d;
-  --source-disney_plus_il: #4d7cfe;
-  --source-prime_video_il: #2bb3c0;
-  --source-apple_tv_plus: #b8b8c4;
+  /* The nine services with content, each a vivid, distinguishable hue. */
+  --source-netflix_il: #f6353f;
+  --source-prime_video_il: #12a7dd;
+  --source-apple_tv_plus: #7c8cff;
+  --source-hbo_max_il: #b45cf9;
+  --source-mubi_il: #1fd18b;
+  --source-crunchyroll_il: #f7791f;
+  --source-freetv: #f83d97;
+  --source-disney_plus_il: #3d6dfb;
+  --source-mako: #f3c220;
+  /* Retired operators and broadcasters — kept vivid and distinct too. */
   --source-yes_plus: #9a5cf5;
-  --source-sting_tv: #e0679f;
-  --source-hot: #f2762b;
-  --source-cellcom_tv: #3fa2f7;
-  --source-partner_tv: #46c08a;
-  --source-mako: #d9c23f;
-  --source-kan: #7b8cff;
-  --source-reshet13: #ff8a5c;
-  --source-now14: #59c2b0;
-  --source-free_tv: #97a4bd;
-  --source-unknown: #64718a;
+  --source-sting_tv: #ec5aa6;
+  --source-hot: #ff6a1a;
+  --source-cellcom_tv: #2e97f5;
+  --source-partner_tv: #2fca8b;
+  --source-kan: #6d7dff;
+  --source-reshet13: #ff7a4d;
+  --source-now14: #26c9b6;
+  --source-free_tv: #8a97ad;
+  --source-unknown: #7b8698;
 }

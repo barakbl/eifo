@@ -19,10 +19,44 @@ const TYPES = ["", "movie", "series"];
 const SORTS = ["score", "score_israeli", "year", "name", "recently_added"];
 const AVAILABILITY = ["current", "any", "gone"];
 
+// The service selection is remembered here — the same place theme and language
+// live — so a viewer's chosen services default back on their next visit.
+const STORAGE_SOURCES = "tvil.sources";
+
+function saveSources(keys) {
+  try {
+    window.localStorage.setItem(STORAGE_SOURCES, JSON.stringify(keys));
+  } catch {
+    // Private browsing can refuse storage; the filter simply will not persist.
+  }
+}
+
+/** The remembered service keys, or null if nothing was ever saved. */
+function readSavedSources() {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(STORAGE_SOURCES) ?? "null");
+    return Array.isArray(value) ? value.filter((key) => typeof key === "string") : null;
+  } catch {
+    return null;
+  }
+}
+
 export function createHomeView({ mount, app, router }) {
   return async function render(route) {
-    const filters = paramsToFilters(route.search);
     const { t, language, sources, user } = app.get();
+    const filters = paramsToFilters(route.search);
+
+    // An explicit ?sources= in the URL wins (shared/deep links); otherwise fall
+    // back to the viewer's remembered selection, keeping only services we still
+    // track so a retired one never filters the catalog down to nothing.
+    if (!new URLSearchParams(route.search).has("sources")) {
+      const saved = readSavedSources();
+      if (saved) {
+        filters.sources = saved.filter((key) =>
+          sources.some((s) => s.key === key && s.title_count > 0),
+        );
+      }
+    }
 
     const state = {
       filters,
@@ -50,6 +84,8 @@ export function createHomeView({ mount, app, router }) {
       state.page = 1;
       state.loaded = [];
       state.done = false;
+      // Remember a service change so it becomes the default next time.
+      if ("sources" in patch) saveSources([...state.filters.sources]);
       // A change can come from anywhere in the bar — the "my services" preset
       // sets several chips at once — so the whole bar re-reads the state.
       filterBar.sync();
@@ -224,7 +260,11 @@ function serviceCombo({ state, sources, user, t, onChange }) {
   const chosen = () => new Set(state.filters.sources);
   const boxes = new Map();
 
-  const options = sources.map((source) => {
+  // Only services with titles right now — a retired source with an empty
+  // catalog is nothing to filter by, so it does not belong in the list.
+  const shown = sources.filter((source) => source.title_count > 0);
+
+  const options = shown.map((source) => {
     const box = el("input", {
       type: "checkbox",
       class: "combo__check",
@@ -270,7 +310,7 @@ function serviceCombo({ state, sources, user, t, onChange }) {
       class: "combo__action",
       type: "button",
       text: t("filters.selectAll"),
-      onClick: () => onChange({ sources: sources.map((s) => s.key) }),
+      onClick: () => onChange({ sources: shown.map((s) => s.key) }),
     }),
     el("button", {
       class: "combo__action combo__action--quiet",
@@ -295,12 +335,18 @@ function serviceCombo({ state, sources, user, t, onChange }) {
       : t("filters.servicesAll");
     node.classList.toggle("combo--active", active.size > 0);
 
-    const selected = sources.filter((s) => active.has(s.key)).slice(0, 5);
+    // One dot per selected service, side by side; hover a dot for its name.
     replace(
       stack,
-      selected.map((s) =>
-        el("span", { class: "combo__stackdot", style: { "--source-color": sourceColorVar(s.key) } }),
-      ),
+      shown
+        .filter((s) => active.has(s.key))
+        .map((s) =>
+          el("span", {
+            class: "combo__stackdot",
+            title: s.name,
+            style: { "--source-color": sourceColorVar(s.key) },
+          }),
+        ),
     );
 
     if (mine && mine.dataset.mine) {

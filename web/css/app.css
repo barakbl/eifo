@@ -296,9 +296,11 @@ img {
   color: var(--fg);
 }
 
-/* A little cluster of the selected services' colours, right in the trigger. */
+/* A row of the selected services' colours, right in the trigger — one dot each,
+ * side by side; each carries the service name as a hover tooltip. */
 .combo__stack {
   display: inline-flex;
+  gap: 3px;
 }
 
 .combo__stack:not(:empty) {
@@ -306,16 +308,11 @@ img {
 }
 
 .combo__stackdot {
-  inline-size: 0.55rem;
-  block-size: 0.55rem;
+  inline-size: 0.6rem;
+  block-size: 0.6rem;
   border-radius: 50%;
   background: var(--source-color, var(--fg-faint));
-  box-shadow: 0 0 0 2px var(--surface);
-  margin-inline-start: -0.2rem;
-}
-
-.combo__stackdot:first-child {
-  margin-inline-start: 0;
+  cursor: default;
 }
 
 .combo__caret {

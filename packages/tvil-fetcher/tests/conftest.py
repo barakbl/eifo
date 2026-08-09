@@ -1,0 +1,61 @@
+"""Shared fixtures for the fetcher test suite.
+
+No test in this package touches the network: every HTTP call is mocked with
+respx or served from a recorded fixture.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+from sqlalchemy import Engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from tvil_core.db import create_engine_from_settings, make_session_factory
+from tvil_core.models import Base
+from tvil_core.settings import Settings
+from tvil_fetcher.http import HttpClient, RateLimiter
+from tvil_fetcher.sources.base import FetchContext
+
+
+@pytest.fixture
+def settings(tmp_path: Path) -> Settings:
+    return Settings(
+        _env_file=None,
+        db_url=f"sqlite:///{tmp_path / 'fetcher.db'}",
+        images_dir=tmp_path / "images",
+    )
+
+
+@pytest.fixture
+def engine(settings: Settings) -> Iterator[Engine]:
+    engine = create_engine_from_settings(settings)
+    Base.metadata.create_all(engine)
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture
+def session_factory(engine: Engine) -> sessionmaker[Session]:
+    return make_session_factory(engine)
+
+
+@pytest.fixture
+def session(session_factory: sessionmaker[Session]) -> Iterator[Session]:
+    with session_factory() as session:
+        yield session
+
+
+@pytest.fixture
+def http() -> Iterator[HttpClient]:
+    """A client that never really sleeps, so rate limits cost no test time."""
+    client = HttpClient(rate_limiter=RateLimiter(default_rps=0), sleep=lambda _seconds: None)
+    yield client
+    client.close()
+
+
+@pytest.fixture
+def ctx(http: HttpClient, settings: Settings) -> FetchContext:
+    return FetchContext(source_key="test_source", http=http, settings=settings)

@@ -1,0 +1,61 @@
+# TVIL - API and fetcher from a single image, sharing ./data and ./config.
+#
+#   cp config/tvil.example.toml config/tvil.toml && cp .env.example .env
+#   docker compose up -d
+#
+# The `migrate` service applies the schema and exits; the API refuses to start
+# against an unmigrated database, so it waits for that to finish.
+
+services:
+  migrate:
+    build: .
+    image: tvil:latest
+    command: ["tvil-fetch", "db", "upgrade"]
+    restart: "no"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config:ro
+    env_file:
+      - .env
+
+  api:
+    build: .
+    image: tvil:latest
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config:ro
+    env_file:
+      - .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request as r; r.urlopen("http://localhost:8000/api/v1/meta")
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Keeps the catalog current: sync, enrich and artwork on the schedule in
+  # config/tvil.toml. Drop this service and drive the phases from host cron
+  # instead if you would rather not have a long-running process.
+  fetcher:
+    build: .
+    image: tvil:latest
+    restart: unless-stopped
+    command: ["tvil-fetch", "daemon"]
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config:ro
+    env_file:
+      - .env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully

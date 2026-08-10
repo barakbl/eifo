@@ -9,9 +9,9 @@ WORKDIR /app
 
 # Dependency layer: cached until the lockfile or a package manifest changes.
 COPY pyproject.toml uv.lock ./
-COPY packages/tvil-core/pyproject.toml packages/tvil-core/
-COPY packages/tvil-api/pyproject.toml packages/tvil-api/
-COPY packages/tvil-fetcher/pyproject.toml packages/tvil-fetcher/
+COPY packages/eifo-core/pyproject.toml packages/eifo-core/
+COPY packages/eifo-api/pyproject.toml packages/eifo-api/
+COPY packages/eifo-fetcher/pyproject.toml packages/eifo-fetcher/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-workspace --no-dev --no-editable
 
@@ -24,19 +24,19 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM python:3.12-slim-bookworm AS runtime
 
-RUN useradd --create-home --uid 1000 tvil
+RUN useradd --create-home --uid 1000 eifo
 WORKDIR /app
 
-COPY --from=builder --chown=tvil:tvil /app/.venv /app/.venv
-COPY --chown=tvil:tvil web/ web/
+COPY --from=builder --chown=eifo:eifo /app/.venv /app/.venv
+COPY --chown=eifo:eifo web/ web/
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    TVIL_DB_URL="sqlite:///data/tvil.db" \
-    TVIL_IMAGES_DIR="data/images"
+    EIFO_DB_URL="sqlite:///data/eifo.db" \
+    EIFO_IMAGES_DIR="data/images"
 
-USER tvil
+USER eifo
 EXPOSE 8000
 
 # Overridden by the fetcher service in docker-compose.yml.
-CMD ["uvicorn", "tvil_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "eifo_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

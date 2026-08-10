@@ -11,7 +11,7 @@ concurrency:
 
 env:
   # Tests build their own throwaway databases; never touch a real one.
-  TVIL_CONFIG_FILE: config/does-not-exist.toml
+  EIFO_CONFIG_FILE: config/does-not-exist.toml
 
 jobs:
   quality:
@@ -37,21 +37,21 @@ jobs:
       - name: mypy
         run: uv run mypy
 
-      - name: Tests - tvil-core (coverage gate 90%)
-        run: uv run pytest packages/tvil-core --cov=tvil_core --cov-fail-under=90
+      - name: Tests - eifo-core (coverage gate 90%)
+        run: uv run pytest packages/eifo-core --cov=eifo_core --cov-fail-under=90
 
-      - name: Tests - tvil-api and tvil-fetcher (coverage gate 85%)
+      - name: Tests - eifo-api and eifo-fetcher (coverage gate 85%)
         run: >
-          uv run pytest packages/tvil-api packages/tvil-fetcher
-          --cov=tvil_api --cov=tvil_fetcher --cov-fail-under=85
+          uv run pytest packages/eifo-api packages/eifo-fetcher
+          --cov=eifo_api --cov=eifo_fetcher --cov-fail-under=85
 
       - name: Client logic tests
         run: node --test "web/tests/*.test.js"
 
       - name: Migrations apply from scratch
         run: |
-          TVIL_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run tvil-fetch db upgrade
-          TVIL_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run tvil-fetch db current
+          EIFO_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run eifo-fetch db upgrade
+          EIFO_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run eifo-fetch db current
 
   privacy:
     # Its own job so a privacy regression is named on the pull request rather
@@ -70,7 +70,7 @@ jobs:
         run: uv sync --locked
 
       - name: No identity leaks, no-store on user routes, no query strings in logs
-        run: uv run pytest packages/tvil-api/tests/test_privacy.py
+        run: uv run pytest packages/eifo-api/tests/test_privacy.py
 
   docker:
     name: Docker image builds
@@ -78,7 +78,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build
-        run: docker build -t tvil:ci .
+        run: docker build -t eifo:ci .
 
   badge:
     # The test count comes from the suite itself rather than being typed into

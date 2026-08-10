@@ -9,7 +9,7 @@ export const DEFAULT_LANGUAGE = "he";
 
 const STRINGS = {
   he: {
-    "app.name": "TVIL",
+    "app.name": "איפה",
     "app.tagline": "מה זמין לצפייה בישראל",
     "search.placeholder": "חיפוש סרטים וסדרות",
     "search.shortcut": "/",
@@ -133,7 +133,7 @@ const STRINGS = {
     "settings.deleteWord": "DELETE",
   },
   en: {
-    "app.name": "TVIL",
+    "app.name": "Eifo",
     "app.tagline": "What's streaming in Israel",
     "search.placeholder": "Search films and series",
     "search.shortcut": "/",

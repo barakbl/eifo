@@ -42,7 +42,7 @@ export function createTitleView({ mount, app, router, items }) {
     }
 
     replace(mount, buildDetail(title, { t, language, user, items }));
-    document.title = `${displayName(title, language)} · TVIL`;
+    document.title = `${displayName(title, language)} · ${t("app.name")}`;
     return null;
   };
 }

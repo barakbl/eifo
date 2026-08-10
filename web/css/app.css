@@ -1,4 +1,4 @@
-/* TVIL components.
+/* Eifo components.
  *
  * Everything is laid out with logical properties (inline-start, margin-inline)
  * so right-to-left is the same code path as left-to-right, not a special case
@@ -108,14 +108,13 @@ img {
   white-space: nowrap;
 }
 
-/* The dot is the "on air" lamp the accent colour is named for. */
+/* The name is the question, so the mark belongs to the logo rather than to the
+ * sentence around it. ::after keeps it at the end in both directions - trailing
+ * in English, leading on screen in Hebrew. */
 .wordmark::after {
-  content: "";
-  inline-size: 0.4em;
-  block-size: 0.4em;
-  border-radius: 50%;
-  background: var(--accent);
-  align-self: center;
+  content: "?";
+  color: var(--accent);
+  margin-inline-start: -0.05em;
 }
 
 .search {

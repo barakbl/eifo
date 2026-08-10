@@ -1,15 +1,18 @@
 <div align="center">
 
-# TVIL
+# איפה · Eifo
 
 ### Which service is showing the thing I want to watch?
 
 That's the whole idea. You have a film or a series in mind, or you just want something
-good tonight - TVIL tells you where in Israel you can actually watch it, and whether it's
+good tonight - Eifo tells you where in Israel you can actually watch it, and whether it's
 worth your evening.
 
-[![CI](https://github.com/barakbl/tvil/actions/workflows/ci.yml/badge.svg)](https://github.com/barakbl/tvil/actions/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-694%20passing-brightgreen)](https://github.com/barakbl/tvil/actions/workflows/ci.yml)
+<sub>*Eifo* (איפה) is Hebrew for **"where?"** - the question and the entire feature list.
+For the pedants: **EIFO Indexes Films Online**.</sub>
+
+[![CI](https://github.com/barakbl/eifo/actions/workflows/ci.yml/badge.svg)](https://github.com/barakbl/eifo/actions/workflows/ci.yml)
+[![tests](https://img.shields.io/badge/tests-694%20passing-brightgreen)](https://github.com/barakbl/eifo/actions/workflows/ci.yml)
 [![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 
@@ -36,7 +39,7 @@ worth your evening.
 ## What it does
 
 Israeli streaming is split across a dozen services, and no two of them agree on what they
-carry. TVIL collects their catalogs into one place, enriches every title with the ratings
+carry. Eifo collects their catalogs into one place, enriches every title with the ratings
 people actually trust, and puts a search box in front of it.
 
 - **One catalog, every service.** yes+, Sting TV, HOT, Cellcom TV, Partner TV, the
@@ -51,7 +54,7 @@ people actually trust, and puts a search box in front of it.
 - **Bilingual search that actually works.** Hebrew and English over one FTS5 index, with
   prefix matching as you type. "פאודה" and "Fauda" find the same series.
 - **It remembers what left.** A title that vanished from a service is badged, not deleted -
-  and a service TVIL no longer tracks is badged differently, because "it's gone" and "we
+  and a service Eifo no longer tracks is badged differently, because "it's gone" and "we
   can't vouch for this any more" are different facts.
 - **Personal lists.** Sign in with Google or X to keep watched / want-to-watch lists, rate
   1-10, and write private notes. Notes are private always, including on a public profile.
@@ -61,14 +64,14 @@ people actually trust, and puts a search box in front of it.
 - **Runs on a Raspberry Pi.** One SQLite file, one container, no cluster, no queue, no
   external observability stack.
 
-Accounts are optional. Leave the OAuth credentials unset and TVIL serves the catalog to
+Accounts are optional. Leave the OAuth credentials unset and Eifo serves the catalog to
 everyone with no sign-in at all.
 
 ## A look at it
 
 <div align="center">
 
-<img src="docs/screenshots/app.jpg" width="90%" alt="The TVIL catalog - a grid of posters with search and service filters" />
+<img src="docs/screenshots/app.jpg" width="90%" alt="The Eifo catalog - a grid of posters with search and service filters" />
 
 <sub><b>Browse the whole catalog - search as you type, filter by service, Hebrew or English.</b></sub>
 
@@ -77,11 +80,11 @@ everyone with no sign-in at all.
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/home.jpg" alt="The services filter open, each service with its colour dot and a checkbox" />
-      <br /><sub><b>Filter by the services you actually pay for.</b></sub>
+      <img src="docs/screenshots/home.jpg" alt="The services filter open, each service with its colour dot, a checkbox and its title count" />
+      <br /><sub><b>Filter by the services you actually pay for - each with its title count.</b></sub>
     </td>
     <td width="50%" valign="top">
-      <img src="docs/screenshots/my-list.png" alt="A personal list showing rated titles" />
+      <img src="docs/screenshots/my-list.jpg" alt="A personal list showing rated titles" />
       <br /><sub><b>Keep watched / want-to-watch lists and rate 1-10.</b></sub>
     </td>
   </tr>
@@ -89,17 +92,17 @@ everyone with no sign-in at all.
 
 <br />
 
-<img src="docs/screenshots/title.png" width="90%" alt="A title page with ratings from several providers and where to watch it" />
+<img src="docs/screenshots/title.jpg" width="90%" alt="A title page with ratings from several providers, a private note and where to watch it" />
 
-<sub><b>Every title: its ratings side by side, and where to watch it in Israel.</b></sub>
+<sub><b>Every title: its ratings side by side, a private note, and where to watch it in Israel.</b></sub>
 
 </div>
 
 ## Coverage
 
-Which services TVIL can read, and how. **✅** has its own catalog surface and per-title
+Which services Eifo can read, and how. **✅** has its own catalog surface and per-title
 data; **◐** is tracked but with a caveat (coverage or freshness); **❌** has a real catalog
-but no surface an honest client can reach without a paying subscriber's login - so TVIL
+but no surface an honest client can reach without a paying subscriber's login - so Eifo
 leaves it alone rather than spoof a browser or ride someone's subscription
 ([why](#data-attribution-and-fair-use)).
 
@@ -119,7 +122,7 @@ leaves it alone rather than spoof a browser or ride someone's subscription
 | **yes+** | ❌ No | - | Host resets honest clients at the TLS handshake, and the catalog needs subscriber auth. |
 | **Sting+** | ❌ No | - | Sibling of yes+ - same wall. |
 | **Partner TV** | ❌ No | - | App host is closed to honest clients; the web player is login-gated. |
-| **Kan 11 · Reshet 13** | ❌ No | - | Free public-broadcaster VODs, but both serve a bot-check (403) to non-browser clients, and TVIL won't spoof a browser to get past it. |
+| **Kan 11 · Reshet 13** | ❌ No | - | Free public-broadcaster VODs, but both serve a bot-check (403) to non-browser clients, and Eifo won't spoof a browser to get past it. |
 
 Ratings come from IMDb (datasets), TMDB, Rotten Tomatoes and Seret - the last two by scraping,
 so they can lag or break when those sites change. Adding a service is a ~100-line plugin:
@@ -133,16 +136,16 @@ optional.
 ### With Docker (recommended)
 
 ```bash
-git clone https://github.com/barakbl/tvil.git && cd tvil
-cp config/tvil.example.toml config/tvil.toml
-cp .env.example .env          # fill in TVIL_TMDB_API_KEY
+git clone https://github.com/barakbl/eifo.git && cd eifo
+cp config/eifo.example.toml config/eifo.toml
+cp .env.example .env          # fill in EIFO_TMDB_API_KEY
 docker compose up -d
 ```
 
 Then fill the catalog - the first run takes a while, and is the only slow part:
 
 ```bash
-docker compose exec api tvil-fetch all
+docker compose exec api eifo-fetch all
 ```
 
 Open <http://localhost:8000>.
@@ -150,14 +153,14 @@ Open <http://localhost:8000>.
 ### With uv, no container
 
 ```bash
-git clone https://github.com/barakbl/tvil.git && cd tvil
+git clone https://github.com/barakbl/eifo.git && cd eifo
 uv sync
-cp config/tvil.example.toml config/tvil.toml
-cp .env.example .env          # fill in TVIL_TMDB_API_KEY
+cp config/eifo.example.toml config/eifo.toml
+cp .env.example .env          # fill in EIFO_TMDB_API_KEY
 
-uv run tvil-fetch db upgrade  # create the schema
-uv run tvil-fetch all         # fill the catalog
-uv run uvicorn tvil_api.main:app --reload
+uv run eifo-fetch db upgrade  # create the schema
+uv run eifo-fetch all         # fill the catalog
+uv run uvicorn eifo_api.main:app --reload
 ```
 
 Same address. The client is static files served by the same process - there is no build
@@ -170,18 +173,18 @@ daemon, so it keeps itself current with nothing further from you. Running withou
 container, the same thing:
 
 ```bash
-uv run tvil-fetch daemon      # sync 03:00, enrich 04:30, artwork 05:30 UTC
+uv run eifo-fetch daemon      # sync 03:00, enrich 04:30, artwork 05:30 UTC
 ```
 
 Or skip the long-running process and drive the phases from cron:
 
 ```bash
-uv run tvil-fetch sync        # catalogs
-uv run tvil-fetch enrich      # ratings and metadata
-uv run tvil-fetch images      # posters and backdrops
+uv run eifo-fetch sync        # catalogs
+uv run eifo-fetch enrich      # ratings and metadata
+uv run eifo-fetch images      # posters and backdrops
 ```
 
-Times come from `[schedule]` in `config/tvil.toml`. `tvil-fetch all` runs all three once.
+Times come from `[schedule]` in `config/eifo.toml`. `eifo-fetch all` runs all three once.
 
 ### Turning on sign-in
 
@@ -194,27 +197,27 @@ Only needed if you want lists and ratings.
 3. Put the credentials plus a session secret in `.env`:
 
 ```bash
-TVIL_SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
-TVIL_GOOGLE_CLIENT_ID=…
-TVIL_GOOGLE_CLIENT_SECRET=…
+EIFO_SECRET_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
+EIFO_GOOGLE_CLIENT_ID=…
+EIFO_GOOGLE_CLIENT_SECRET=…
 ```
 
 Restart. A sign-in button appears for each provider you configured, and for no others.
 
-Every setting, with its default, is in `config/tvil.example.toml` and `.env.example`.
+Every setting, with its default, is in `config/eifo.example.toml` and `.env.example`.
 
 ## How it fits together
 
 ```
-  streaming services ──► tvil-fetcher ──► SQLite ◄── tvil-api ──► web client
+  streaming services ──► eifo-fetcher ──► SQLite ◄── eifo-api ──► web client
    ratings providers        plugins                                (no build)
 ```
 
 | Path | What it is |
 |---|---|
-| `packages/tvil-core` | Settings, SQLAlchemy schema, Alembic migrations - the only contract between the services |
-| `packages/tvil-fetcher` | `tvil-fetch` CLI: catalog sync, enrichment, artwork |
-| `packages/tvil-api` | FastAPI REST service; also serves the client and the images |
+| `packages/eifo-core` | Settings, SQLAlchemy schema, Alembic migrations - the only contract between the services |
+| `packages/eifo-fetcher` | `eifo-fetch` CLI: catalog sync, enrichment, artwork |
+| `packages/eifo-api` | FastAPI REST service; also serves the client and the images |
 | `web/` | Static HTML + JS client, vanilla ES modules |
 
 Three deliberate choices, in case you were about to ask:
@@ -265,7 +268,7 @@ class MyServicePlugin(SourcePlugin):
 
 Start from `sources/mako.py` (a scraper) or `sources/tmdb_providers.py` (an API client
 covering several services at once). Register it in `registry.py` - **or don't**: plugins
-are also discovered through the `tvil.sources` entry-point group, so a source can live in
+are also discovered through the `eifo.sources` entry-point group, so a source can live in
 its own repository and install as an ordinary pip package with no change to this codebase.
 
 The pipeline handles everything after the yield: matching a listing to a canonical title,
@@ -286,7 +289,7 @@ model already supports the last one.
 ### House rules
 
 Everything is tested, linted and typed; CI enforces all three, and the coverage gates
-(90% for `tvil-core`, 85% elsewhere) are not negotiable.
+(90% for `eifo-core`, 85% elsewhere) are not negotiable.
 
 ```bash
 uv run pytest                                        # the Python suite
@@ -305,7 +308,7 @@ Small modules with one job, public functions typed and docstringed, comments tha
 
 ## Data, attribution and fair use
 
-TVIL displays data it does not own, and the licence in this repository covers the **code
+Eifo displays data it does not own, and the licence in this repository covers the **code
 only**. If you run your own instance, the obligations are yours:
 
 - **TMDB** - metadata and artwork. Requires your own API key and carries an attribution

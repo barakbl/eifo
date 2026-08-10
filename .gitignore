@@ -1,6 +1,6 @@
 # Runtime state - never committed
 data/
-config/tvil.toml
+config/eifo.toml
 .env
 
 # Python

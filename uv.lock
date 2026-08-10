@@ -8,10 +8,10 @@ resolution-markers = [
 
 [manifest]
 members = [
-    "tvil",
-    "tvil-api",
-    "tvil-core",
-    "tvil-fetcher",
+    "eifo",
+    "eifo-api",
+    "eifo-core",
+    "eifo-fetcher",
 ]
 
 [[package]]
@@ -1446,13 +1446,13 @@ wheels = [
 ]
 
 [[package]]
-name = "tvil"
+name = "eifo"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "tvil-api" },
-    { name = "tvil-core" },
-    { name = "tvil-fetcher" },
+    { name = "eifo-api" },
+    { name = "eifo-core" },
+    { name = "eifo-fetcher" },
 ]
 
 [package.dev-dependencies]
@@ -1469,9 +1469,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "tvil-api", editable = "packages/tvil-api" },
-    { name = "tvil-core", editable = "packages/tvil-core" },
-    { name = "tvil-fetcher", editable = "packages/tvil-fetcher" },
+    { name = "eifo-api", editable = "packages/eifo-api" },
+    { name = "eifo-core", editable = "packages/eifo-core" },
+    { name = "eifo-fetcher", editable = "packages/eifo-fetcher" },
 ]
 
 [package.metadata.requires-dev]
@@ -1487,15 +1487,15 @@ dev = [
 ]
 
 [[package]]
-name = "tvil-api"
+name = "eifo-api"
 version = "0.1.0"
-source = { editable = "packages/tvil-api" }
+source = { editable = "packages/eifo-api" }
 dependencies = [
     { name = "authlib" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "itsdangerous" },
-    { name = "tvil-core" },
+    { name = "eifo-core" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1505,14 +1505,14 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "itsdangerous", specifier = ">=2.2" },
-    { name = "tvil-core", editable = "packages/tvil-core" },
+    { name = "eifo-core", editable = "packages/eifo-core" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]
 
 [[package]]
-name = "tvil-core"
+name = "eifo-core"
 version = "0.1.0"
-source = { editable = "packages/tvil-core" }
+source = { editable = "packages/eifo-core" }
 dependencies = [
     { name = "alembic" },
     { name = "pydantic" },
@@ -1529,9 +1529,9 @@ requires-dist = [
 ]
 
 [[package]]
-name = "tvil-fetcher"
+name = "eifo-fetcher"
 version = "0.1.0"
-source = { editable = "packages/tvil-fetcher" }
+source = { editable = "packages/eifo-fetcher" }
 dependencies = [
     { name = "apscheduler" },
     { name = "httpx" },
@@ -1539,7 +1539,7 @@ dependencies = [
     { name = "rapidfuzz" },
     { name = "selectolax" },
     { name = "tenacity" },
-    { name = "tvil-core" },
+    { name = "eifo-core" },
 ]
 
 [package.metadata]
@@ -1550,7 +1550,7 @@ requires-dist = [
     { name = "rapidfuzz", specifier = ">=3.14.5" },
     { name = "selectolax", specifier = ">=0.4.11" },
     { name = "tenacity", specifier = ">=9.1.4" },
-    { name = "tvil-core", editable = "packages/tvil-core" },
+    { name = "eifo-core", editable = "packages/eifo-core" },
 ]
 
 [[package]]

@@ -11,6 +11,6 @@ __pycache__/
 .coverage
 htmlcov/
 .env
-config/tvil.toml
+config/eifo.toml
 **/tests/
 .DS_Store

@@ -21,7 +21,7 @@ const AVAILABILITY = ["current", "any", "gone"];
 
 // The service selection is remembered here - the same place theme and language
 // live - so a viewer's chosen services default back on their next visit.
-const STORAGE_SOURCES = "tvil.sources";
+const STORAGE_SOURCES = "eifo.sources";
 
 function saveSources(keys) {
   try {

@@ -1,6 +1,6 @@
-# TVIL - API and fetcher from a single image, sharing ./data and ./config.
+# Eifo - API and fetcher from a single image, sharing ./data and ./config.
 #
-#   cp config/tvil.example.toml config/tvil.toml && cp .env.example .env
+#   cp config/eifo.example.toml config/eifo.toml && cp .env.example .env
 #   docker compose up -d
 #
 # The `migrate` service applies the schema and exits; the API refuses to start
@@ -9,8 +9,8 @@
 services:
   migrate:
     build: .
-    image: tvil:latest
-    command: ["tvil-fetch", "db", "upgrade"]
+    image: eifo:latest
+    command: ["eifo-fetch", "db", "upgrade"]
     restart: "no"
     volumes:
       - ./data:/app/data
@@ -20,7 +20,7 @@ services:
 
   api:
     build: .
-    image: tvil:latest
+    image: eifo:latest
     restart: unless-stopped
     ports:
       - "8000:8000"
@@ -44,13 +44,13 @@ services:
       start_period: 10s
 
   # Keeps the catalog current: sync, enrich and artwork on the schedule in
-  # config/tvil.toml. Drop this service and drive the phases from host cron
+  # config/eifo.toml. Drop this service and drive the phases from host cron
   # instead if you would rather not have a long-running process.
   fetcher:
     build: .
-    image: tvil:latest
+    image: eifo:latest
     restart: unless-stopped
-    command: ["tvil-fetch", "daemon"]
+    command: ["eifo-fetch", "daemon"]
     volumes:
       - ./data:/app/data
       - ./config:/app/config:ro

@@ -13,8 +13,28 @@ import { createSettingsView } from "./views/settings.js";
 import { createTitleView } from "./views/title.js";
 
 const SEARCH_DEBOUNCE_MS = 250;
-const STORAGE_LANGUAGE = "tvil.language";
-const STORAGE_THEME = "tvil.theme";
+const STORAGE_LANGUAGE = "eifo.language";
+const STORAGE_THEME = "eifo.theme";
+
+/* Preferences lived under a "tvil." prefix before the rename. Carry them over
+ * once so nobody loses their chosen services, theme or language; this can go
+ * once instances have run a newer version for a while. */
+function migrateLegacyStorage() {
+  try {
+    for (const key of Object.keys(window.localStorage)) {
+      if (!key.startsWith("tvil.")) continue;
+      const renamed = `eifo.${key.slice("tvil.".length)}`;
+      if (window.localStorage.getItem(renamed) === null) {
+        window.localStorage.setItem(renamed, window.localStorage.getItem(key));
+      }
+      window.localStorage.removeItem(key);
+    }
+  } catch {
+    // Private browsing can refuse storage; the defaults below are fine.
+  }
+}
+
+migrateLegacyStorage();
 
 const app = createStore({
   language: readLanguage(),

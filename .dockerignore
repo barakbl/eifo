@@ -1,0 +1,16 @@
+.git/
+.github/
+.venv/
+data/
+docs.internal.local/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.env
+config/eifo.toml
+**/tests/
+.DS_Store

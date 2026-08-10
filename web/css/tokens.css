@@ -1,0 +1,193 @@
+/* Eifo design tokens.
+ *
+ * Every colour, size and duration in the app comes from here; components never
+ * hardcode values. Both themes are defined so the viewer's preference works and
+ * the manual toggle can override it in either direction.
+ *
+ * The palette is indigo ink with a warm amber accent - evening light rather
+ * than the neutral grey a dashboard would use. Source colours are a separate
+ * scale because they carry meaning, not mood.
+ */
+
+:root {
+  color-scheme: dark light;
+
+  /* -- surfaces & text (dark, the default) ------------------------------- */
+  --ink: #0e1320;
+  --surface: #161d2d;
+  --surface-raised: #1e2739;
+  --surface-sunken: #0a0e18;
+  --line: #2a3448;
+  --line-strong: #3a4761;
+
+  --fg: #e9ecf4;
+  --fg-muted: #94a1ba;
+  --fg-faint: #64718a;
+
+  --accent: #f2b441;
+  --accent-ink: #2a1d05;
+  --accent-quiet: #f2b4411f;
+
+  /* -- score bands ------------------------------------------------------- */
+  --score-high: #4fbf87;
+  --score-mid: #f2b441;
+  --score-low: #e4635a;
+  --score-none: #64718a;
+
+  /* -- state ------------------------------------------------------------- */
+  --danger: #e4635a;
+  --focus: #7aa7ff;
+
+  /* -- type -------------------------------------------------------------- */
+  /* system-ui carries a Hebrew face on every target platform. Self-hosting
+   * Heebo is a follow-up: it needs the actual font files, not a CDN link. */
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-data: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.75rem;
+  --text-2xl: 2.25rem;
+  --text-3xl: 3rem;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-bold: 700;
+  --weight-black: 800;
+
+  /* -- space: an 8px grid, with a half-step for tight work ---------------- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  --radius-sm: 6px;
+  --radius: 12px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.22);
+  --shadow-pop: 0 8px 40px rgb(0 0 0 / 0.45);
+
+  --duration: 150ms;
+  --ease: cubic-bezier(0.2, 0, 0.2, 1);
+
+  --content-max: 1400px;
+  --header-height: 4rem;
+}
+
+/* Light theme: same hues, inverted weight. Warmer than plain white so the
+ * amber accent still reads as light rather than as a warning. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --ink: #f7f6f3;
+    --surface: #ffffff;
+    --surface-raised: #ffffff;
+    --surface-sunken: #eceae5;
+    --line: #dedad2;
+    --line-strong: #c3bdb2;
+
+    --fg: #171b24;
+    --fg-muted: #5a6377;
+    --fg-faint: #8b93a5;
+
+    --accent: #b57708;
+    --accent-ink: #fff7e6;
+    --accent-quiet: #b577081a;
+
+    --score-high: #1f8d5a;
+    --score-mid: #a4700a;
+    --score-low: #c33f36;
+    --score-none: #8b93a5;
+
+    --focus: #2f6fe0;
+
+    --shadow-card: 0 1px 2px rgb(23 27 36 / 0.06), 0 6px 20px rgb(23 27 36 / 0.08);
+    --shadow-pop: 0 8px 40px rgb(23 27 36 / 0.18);
+  }
+}
+
+/* The manual toggle stamps data-theme on the root and must win over the media
+ * query in both directions. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --ink: #f7f6f3;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-sunken: #eceae5;
+  --line: #dedad2;
+  --line-strong: #c3bdb2;
+  --fg: #171b24;
+  --fg-muted: #5a6377;
+  --fg-faint: #8b93a5;
+  --accent: #b57708;
+  --accent-ink: #fff7e6;
+  --accent-quiet: #b577081a;
+  --score-high: #1f8d5a;
+  --score-mid: #a4700a;
+  --score-low: #c33f36;
+  --score-none: #8b93a5;
+  --focus: #2f6fe0;
+  --shadow-card: 0 1px 2px rgb(23 27 36 / 0.06), 0 6px 20px rgb(23 27 36 / 0.08);
+  --shadow-pop: 0 8px 40px rgb(23 27 36 / 0.18);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #0e1320;
+  --surface: #161d2d;
+  --surface-raised: #1e2739;
+  --surface-sunken: #0a0e18;
+  --line: #2a3448;
+  --line-strong: #3a4761;
+  --fg: #e9ecf4;
+  --fg-muted: #94a1ba;
+  --fg-faint: #64718a;
+  --accent: #f2b441;
+  --accent-ink: #2a1d05;
+  --accent-quiet: #f2b4411f;
+  --score-high: #4fbf87;
+  --score-mid: #f2b441;
+  --score-low: #e4635a;
+  --score-none: #64718a;
+  --focus: #7aa7ff;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.22);
+  --shadow-pop: 0 8px 40px rgb(0 0 0 / 0.45);
+}
+
+/* -- source colours ------------------------------------------------------
+ * These carry information: the same hue marks a service on its filter chip
+ * and on the spine of every card it offers, so the grid can be read for
+ * availability before it is read for titles. Chosen for distinguishability,
+ * including for the common forms of colour blindness - the spine is always
+ * paired with a text label, never colour alone.
+ */
+:root {
+  /* The nine services with content, each a vivid, distinguishable hue. */
+  --source-netflix_il: #f6353f;
+  --source-prime_video_il: #12a7dd;
+  --source-apple_tv_plus: #7c8cff;
+  --source-hbo_max_il: #b45cf9;
+  --source-mubi_il: #1fd18b;
+  --source-crunchyroll_il: #f7791f;
+  --source-freetv: #f83d97;
+  --source-disney_plus_il: #3d6dfb;
+  --source-mako: #f3c220;
+  /* Retired operators and broadcasters - kept vivid and distinct too. */
+  --source-yes_plus: #9a5cf5;
+  --source-sting_tv: #ec5aa6;
+  --source-hot: #ff6a1a;
+  --source-cellcom_tv: #2e97f5;
+  --source-partner_tv: #2fca8b;
+  --source-kan: #6d7dff;
+  --source-reshet13: #ff7a4d;
+  --source-now14: #26c9b6;
+  --source-free_tv: #8a97ad;
+  --source-unknown: #7b8698;
+}

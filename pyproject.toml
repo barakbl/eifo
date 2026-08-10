@@ -2,7 +2,12 @@
 name = "eifo"
 version = "0.1.0"
 description = "Eifo - Israeli VOD aggregator (workspace root)"
+readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+# Contributors are credited in AUTHORS; this field is only the point of contact.
+authors = [{ name = "Barak Bloch", email = "barak.bloch@gmail.com" }]
 dependencies = [
     "eifo-core",
     "eifo-api",

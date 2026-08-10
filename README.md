@@ -306,6 +306,9 @@ than as silently missing data.
 Small modules with one job, public functions typed and docstringed, comments that explain
 *why* rather than narrate the code, and Conventional Commits.
 
+If this is your first change here, add yourself to [AUTHORS](AUTHORS) as the last commit
+of the pull request. That is the whole formality - there is no CLA.
+
 ## Data, attribution and fair use
 
 Eifo displays data it does not own, and the licence in this repository covers the **code
@@ -327,4 +330,5 @@ do not permit it.
 
 ## Licence
 
-[MIT](LICENSE) for the code. The data is not mine to license - see the section above.
+[MIT](LICENSE) for the code, and everyone who has worked on it is credited in
+[AUTHORS](AUTHORS). The data is not mine to license - see the section above.

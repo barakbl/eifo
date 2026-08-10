@@ -3,6 +3,8 @@ name = "eifo-fetcher"
 version = "0.1.0"
 description = "Eifo catalog fetcher and metadata enricher"
 requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Barak Bloch", email = "barak.bloch@gmail.com" }]
 dependencies = [
     "apscheduler>=3.11.3",
     "httpx>=0.28.1",

@@ -3,6 +3,8 @@ name = "eifo-core"
 version = "0.1.0"
 description = "Eifo shared core: settings, database schema and migrations"
 requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Barak Bloch", email = "barak.bloch@gmail.com" }]
 dependencies = [
     "sqlalchemy>=2.0.36",
     "alembic>=1.14",

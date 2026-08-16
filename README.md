@@ -42,8 +42,11 @@ Israeli streaming is split across a dozen services, and no two of them agree on 
 carry. Eifo collects their catalogs into one place, enriches every title with the ratings
 people actually trust, and puts a search box in front of it.
 
-- **One catalog, every service.** yes+, Sting TV, HOT, Cellcom TV, Partner TV, the
-  broadcaster VODs, and the Israeli catalogs of Netflix, Disney+, Prime Video and Apple TV+.
+- **One catalog, not a dozen tabs.** FreeTV, the Israeli catalogs of Netflix, Disney+,
+  Prime Video, Apple TV, HBO Max, MUBI and Crunchyroll, and the free broadcaster VODs from
+  Mako, Kan Box and Reshet 13. The other Israeli operators (yes+, Sting TV, HOT, Cellcom
+  TV, Partner TV) publish nothing an honest client can read - [Coverage](#coverage) says
+  why.
 - **Filter by what you already pay for.** Tick your services once; the catalog narrows to
   what you can watch tonight without buying anything new. "Everything" stays one tap away.
 - **Ratings worth trusting, side by side.** IMDb, Rotten Tomatoes (critics and audience),
@@ -100,30 +103,33 @@ everyone with no sign-in at all.
 
 ## Coverage
 
-Which services Eifo can read, and how. **✅** has its own catalog surface and per-title
-data; **◐** is tracked but with a caveat (coverage or freshness); **❌** has a real catalog
-but no surface an honest client can reach without a paying subscriber's login - so Eifo
-leaves it alone rather than spoof a browser or ride someone's subscription
-([why](#data-attribution-and-fair-use)).
+Which services Eifo can read, and how, grouped by what kind of service it is. **✅** has its
+own catalog surface and per-title data; **◐** is tracked but with a caveat (coverage or
+freshness); **❌** has a real catalog but no surface an honest client can reach without a
+paying subscriber's login - so Eifo leaves it alone rather than spoof a browser or ride
+someone's subscription ([why](#data-attribution-and-fair-use)).
 
 | Service | Supported | Plugin | Notes |
 |---|---|---|---|
-| **FreeTV** | ✅ Yes | `freetv` | Public RedGalaxy JSON API - no key. The largest source. `platform=BROWSER` is an undocumented convention, so a portal change could break it. |
-| **Disney+** (IL) | ✅ Yes | `disney_plus` | Reads Disney's public per-region sitemaps - no key. (Absent from JustWatch's IL data, so it needs its own plugin.) |
+| **Israeli operators** | | | *Paid subscriptions, sold here* |
+| **FreeTV** | ✅ Yes | `freetv` | Public RedGalaxy JSON API - no key needed to read the catalog. The largest single source. `platform=BROWSER` is an undocumented convention, so a portal change could break it. |
+| **Cellcom TV** | ❌ No | - | Real VOD library, but only inside the subscriber app - no honest public surface. |
+| **HOT / NEXT** | ❌ No | - | Catalog API is reachable, but returns nothing without a paying subscriber's credential. |
+| **yes+** | ❌ No | - | Host resets honest clients at the TLS handshake, and the catalog needs subscriber auth. |
+| **Sting+** | ❌ No | - | Sibling of yes+ - same wall. |
+| **Partner TV** | ❌ No | - | App host is closed to honest clients; the web player is login-gated. |
+| **Global streamers** | | | *Israeli catalogs* |
 | **Netflix** (IL) | ✅ Yes | `tmdb-providers` | Availability from JustWatch via the [TMDB API](#install) - **free key required**. The "watch" link goes to TMDB's per-title page, not the service's player; refreshed daily. |
 | **Prime Video** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |
 | **Apple TV** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |
 | **HBO Max** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |
 | **MUBI** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. Films only. |
 | **Crunchyroll** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |
-| **Mako VOD** (Keshet 12) | ◐ Partial | `mako` | Free broadcaster VOD. **Scrapes** the site's embedded catalog data (no key) - may break if Mako changes its page. Series/programmes only, no films. |
-| **Kan Box** (Kan 11) | ◐ Partial | `kan` | Free public-broadcaster VOD. The site 403s non-browser clients, so a stock headless Chromium reads the three server-rendered lobby pages (kan-box, series, digital) - one page view each per sync, nothing else. The Docker image ships the browser; from a checkout, `playwright install chromium`. |
-| **Cellcom TV** | ❌ No | - | Real VOD library, but only inside the subscriber app - no honest public surface. |
-| **HOT / NEXT** | ❌ No | - | Catalog API is reachable, but returns nothing without a paying subscriber's credential. |
-| **yes+** | ❌ No | - | Host resets honest clients at the TLS handshake, and the catalog needs subscriber auth. |
-| **Sting+** | ❌ No | - | Sibling of yes+ - same wall. |
-| **Partner TV** | ❌ No | - | App host is closed to honest clients; the web player is login-gated. |
-| **Reshet 13** | ❌ No | - | Free broadcaster VOD, but serves a bot-check (403) to non-browser clients, and Eifo won't spoof a browser to get past it. |
+| **Disney+** (IL) | ✅ Yes | `disney_plus` | Reads Disney's public per-region sitemaps - no key. (Absent from JustWatch's IL data, so it needs its own plugin.) |
+| **Broadcaster VODs** | | | *Free to watch* |
+| **Mako VOD** (Keshet 12) | ◐ Partial | `mako` | **Scrapes** the site's embedded catalog data (no key) - may break if Mako changes its page. Series/programmes only, no films. |
+| **Kan Box** (Kan 11) | ◐ Partial | `kan` | Public broadcaster. The site 403s non-browser clients, so a stock headless Chromium reads the three server-rendered lobby pages (kan-box, series, digital) - one page view each per sync, nothing else. The Docker image ships the browser; from a checkout, `playwright install chromium`. |
+| **Reshet 13** | ◐ Partial | `reshet13` | The site 403s non-browser clients, so the same stock headless Chromium as `kan` reads the two public screens (all shows, news) and their embedded catalog data - one page view each per sync, nothing else. Series/programmes only, no films. |
 
 Ratings come from IMDb (datasets), TMDB, Rotten Tomatoes and Seret - the last two by scraping,
 so they can lag or break when those sites change. Adding a service is a ~100-line plugin:
@@ -131,8 +137,8 @@ see [Hack on it](#hack-on-it).
 
 ## Install
 
-You need a free [TMDB API key](https://www.themoviedb.org/settings/api). Everything else is
-optional.
+Docker, or Python 3.12+ with [uv](https://docs.astral.sh/uv/). Plus a free
+[TMDB API key](https://www.themoviedb.org/settings/api). Everything else is optional.
 
 ### With Docker (recommended)
 
@@ -146,22 +152,23 @@ docker compose up -d
 Then fill the catalog - the first run takes a while, and is the only slow part:
 
 ```bash
-docker compose exec api eifo-fetch all
+docker compose exec fetcher eifo-fetch all
 ```
 
 Open <http://localhost:8000>.
 
-Nothing else to install: the image ships the headless Chromium that the Kan source drives,
-so `kan` works in a container with no setup on the host. That browser is most of the image
-(roughly 1.7 GB with it, 0.4 GB without), so if you leave `[sources.kan]` off, put
-`EIFO_INSTALL_BROWSER=0` in `.env` before building and it stays out.
+Nothing else to install: the image ships the headless Chromium that the Kan and Reshet 13
+sources drive, so they work in a container with no setup on the host. That browser is most
+of the image (roughly 1.7 GB with it, 0.4 GB without). If you leave `[sources.kan]` and
+`[sources.reshet13]` off, put `EIFO_INSTALL_BROWSER=0` in `.env` before building and it
+stays out.
 
 ### With uv, no container
 
 ```bash
 git clone https://github.com/barakbl/eifo.git && cd eifo
 uv sync
-uv run playwright install chromium   # only if you want the Kan source (headless browser)
+uv run playwright install chromium   # only for the Kan and Reshet 13 sources
 cp config/eifo.example.toml config/eifo.toml
 cp .env.example .env          # fill in EIFO_TMDB_API_KEY
 
@@ -171,8 +178,9 @@ uv run uvicorn eifo_api.main:app --reload
 ```
 
 Same address. The client is static files served by the same process - there is no build
-step and nothing to compile. (Skip the `playwright install` line if you don't want the Kan
-source: without a browser its sync fails alone and everything else proceeds.)
+step and nothing to compile. Skipping the `playwright install` line costs you Kan and
+Reshet 13 and nothing else: without a browser each fails its own sync with a clear error
+while every other source proceeds.
 
 ### Keeping it fresh
 
@@ -193,6 +201,14 @@ uv run eifo-fetch images      # posters and backdrops
 ```
 
 Times come from `[schedule]` in `config/eifo.toml`. `eifo-fetch all` runs all three once.
+
+One service at a time, which is how you test a new plugin or re-pull a service that broke:
+
+```bash
+uv run eifo-fetch sync --source kan --source mako   # repeatable, not comma-separated
+uv run eifo-fetch sources list                      # state, title count, last sync
+uv run eifo-fetch review list                       # listings no title could be matched to
+```
 
 ### Turning on sign-in
 
@@ -275,11 +291,12 @@ class MyServicePlugin(SourcePlugin):
 ```
 
 Start from `sources/mako.py` (a scraper) or `sources/tmdb_providers.py` (an API client
-covering several services at once). If the site blocks plain HTTP, `sources/kan.py` shows
-the headless-browser variant built on `browser.py`. Register it in `registry.py` - **or
-don't**: plugins are also discovered through the `eifo.sources` entry-point group, so a
-source can live in its own repository and install as an ordinary pip package with no
-change to this codebase.
+covering several services at once). For a site that will not serve a plain HTTP client,
+`sources/kan.py` and `sources/reshet13.py` show the headless-browser variant built on
+`browser.py` - the first parses rendered HTML, the second reads the JSON the page embeds.
+Register it in `registry.py` - **or don't**: plugins are also discovered through the
+`eifo.sources` entry-point group, so a source can live in its own repository and install as
+an ordinary pip package with no change to this codebase.
 
 The pipeline handles everything after the yield: matching a listing to a canonical title,
 parking the ambiguous ones for review, expiring what disappeared, and downloading artwork.

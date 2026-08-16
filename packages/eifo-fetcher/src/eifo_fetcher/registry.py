@@ -25,9 +25,17 @@ def _builtin_plugins() -> list[SourcePlugin]:
     from eifo_fetcher.sources.freetv import FreetvPlugin
     from eifo_fetcher.sources.kan import KanPlugin
     from eifo_fetcher.sources.mako import MakoPlugin
+    from eifo_fetcher.sources.reshet13 import Reshet13Plugin
     from eifo_fetcher.sources.tmdb_providers import TmdbProvidersPlugin
 
-    return [TmdbProvidersPlugin(), DisneyPlusPlugin(), FreetvPlugin(), KanPlugin(), MakoPlugin()]
+    return [
+        TmdbProvidersPlugin(),
+        DisneyPlusPlugin(),
+        FreetvPlugin(),
+        KanPlugin(),
+        MakoPlugin(),
+        Reshet13Plugin(),
+    ]
 
 
 def _entry_point_plugins() -> list[SourcePlugin]:

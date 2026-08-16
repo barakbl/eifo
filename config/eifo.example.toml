@@ -70,12 +70,16 @@ rate_limit_rps = 0.5
 enabled = true
 rate_limit_rps = 0.5
 
-# Not implemented: Reshet 13 serves a bot-check to non-browser clients, and
-# Now 14 turned out to be a news site with no VOD catalog. See
-# docs.internal/03-sources.md for what was verified.
+# Reshet 13 - free broadcaster VOD. Like Kan, the site 403s non-browser
+# clients, so this plugin reads the two public screens (all shows, news) and
+# their embedded __NEXT_DATA__ catalog through the same headless Chromium.
+# Two page views plus one robots.txt fetch per sync, one browser session.
 [sources.reshet13]
-enabled = false
+enabled = true
+rate_limit_rps = 0.5
 
+# Not implemented: Now 14 turned out to be a news site with no VOD catalog.
+# See docs.internal/03-sources.md for what was verified.
 [sources.now14]
 enabled = false
 

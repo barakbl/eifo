@@ -35,6 +35,22 @@ ENV PATH="/app/.venv/bin:$PATH" \
     EIFO_DB_URL="sqlite:///data/eifo.db" \
     EIFO_IMAGES_DIR="data/images"
 
+# Chromium for the `kan` source, which reads a WAF-walled site through a headless
+# browser (see docs.internal/03-sources.md). It goes outside $HOME so the install
+# done here as root is readable by the unprivileged runtime user, which is also
+# why the tree is opened up afterwards.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# The browser and its apt dependencies are most of the image, so they can be left
+# out: `--build-arg INSTALL_BROWSER=0`. Only `kan` then stops working - it fails
+# its own sync with a clear error and every other source proceeds.
+ARG INSTALL_BROWSER=1
+RUN if [ "$INSTALL_BROWSER" != "0" ]; then \
+        playwright install --with-deps chromium && \
+        rm -rf /var/lib/apt/lists/* && \
+        chmod -R a+rX "$PLAYWRIGHT_BROWSERS_PATH"; \
+    fi
+
 USER eifo
 EXPOSE 8000
 

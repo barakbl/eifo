@@ -5,11 +5,21 @@
 #
 # The `migrate` service applies the schema and exits; the API refuses to start
 # against an unmigrated database, so it waits for that to finish.
+#
+# The image ships the headless Chromium the `kan` source needs, which is most of
+# its size. Put EIFO_INSTALL_BROWSER=0 in .env for a slim image without it - only
+# `kan` stops working.
+
+x-eifo-image: &eifo-image
+  build:
+    context: .
+    args:
+      INSTALL_BROWSER: ${EIFO_INSTALL_BROWSER:-1}
+  image: eifo:latest
 
 services:
   migrate:
-    build: .
-    image: eifo:latest
+    <<: *eifo-image
     command: ["eifo-fetch", "db", "upgrade"]
     restart: "no"
     volumes:
@@ -19,8 +29,7 @@ services:
       - .env
 
   api:
-    build: .
-    image: eifo:latest
+    <<: *eifo-image
     restart: unless-stopped
     ports:
       - "8000:8000"
@@ -47,8 +56,7 @@ services:
   # config/eifo.toml. Drop this service and drive the phases from host cron
   # instead if you would rather not have a long-running process.
   fetcher:
-    build: .
-    image: eifo:latest
+    <<: *eifo-image
     restart: unless-stopped
     command: ["eifo-fetch", "daemon"]
     volumes:

@@ -59,12 +59,20 @@ rate_limit_rps = 1.0
 enabled = true
 rate_limit_rps = 0.5
 
-# Not implemented: Kan and Reshet 13 serve a bot-check to non-browser clients,
-# and Now 14 turned out to be a news site with no VOD catalog. See
-# docs.internal/03-sources.md for what was verified.
+# Kan Box (Kan 11 / IPBC) - free public-broadcaster VOD. The site is behind
+# Cloudflare bot management that 403s any non-browser client, so this plugin
+# reads the three server-rendered lobby pages (kan-box, series, digital-lobby)
+# through a headless Chromium. The Docker image ships one; running from a
+# checkout needs `uv run playwright install chromium` once. Three page views
+# plus one robots.txt fetch per sync - the WAF allows one page per cleared
+# session, so the plugin uses a fresh, politely-spaced context per lobby.
 [sources.kan]
-enabled = false
+enabled = true
+rate_limit_rps = 0.5
 
+# Not implemented: Reshet 13 serves a bot-check to non-browser clients, and
+# Now 14 turned out to be a news site with no VOD catalog. See
+# docs.internal/03-sources.md for what was verified.
 [sources.reshet13]
 enabled = false
 

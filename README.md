@@ -117,12 +117,13 @@ leaves it alone rather than spoof a browser or ride someone's subscription
 | **MUBI** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. Films only. |
 | **Crunchyroll** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |
 | **Mako VOD** (Keshet 12) | ◐ Partial | `mako` | Free broadcaster VOD. **Scrapes** the site's embedded catalog data (no key) - may break if Mako changes its page. Series/programmes only, no films. |
+| **Kan Box** (Kan 11) | ◐ Partial | `kan` | Free public-broadcaster VOD. The site 403s non-browser clients, so a stock headless Chromium reads the three server-rendered lobby pages (kan-box, series, digital) - one page view each per sync, nothing else. The Docker image ships the browser; from a checkout, `playwright install chromium`. |
 | **Cellcom TV** | ❌ No | - | Real VOD library, but only inside the subscriber app - no honest public surface. |
 | **HOT / NEXT** | ❌ No | - | Catalog API is reachable, but returns nothing without a paying subscriber's credential. |
 | **yes+** | ❌ No | - | Host resets honest clients at the TLS handshake, and the catalog needs subscriber auth. |
 | **Sting+** | ❌ No | - | Sibling of yes+ - same wall. |
 | **Partner TV** | ❌ No | - | App host is closed to honest clients; the web player is login-gated. |
-| **Kan 11 · Reshet 13** | ❌ No | - | Free public-broadcaster VODs, but both serve a bot-check (403) to non-browser clients, and Eifo won't spoof a browser to get past it. |
+| **Reshet 13** | ❌ No | - | Free broadcaster VOD, but serves a bot-check (403) to non-browser clients, and Eifo won't spoof a browser to get past it. |
 
 Ratings come from IMDb (datasets), TMDB, Rotten Tomatoes and Seret - the last two by scraping,
 so they can lag or break when those sites change. Adding a service is a ~100-line plugin:
@@ -150,11 +151,17 @@ docker compose exec api eifo-fetch all
 
 Open <http://localhost:8000>.
 
+Nothing else to install: the image ships the headless Chromium that the Kan source drives,
+so `kan` works in a container with no setup on the host. That browser is most of the image
+(roughly 1.7 GB with it, 0.4 GB without), so if you leave `[sources.kan]` off, put
+`EIFO_INSTALL_BROWSER=0` in `.env` before building and it stays out.
+
 ### With uv, no container
 
 ```bash
 git clone https://github.com/barakbl/eifo.git && cd eifo
 uv sync
+uv run playwright install chromium   # only if you want the Kan source (headless browser)
 cp config/eifo.example.toml config/eifo.toml
 cp .env.example .env          # fill in EIFO_TMDB_API_KEY
 
@@ -164,7 +171,8 @@ uv run uvicorn eifo_api.main:app --reload
 ```
 
 Same address. The client is static files served by the same process - there is no build
-step and nothing to compile.
+step and nothing to compile. (Skip the `playwright install` line if you don't want the Kan
+source: without a browser its sync fails alone and everything else proceeds.)
 
 ### Keeping it fresh
 
@@ -267,9 +275,11 @@ class MyServicePlugin(SourcePlugin):
 ```
 
 Start from `sources/mako.py` (a scraper) or `sources/tmdb_providers.py` (an API client
-covering several services at once). Register it in `registry.py` - **or don't**: plugins
-are also discovered through the `eifo.sources` entry-point group, so a source can live in
-its own repository and install as an ordinary pip package with no change to this codebase.
+covering several services at once). If the site blocks plain HTTP, `sources/kan.py` shows
+the headless-browser variant built on `browser.py`. Register it in `registry.py` - **or
+don't**: plugins are also discovered through the `eifo.sources` entry-point group, so a
+source can live in its own repository and install as an ordinary pip package with no
+change to this codebase.
 
 The pipeline handles everything after the yield: matching a listing to a canonical title,
 parking the ambiguous ones for review, expiring what disappeared, and downloading artwork.

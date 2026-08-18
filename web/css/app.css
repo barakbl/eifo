@@ -796,6 +796,13 @@ img {
   font-family: var(--font-data);
 }
 
+/* A price is the one part of the note you decide on, so it carries the weight
+   of the surrounding text rather than fading with it. */
+.offer__price {
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+
 .offer__actions {
   margin-inline-start: auto;
   display: flex;

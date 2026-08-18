@@ -117,6 +117,10 @@ class AvailabilityOut(BaseModel):
     offer_type: OfferType
     is_current: bool
     deep_link_url: str | None = None
+    #: What it costs, in the currency's minor unit (1990 = 19.90 ILS), with its
+    #: ISO-4217 code. Both are null unless the source charges per title.
+    price_minor: int | None = None
+    price_currency: str | None = None
     last_seen: dt.datetime
     gone_since: dt.datetime | None = None
 

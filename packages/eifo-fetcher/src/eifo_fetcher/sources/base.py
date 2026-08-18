@@ -48,6 +48,10 @@ class RawItem:
     imdb_id: str | None = None
     deep_link_url: str | None = None
     poster_url: str | None = None
+    #: What the offer costs, in the currency's minor unit (1990 = 19.90 ILS),
+    #: with its ISO-4217 code. Only a source that charges per title sets these.
+    price_minor: int | None = None
+    price_currency: str | None = None
     #: Kept verbatim in match_reviews so an unresolved item can be debugged.
     extra: Mapping[str, Any] = field(default_factory=dict)
 
@@ -56,6 +60,10 @@ class RawItem:
             raise ValueError("RawItem.name must not be blank")
         if not self.source_key.strip():
             raise ValueError("RawItem.source_key must not be blank")
+        if (self.price_minor is None) != (self.price_currency is None):
+            raise ValueError("RawItem price needs both an amount and a currency, or neither")
+        if self.price_minor is not None and self.price_minor < 0:
+            raise ValueError("RawItem.price_minor must not be negative")
 
 
 class FetchContext:

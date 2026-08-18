@@ -253,6 +253,8 @@ def upsert_availability(
             source_id=source.id,
             offer_type=item.offer_type,
             deep_link_url=item.deep_link_url,
+            price_minor=item.price_minor,
+            price_currency=item.price_currency,
             first_seen=seen_at,
             last_seen=seen_at,
             is_current=True,
@@ -269,6 +271,11 @@ def upsert_availability(
     availability.gone_since = None
     if item.deep_link_url:
         availability.deep_link_url = item.deep_link_url
+    if item.price_minor is not None:
+        # A price that moved is news; a source that stopped quoting one keeps
+        # the last figure rather than silently showing an offer as free.
+        availability.price_minor = item.price_minor
+        availability.price_currency = item.price_currency
     return False
 
 

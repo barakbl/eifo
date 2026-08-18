@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   currentSources,
   filtersToParams,
+  formatPrice,
   formatScore,
   offerState,
   paramsToFilters,
@@ -33,6 +34,33 @@ describe("formatScore", () => {
     assert.equal(formatScore(null), "-");
     assert.equal(formatScore(0), "0");
     assert.equal(formatScore(84), "84");
+  });
+});
+
+describe("formatPrice", () => {
+  it("reads minor units as the currency's own amount", () => {
+    // 1990 agorot is ₪19.90, and the symbol comes from the currency, not us.
+    const price = formatPrice(1990, "ILS", "en");
+    assert.match(price, /19\.90/);
+    assert.match(price, /₪/);
+  });
+
+  it("says nothing when a source charges nothing per title", () => {
+    // A subscription offer has no price; "₪0.00" would be a lie.
+    assert.equal(formatPrice(null, "ILS"), "");
+    assert.equal(formatPrice(undefined, undefined), "");
+    assert.equal(formatPrice(1990, null), "");
+  });
+
+  it("shows a free offer as free rather than as nothing", () => {
+    assert.match(formatPrice(0, "ILS", "en"), /0\.00/);
+  });
+
+  it("still shows the amount when the currency code is malformed", () => {
+    // Intl formats any well-formed code, known or not, and throws on the rest;
+    // a bad code in the data must not blank out the price.
+    assert.match(formatPrice(1990, "XYZ", "en"), /19\.90/);
+    assert.equal(formatPrice(1990, "shekel", "en"), "19.90 shekel");
   });
 });
 

@@ -161,6 +161,21 @@ class TestRawItem:
         with pytest.raises(ValueError, match="source_key"):
             RawItem(source_key="", kind=TitleKind.MOVIE, name="x")
 
+    def test_rejects_a_price_without_a_currency(self) -> None:
+        """A bare number is not a price: 1990 of what?"""
+        with pytest.raises(ValueError, match="currency"):
+            RawItem(source_key="s", kind=TitleKind.MOVIE, name="x", price_minor=1990)
+
+    def test_rejects_a_currency_without_a_price(self) -> None:
+        with pytest.raises(ValueError, match="currency"):
+            RawItem(source_key="s", kind=TitleKind.MOVIE, name="x", price_currency="ILS")
+
+    def test_rejects_a_negative_price(self) -> None:
+        with pytest.raises(ValueError, match="negative"):
+            RawItem(
+                source_key="s", kind=TitleKind.MOVIE, name="x", price_minor=-1, price_currency="ILS"
+            )
+
     def test_defaults_to_a_streaming_offer(self) -> None:
         assert RawItem(source_key="s", kind=TitleKind.MOVIE, name="x").offer_type is (
             OfferType.STREAM

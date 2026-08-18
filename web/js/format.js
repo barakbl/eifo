@@ -33,6 +33,24 @@ export function formatVotes(votes, language = "en") {
   return new Intl.NumberFormat(locale, { notation: "compact" }).format(votes);
 }
 
+/**
+ * What an offer costs, as its own currency writes it.
+ *
+ * Stored in the currency's minor unit, so 1990 ILS-minor is ₪19.90. Returns ""
+ * when a source charges nothing per title, which is most of them: an offer
+ * included in a subscription must not read as costing zero.
+ */
+export function formatPrice(minor, currency, language = "en") {
+  if (minor === null || minor === undefined || !currency) return "";
+  const locale = language === "he" ? "he-IL" : "en-IL";
+  try {
+    return new Intl.NumberFormat(locale, { style: "currency", currency }).format(minor / 100);
+  } catch {
+    // An unknown currency code is worth showing as a number, not swallowing.
+    return `${(minor / 100).toFixed(2)} ${currency}`;
+  }
+}
+
 /** A date as the viewer's locale writes it. */
 export function formatDate(value, language = "en") {
   if (!value) return "";

@@ -78,6 +78,8 @@ def to_availability(availability: Availability) -> AvailabilityOut:
         offer_type=availability.offer_type,
         is_current=availability.is_current,
         deep_link_url=availability.deep_link_url,
+        price_minor=availability.price_minor,
+        price_currency=availability.price_currency,
         last_seen=availability.last_seen,
         gone_since=availability.gone_since,
     )

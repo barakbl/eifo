@@ -215,6 +215,13 @@ class Availability(Base):
     deep_link_url: Mapped[str | None] = mapped_column(String(1000))
     offer_type: Mapped[OfferType] = mapped_column(_enum(OfferType, "offer_type"))
 
+    #: What the offer costs, in the currency's minor unit (1990 = 19.90 ILS) -
+    #: integer, because money in a float rounds where nobody is looking. Only a
+    #: rent/buy source sets it; subscription and free offers leave both columns
+    #: NULL, and so does a source that publishes no price.
+    price_minor: Mapped[int | None] = mapped_column(Integer)
+    price_currency: Mapped[str | None] = mapped_column(String(3))
+
     is_current: Mapped[bool] = mapped_column(default=True)
     miss_count: Mapped[int] = mapped_column(default=0)
     first_seen: Mapped[dt.datetime] = mapped_column(default=utcnow)

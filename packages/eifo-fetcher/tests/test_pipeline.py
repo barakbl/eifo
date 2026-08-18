@@ -102,6 +102,37 @@ class TestUpsert:
 
         assert session.scalars(select(Availability)).one().deep_link_url == "https://x.example/f"
 
+    def test_records_the_price_a_rent_offer_carries(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        run_sync(
+            session,
+            settings,
+            sync_ctx,
+            [item("פאודה", offer_type=OfferType.RENT, price_minor=1990, price_currency="ILS")],
+        )
+
+        availability = session.scalars(select(Availability)).one()
+        assert (availability.price_minor, availability.price_currency) == (1990, "ILS")
+
+    def test_an_offer_with_no_price_stores_none(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        """A subscription offer costs nothing extra; it must not read as free."""
+        run_sync(session, settings, sync_ctx, [item("פאודה")])
+
+        availability = session.scalars(select(Availability)).one()
+        assert (availability.price_minor, availability.price_currency) == (None, None)
+
+    def test_a_price_change_is_picked_up_on_the_next_sync(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        rented = dict(offer_type=OfferType.RENT, price_currency="ILS")
+        run_sync(session, settings, sync_ctx, [item("פאודה", price_minor=1990, **rented)])
+        run_sync(session, settings, sync_ctx, [item("פאודה", price_minor=2450, **rented)])
+
+        assert session.scalars(select(Availability)).one().price_minor == 2450
+
     def test_a_second_run_updates_rather_than_duplicates(
         self, session: Session, settings: Settings, sync_ctx: FetchContext
     ) -> None:

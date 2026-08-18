@@ -21,6 +21,7 @@ logger = logging.getLogger("eifo.fetch.registry")
 
 def _builtin_plugins() -> list[SourcePlugin]:
     # Imported lazily so a broken optional dependency cannot break the CLI.
+    from eifo_fetcher.sources.cinematheque_vod import CinemathequeVodPlugin
     from eifo_fetcher.sources.disney_plus import DisneyPlusPlugin
     from eifo_fetcher.sources.freetv import FreetvPlugin
     from eifo_fetcher.sources.kan import KanPlugin
@@ -30,6 +31,7 @@ def _builtin_plugins() -> list[SourcePlugin]:
 
     return [
         TmdbProvidersPlugin(),
+        CinemathequeVodPlugin(),
         DisneyPlusPlugin(),
         FreetvPlugin(),
         KanPlugin(),

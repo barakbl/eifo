@@ -2,7 +2,7 @@
 
 import { getTitle, listMyItems } from "../api.js";
 import { noteEditor, titleActions } from "../account.js";
-import { formatDate, offerState, sourceColorVar } from "../format.js";
+import { formatDate, formatPrice, offerState, sourceColorVar } from "../format.js";
 import { displayName, secondaryName } from "../i18n.js";
 import { el, ratingPill, replace, scorePill, stateBlock } from "../ui.js";
 
@@ -216,6 +216,9 @@ function offerRow(offer, { t, language }) {
         : null;
 
   const canWatch = state === "available" && offer.deep_link_url;
+  // What it costs sits with what kind of offer it is, next to the button that
+  // charges it - a rental's price is part of the offer, not a footnote.
+  const price = formatPrice(offer.price_minor, offer.price_currency, language);
 
   return el(
     "li",
@@ -228,6 +231,7 @@ function offerRow(offer, { t, language }) {
         el("div", { class: "offer__name", text: offer.source_name }),
         el("div", { class: "offer__note" }, [
           el("span", { text: t(`offer.${offer.offer_type}`) }),
+          price ? el("span", { class: "offer__price", text: ` · ${price}` }) : null,
           el("span", {
             text: ` · ${t("offer.verified", { date: formatDate(offer.last_seen, language) })}`,
           }),

@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 from seed import Seeded
+from sqlalchemy.orm import Session, sessionmaker
+
+from eifo_core.enums import OfferType, SourceKind
+from eifo_core.models import Availability, Source
 
 
 def names(payload: dict) -> list[str]:
@@ -358,3 +362,67 @@ class TestSourcesAndGenres:
 
         assert {genre["name_en"] for genre in body} == {"Drama", "Comedy"}
         assert {genre["name_he"] for genre in body} == {"דרמה", "קומדיה"}
+
+
+class TestRentalPrices:
+    """A rent/buy offer carries what it costs; every other offer carries None.
+
+    Seeded here rather than in the shared catalog: the corpus other tests count
+    and sort must not shift because one source charges money.
+    """
+
+    def _rent(
+        self,
+        session_factory: sessionmaker[Session],
+        catalog: Seeded,
+        **overrides: object,
+    ) -> None:
+        with session_factory() as session:
+            source = Source(
+                key="cinematheque_vod",
+                name="Cinematheque VOD (Tel Aviv)",
+                kind=SourceKind.RENT_BUY,
+                website_url="https://www.cinema.co.il/vod/",
+            )
+            session.add(source)
+            session.flush()
+            values: dict[str, object] = {
+                "price_minor": 1990,
+                "price_currency": "ILS",
+                "deep_link_url": "https://cintlv.pres.global/order/132926",
+            }
+            values.update(overrides)
+            session.add(
+                Availability(
+                    title_id=catalog.foxtrot,
+                    source_id=source.id,
+                    offer_type=OfferType.RENT,
+                    **values,  # type: ignore[arg-type]
+                )
+            )
+            session.commit()
+
+    def _offer(self, client: TestClient, catalog: Seeded) -> dict:
+        entries = client.get(f"/api/v1/titles/{catalog.foxtrot}").json()["availability"]
+        return next(entry for entry in entries if entry["source_key"] == "cinematheque_vod")
+
+    def test_detail_exposes_the_price_with_its_currency(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        self._rent(session_factory, catalog)
+
+        offer = self._offer(client, catalog)
+
+        assert offer["offer_type"] == "rent"
+        assert offer["price_minor"] == 1990
+        assert offer["price_currency"] == "ILS"
+        assert offer["deep_link_url"] == "https://cintlv.pres.global/order/132926"
+
+    def test_an_offer_without_a_price_reports_none_not_zero(
+        self, client: TestClient, catalog: Seeded
+    ) -> None:
+        """Included in a subscription is not the same as costing nothing."""
+        entries = client.get(f"/api/v1/titles/{catalog.fauda}").json()["availability"]
+
+        assert all(entry["price_minor"] is None for entry in entries)
+        assert all(entry["price_currency"] is None for entry in entries)

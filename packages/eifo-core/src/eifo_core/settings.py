@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     web_dir: Path | None = None
     public_origin: str = "http://localhost:8000"
     stale_after_hours: int = 48
+    #: Bring the schema to head as the API starts, so an upgrade is a
+    #: restart rather than a restart plus a remembered command. Turn it off
+    #: to keep migrations a deliberate, separate step; the API then refuses
+    #: to serve a database that is missing or behind.
+    auto_migrate: bool = True
 
     # Secrets - never in the TOML file.
     secret_key: SecretStr | None = None

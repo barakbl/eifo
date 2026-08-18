@@ -16,6 +16,7 @@ from eifo_api.logging_privacy import install_log_filters
 from eifo_api.routers import auth, catalog, me, meta
 from eifo_api.static import mount_client, mount_images
 from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
+from eifo_core.migrate import ensure_current
 from eifo_core.settings import Settings, get_settings
 
 API_PREFIX = "/api/v1"
@@ -25,15 +26,23 @@ logger = logging.getLogger("eifo.api")
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Verify the database is migrated before serving, and dispose it after.
+    """Ready the database before serving, and dispose it after.
 
-    Starting against an unmigrated database fails here with an actionable
-    message rather than 500ing on the first request.
+    With ``auto_migrate`` on (the default) the schema is brought to head here,
+    so deploying a version that adds a migration is a restart and nothing else.
+    With it off, an absent schema fails here with an actionable message rather
+    than 500ing on the first request.
     """
     engine = app.state.engine
+    settings = app.state.settings
     try:
         # Inside the try: a failed readiness check must still release the pool.
-        require_schema(engine, app.state.settings.db_url)
+        if settings.auto_migrate:
+            applied = ensure_current(engine, settings.db_url)
+            if applied is not None:
+                logger.info("database migrated to %s", applied)
+        else:
+            require_schema(engine, settings.db_url)
         logger.info("eifo-api %s ready", __version__)
         yield
     finally:

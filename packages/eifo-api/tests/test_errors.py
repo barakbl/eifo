@@ -5,10 +5,12 @@ from __future__ import annotations
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
 
 from eifo_api.app import create_app
 from eifo_api.errors import PROBLEM_MEDIA_TYPE
 from eifo_core.db import DatabaseNotReadyError
+from eifo_core.migrate import current_revision, head_revision
 from eifo_core.settings import Settings
 
 
@@ -48,9 +50,28 @@ def test_openapi_schema_is_served(client: TestClient) -> None:
     assert "/api/v1/meta" in response.json()["paths"]
 
 
-def test_starting_against_an_unmigrated_database_fails_fast(tmp_path: object) -> None:
-    """The lifespan check turns a misconfigured start into one clear error."""
-    settings = Settings(_env_file=None, db_url=f"sqlite:///{tmp_path}/never-migrated.db")
+def test_an_unmigrated_database_is_migrated_on_start(tmp_path: object) -> None:
+    """Deploying a version that adds a migration is a restart, nothing more."""
+    db_url = f"sqlite:///{tmp_path}/fresh.db"
+    app = create_app(Settings(_env_file=None, db_url=db_url))
+
+    with TestClient(app) as client:
+        assert client.get("/api/v1/meta").status_code == 200
+
+    engine = create_engine(db_url)
+    try:
+        assert current_revision(engine) == head_revision()
+    finally:
+        engine.dispose()
+
+
+def test_migrating_can_be_left_to_a_deliberate_step(tmp_path: object) -> None:
+    """With auto_migrate off, a misconfigured start is one clear error."""
+    settings = Settings(
+        _env_file=None,
+        db_url=f"sqlite:///{tmp_path}/never-migrated.db",
+        auto_migrate=False,
+    )
     app = create_app(settings)
 
     with pytest.raises(DatabaseNotReadyError, match="eifo-fetch db upgrade"), TestClient(app):

@@ -3,12 +3,13 @@
 #   cp config/eifo.example.toml config/eifo.toml && cp .env.example .env
 #   docker compose up -d
 #
-# The `migrate` service applies the schema and exits; the API refuses to start
-# against an unmigrated database, so it waits for that to finish.
+# The `migrate` service applies the schema and exits. The API would migrate itself
+# at startup (`auto_migrate`), but the fetcher would not, so this keeps one
+# service in charge of the schema and lets both wait for it.
 #
-# The image ships the headless Chromium the `kan` source needs, which is most of
-# its size. Put EIFO_INSTALL_BROWSER=0 in .env for a slim image without it - only
-# `kan` stops working.
+# The image ships the headless Chromium the `kan` and `reshet13` sources need,
+# which is most of its size. Put EIFO_INSTALL_BROWSER=0 in .env for a slim image
+# without it - only those two stop working.
 
 x-eifo-image: &eifo-image
   build:

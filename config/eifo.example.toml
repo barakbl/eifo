@@ -12,6 +12,11 @@ public_origin = "http://localhost:8000"
 # GET /api/v1/meta (the health endpoint).
 stale_after_hours = 48
 
+# The API applies any pending migration as it starts, so upgrading is a
+# restart and nothing else. Set false to keep that a deliberate step: the
+# API then refuses to serve a database that has not been migrated.
+auto_migrate = true
+
 # ---------------------------------------------------------------------------
 # Sources - one table per tracked service. Flipping `enabled = false` retires a
 # source: the next sync marks it inactive and ALL of its data is kept, badged in
@@ -77,6 +82,17 @@ rate_limit_rps = 0.5
 [sources.reshet13]
 enabled = true
 rate_limit_rps = 0.5
+
+# Tel Aviv Cinematheque VOD - Israeli arthouse films, rented one at a time.
+# The only source here that charges per title, so its offers carry a price.
+# One request per sync: the whole current offering is server-rendered into
+# https://www.cinema.co.il/vod/, and a card is only counted while it still
+# links to the ticketing system. The site never publishes the price, so the
+# plugin carries it; `price` below overrides that figure when it changes.
+[sources.cinematheque_vod]
+enabled = true
+rate_limit_rps = 1.0
+# price = 19.90   # ILS per rental; omit to use the plugin's own figure
 
 # Not implemented: Now 14 turned out to be a news site with no VOD catalog.
 # See docs.internal/03-sources.md for what was verified.

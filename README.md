@@ -43,10 +43,10 @@ carry. Eifo collects their catalogs into one place, enriches every title with th
 people actually trust, and puts a search box in front of it.
 
 - **One catalog, not a dozen tabs.** FreeTV, the Israeli catalogs of Netflix, Disney+,
-  Prime Video, Apple TV, HBO Max, MUBI and Crunchyroll, and the free broadcaster VODs from
-  Mako, Kan Box and Reshet 13. The other Israeli operators (yes+, Sting TV, HOT, Cellcom
-  TV, Partner TV) publish nothing an honest client can read - [Coverage](#coverage) says
-  why.
+  Prime Video, Apple TV, HBO Max, MUBI and Crunchyroll, the free broadcaster VODs from
+  Mako, Kan Box and Reshet 13, and the Tel Aviv Cinematheque's rentals. The other Israeli
+  operators (yes+, Sting TV, HOT, Cellcom TV, Partner TV) publish nothing an honest client
+  can read - [Coverage](#coverage) says why.
 - **Filter by what you already pay for.** Tick your services once; the catalog narrows to
   what you can watch tonight without buying anything new. "Everything" stays one tap away.
 - **Ratings worth trusting, side by side.** IMDb, Rotten Tomatoes (critics and audience),
@@ -126,6 +126,8 @@ someone's subscription ([why](#data-attribution-and-fair-use)).
 | **MUBI** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. Films only. |
 | **Crunchyroll** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |
 | **Disney+** (IL) | ✅ Yes | `disney_plus` | Reads Disney's public per-region sitemaps - no key. (Absent from JustWatch's IL data, so it needs its own plugin.) |
+| **Rent and buy** | | | *Paid per title, price shown* |
+| **Cinematheque VOD** (Tel Aviv) | ✅ Yes | `cinematheque_vod` | Israeli and international arthouse film, rented one at a time. One request per sync reads the whole current offering, and each offer carries its price (₪19.90) next to the link that sells it. The site publishes no price of its own, so `price` in the config sets it. |
 | **Broadcaster VODs** | | | *Free to watch* |
 | **Mako VOD** (Keshet 12) | ◐ Partial | `mako` | **Scrapes** the site's embedded catalog data (no key) - may break if Mako changes its page. Series/programmes only, no films. |
 | **Kan Box** (Kan 11) | ◐ Partial | `kan` | Public broadcaster. The site 403s non-browser clients, so a stock headless Chromium reads the three server-rendered lobby pages (kan-box, series, digital) - one page view each per sync, nothing else. The Docker image ships the browser; from a checkout, `playwright install chromium`. |
@@ -172,7 +174,7 @@ uv run playwright install chromium   # only for the Kan and Reshet 13 sources
 cp config/eifo.example.toml config/eifo.toml
 cp .env.example .env          # fill in EIFO_TMDB_API_KEY
 
-uv run eifo-fetch db upgrade  # create the schema
+uv run eifo-fetch db upgrade  # create the schema (the API would, but the fetcher runs first)
 uv run eifo-fetch all         # fill the catalog
 uv run uvicorn eifo_api.main:app --reload
 ```
@@ -201,6 +203,11 @@ uv run eifo-fetch images      # posters and backdrops
 ```
 
 Times come from `[schedule]` in `config/eifo.toml`. `eifo-fetch all` runs all three once.
+
+Upgrading Eifo itself is `git pull` (or `docker compose pull`) and a restart: the API
+applies any pending database migration as it starts. Set `auto_migrate = false` if you
+would rather run `eifo-fetch db upgrade` yourself, in which case the API refuses to
+serve a database it does not recognise.
 
 One service at a time, which is how you test a new plugin or re-pull a service that broke:
 
@@ -309,9 +316,9 @@ weighted aggregate are already handled.
 
 ### Other good first issues
 
-Episode-level tracking for series, price tracking for rent/buy offers, CSV or Letterboxd
-import, notifications when a want-to-watch title lands on a service you have - the data
-model already supports the last one.
+Episode-level tracking for series, price *history* for rent/buy offers (an offer carries
+its current price already), CSV or Letterboxd import, notifications when a want-to-watch
+title lands on a service you have - the data model already supports the last one.
 
 ### House rules
 

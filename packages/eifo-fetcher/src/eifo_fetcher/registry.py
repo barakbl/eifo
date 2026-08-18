@@ -24,6 +24,7 @@ def _builtin_plugins() -> list[SourcePlugin]:
     from eifo_fetcher.sources.cinematheque_vod import CinemathequeVodPlugin
     from eifo_fetcher.sources.disney_plus import DisneyPlusPlugin
     from eifo_fetcher.sources.freetv import FreetvPlugin
+    from eifo_fetcher.sources.israel_film_archive import IsraelFilmArchivePlugin
     from eifo_fetcher.sources.kan import KanPlugin
     from eifo_fetcher.sources.mako import MakoPlugin
     from eifo_fetcher.sources.reshet13 import Reshet13Plugin
@@ -34,6 +35,7 @@ def _builtin_plugins() -> list[SourcePlugin]:
         CinemathequeVodPlugin(),
         DisneyPlusPlugin(),
         FreetvPlugin(),
+        IsraelFilmArchivePlugin(),
         KanPlugin(),
         MakoPlugin(),
         Reshet13Plugin(),

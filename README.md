@@ -44,9 +44,10 @@ people actually trust, and puts a search box in front of it.
 
 - **One catalog, not a dozen tabs.** FreeTV, the Israeli catalogs of Netflix, Disney+,
   Prime Video, Apple TV, HBO Max, MUBI and Crunchyroll, the free broadcaster VODs from
-  Mako, Kan Box and Reshet 13, and the Tel Aviv Cinematheque's rentals. The other Israeli
-  operators (yes+, Sting TV, HOT, Cellcom TV, Partner TV) publish nothing an honest client
-  can read - [Coverage](#coverage) says why.
+  Mako, Kan Box and Reshet 13, the Tel Aviv Cinematheque's rentals, and the Israeli Film
+  Archive - whose 940-film collection is half free to watch. The other Israeli operators
+  (yes+, Sting TV, HOT, Cellcom TV, Partner TV) publish nothing an honest client can
+  read - [Coverage](#coverage) says why.
 - **Filter by what you already pay for.** Tick your services once; the catalog narrows to
   what you can watch tonight without buying anything new. "Everything" stays one tap away.
 - **Ratings worth trusting, side by side.** IMDb, Rotten Tomatoes (critics and audience),
@@ -126,8 +127,9 @@ someone's subscription ([why](#data-attribution-and-fair-use)).
 | **MUBI** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. Films only. |
 | **Crunchyroll** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |
 | **Disney+** (IL) | ✅ Yes | `disney_plus` | Reads Disney's public per-region sitemaps - no key. (Absent from JustWatch's IL data, so it needs its own plugin.) |
-| **Rent and buy** | | | *Paid per title, price shown* |
+| **Rent, buy and archive** | | | *Paid per title, price shown; some titles free* |
 | **Cinematheque VOD** (Tel Aviv) | ✅ Yes | `cinematheque_vod` | Israeli and international arthouse film, paid for per title. One request reads the whole current offering; each title's price comes from the ticketing system and is shown beside the link, which goes to the film's page (synopsis and trailer) rather than straight to a checkout. Prices differ per film, and the occasional free one is badged free rather than as a rental at zero. |
+| **Israel Film Archive** (Jerusalem) | ✅ Yes | `israel_film_archive` | The national archive streaming its own digitised collection: 941 films from 1920 onwards, **459 of them free to watch** and badged free; the rest rent at ₪15, priced from their own pages. Nothing on the site lists the collection, so this is the heaviest sync here - the sitemap, then one page per film, about 16 minutes at one request a second. |
 | **Broadcaster VODs** | | | *Free to watch* |
 | **Mako VOD** (Keshet 12) | ◐ Partial | `mako` | **Scrapes** the site's embedded catalog data (no key) - may break if Mako changes its page. Series/programmes only, no films. |
 | **Kan Box** (Kan 11) | ◐ Partial | `kan` | Public broadcaster. The site 403s non-browser clients, so a stock headless Chromium reads the three server-rendered lobby pages (kan-box, series, digital) - one page view each per sync, nothing else. The Docker image ships the browser; from a checkout, `playwright install chromium`. |

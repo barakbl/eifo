@@ -93,6 +93,16 @@ rate_limit_rps = 0.5
 enabled = true
 rate_limit_rps = 1.0
 
+# Israeli Film Archive (Jerusalem Cinematheque) - the national archive's own
+# digitised collection, about 940 films: roughly half free to watch, the
+# rest sold per title, each offer carrying the price its page quotes. The
+# heaviest sync here by far: the site has no page listing the collection, so
+# the plugin reads the sitemap and then one page per film. Keep the rate
+# limit gentle - this is a nonprofit archive, and a nightly sweep is plenty.
+[sources.israel_film_archive]
+enabled = true
+rate_limit_rps = 1.0
+
 # Not implemented: Now 14 turned out to be a news site with no VOD catalog.
 # See docs.internal/03-sources.md for what was verified.
 [sources.now14]

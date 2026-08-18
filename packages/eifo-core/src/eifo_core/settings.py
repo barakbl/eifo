@@ -47,10 +47,6 @@ class SourceConfig(BaseModel):
     rate_limit_rps: float | None = None
     #: Cap on paginated result pages per media type; None uses the plugin default.
     max_pages: int | None = None
-    #: What one title costs, for a rent/buy source whose site does not publish
-    #: a price (the plugin declares the currency). None uses the plugin's own
-    #: figure; this exists so a price change is a config edit, not a release.
-    price: float | None = None
 
 
 class ScoreWeights(BaseModel):

@@ -83,16 +83,15 @@ rate_limit_rps = 0.5
 enabled = true
 rate_limit_rps = 0.5
 
-# Tel Aviv Cinematheque VOD - Israeli arthouse films, rented one at a time.
-# The only source here that charges per title, so its offers carry a price.
-# One request per sync: the whole current offering is server-rendered into
-# https://www.cinema.co.il/vod/, and a card is only counted while it still
-# links to the ticketing system. The site never publishes the price, so the
-# plugin carries it; `price` below overrides that figure when it changes.
+# Tel Aviv Cinematheque VOD - Israeli arthouse film, paid for per title.
+# The only source here that charges per title, so its offers carry a price,
+# read per title from the ticketing system (prices differ, and some titles
+# are free). One request for the whole catalog plus one per title, and a
+# card only counts while it still links to the till - so what is listed is
+# what can be watched today. Links go to the film's page, not the checkout.
 [sources.cinematheque_vod]
 enabled = true
 rate_limit_rps = 1.0
-# price = 19.90   # ILS per rental; omit to use the plugin's own figure
 
 # Not implemented: Now 14 turned out to be a news site with no VOD catalog.
 # See docs.internal/03-sources.md for what was verified.

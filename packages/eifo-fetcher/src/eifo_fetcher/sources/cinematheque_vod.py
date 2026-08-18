@@ -1,37 +1,44 @@
-"""Tel Aviv Cinematheque VOD - Israeli arthouse films, rented per title.
+"""Tel Aviv Cinematheque VOD - Israeli arthouse film, paid for per title.
 
 The first source in Eifo that charges per title rather than per month, which is
-why it is a :data:`SourceKind.RENT_BUY` source yielding :data:`OfferType.RENT`
-offers carrying a price.
+why it is a :data:`SourceKind.RENT_BUY` source and why its offers carry a price.
 
-What makes it a cheap plugin:
+Where the two halves come from:
 
-* **No wall.** cinema.co.il serves everything to a plain HTTP client with our
-  identifying User-Agent; its ``robots.txt`` disallows only ``/wp-admin``. No
-  browser, unlike Kan and Reshet 13.
-* **One request.** The whole current offering is server-rendered into
-  ``/vod/`` as ``div.slid`` cards, each carrying the Hebrew title, country,
-  year, runtime, poster and - crucially - the ticketing link that says the
-  film is on offer right now.
+* **The catalog: one request.** The whole current offering is server-rendered
+  into ``/vod/`` as ``div.slid`` cards, each carrying the Hebrew title,
+  country, year, runtime, poster, its page on the site and the ticketing
+  link. The deep link is the film's own page, not the checkout: a viewer
+  should read a synopsis and watch a trailer before a payment form, and that
+  page carries the same buy button anyway. cinema.co.il serves
+  all of it to a plain HTTP client with our identifying User-Agent, and its
+  ``robots.txt`` disallows only ``/wp-admin``. No browser, unlike Kan and
+  Reshet 13.
+* **The price: one request per title.** Nothing on cinema.co.il quotes a
+  figure - the ticketing checkout is a separate single-page app - but that
+  app reads a small public JSON document per title, and so does this plugin
+  (:data:`PRICE_API`). Prices are genuinely per title rather than one house
+  rate: a sample of 27 on 2026-08-18 found 19.90, one at 24.90 and one free,
+  so they are read rather than assumed. Neither ticketing host serves a
+  ``robots.txt`` (404), which RFC 9309 treats as "no restrictions".
 
 Two things this plugin must get right:
 
-* **Currently rentable, not ever published.** The site keeps a page per VOD
-  title forever: 787 of them across its sitemaps against ~120 on ``/vod/``
+* **Currently on offer, not ever published.** The site keeps a page per VOD
+  title forever: 787 of them across its sitemaps against ~135 on ``/vod/``
   (measured 2026-08-18). A retired title's page still renders, but its
-  purchase button falls back to the site homepage instead of a
-  ``cintlv.pres.global`` order link. This plugin reads only ``/vod/`` and
-  requires a real order link, so the catalog is what can be rented today.
-* **The price is not on the page.** The checkout is a separate single-page
-  app that loads its own prices, so nothing in the HTML quotes a figure. The
-  Cinematheque charges one price for every VOD rental, recorded here as a
-  constant and overridable from config when it moves (see
-  :data:`DEFAULT_PRICE_MINOR`).
+  purchase button falls back to the site homepage instead of an order link.
+  This plugin reads only ``/vod/`` and requires a real order link, so the
+  catalog is what can be watched today.
+* **Free means free.** A title priced at zero is one the Cinematheque gives
+  away ("שימו לב: הסרט ניתן לצפייה ללא תשלום" on its page, verified against
+  the zero the API reports), so it is yielded as a free offer rather than as a
+  rental costing nothing.
 
 The cards carry no English title; the per-title pages do ("נינו | Nino"), at
-the cost of one request each. Left out deliberately: ~120 extra requests per
-sync is a poor trade against a matcher that already resolves Hebrew titles
-carrying a year. If match quality disappoints, that is where to find them.
+the cost of another request each. Left out deliberately: the matcher already
+resolves Hebrew titles carrying a year, and it did for 98 of 135 on the first
+sync. If match quality disappoints, that is where to find them.
 """
 
 from __future__ import annotations
@@ -56,11 +63,12 @@ HOST = "www.cinema.co.il"
 BASE_URL = f"https://{HOST}"
 CATALOG_URL = f"{BASE_URL}/vod/"
 
-#: One price for every rental, in the currency's minor unit: 19.90 ILS,
-#: verified 2026-08-18. The pages do not publish it (see the module docstring),
-#: so a change here is a manual edit - or `price` in the source's config, which
-#: wins over this and needs no release.
-DEFAULT_PRICE_MINOR = 1990
+#: The ticketing system's public document for one title, which is where its
+#: price lives. The order links on the page use the ``pres.global`` host, which
+#: redirects here; this is the host it lands on.
+PRICE_API_HOST = "cintlv.presglobal.store"
+PRICE_API = f"https://{PRICE_API_HOST}/api/presentations/{{order_id}}?referralMiniSiteId=0"
+#: The API quotes bare numbers and the Cinematheque sells in shekels only.
 PRICE_CURRENCY = "ILS"
 
 CARD_SELECTOR = "div.slid"
@@ -95,9 +103,12 @@ class VodCard:
     """One film exactly as the VOD page presents it."""
 
     name: str
-    #: Where it is rented - the ticketing link, which is also proof of an offer.
+    #: The ticketing link: proof the film is on offer, and where its price is
+    #: read from. Not where a viewer is sent - see ``event_url``.
     order_url: str
-    #: Its page on cinema.co.il, kept for debugging an unmatched item.
+    #: Its page on cinema.co.il: synopsis, trailer, cast, and the same "buy"
+    #: button. This is the deep link, so nobody lands on a checkout for a film
+    #: they have not been shown.
     event_url: str
     year: int | None = None
     country: str | None = None
@@ -120,6 +131,7 @@ class CinemathequeVodPlugin(SourcePlugin):
 
     def fetch(self, ctx: FetchContext) -> Iterator[RawItem]:
         ctx.apply_rate_limit(HOST)
+        ctx.apply_rate_limit(PRICE_API_HOST)
         RobotsPolicy(user_agent=USER_AGENT).require_allowed(CATALOG_URL)
 
         cards, dropped = parse_catalog(ctx.http.get(CATALOG_URL).text)
@@ -128,18 +140,38 @@ class CinemathequeVodPlugin(SourcePlugin):
             # not trip the consecutive-error abort before the count is stored.
             ctx.record_error(f"{dropped} VOD cards were not usable; skipped")
 
-        price_minor = _price_minor(ctx)
+        unpriced = 0
         for card in cards:
+            price_minor = _price_minor(ctx, card.order_url)
+            unpriced += price_minor is None
             ctx.record_success()
             yield _to_item(card, price_minor)
 
+        if unpriced:
+            # Again one counted error: the offers are real either way, but a
+            # catalog that quietly lost every price should not look healthy.
+            ctx.record_error(f"{unpriced} titles were listed without a readable price")
 
-def _price_minor(ctx: FetchContext) -> int:
-    """The rental price to record, config first, built-in constant second."""
-    price = ctx.config.price
-    if price is None:
-        return DEFAULT_PRICE_MINOR
-    return round(price * 100)
+
+def _price_minor(ctx: FetchContext, order_url: str) -> int | None:
+    """What this title costs, in agorot, or None if the till would not say.
+
+    The ticketing document lists a price band per ticket type; the Cinematheque
+    sells VOD as a single type today, and taking the cheapest keeps a future
+    concession from inflating what Eifo displays.
+    """
+    order_id = order_url.rstrip("/").rsplit("/", 1)[-1]
+    try:
+        payload = ctx.http.get_json(PRICE_API.format(order_id=order_id))
+        levels = payload["presentation"]["priceLevels"]
+        prices = [float(level["minPrice"]) for level in levels if level.get("minPrice") is not None]
+    except Exception:
+        logger.info("no price for order %s; listing it without one", order_id, exc_info=True)
+        return None
+
+    if not prices:
+        return None
+    return round(min(prices) * 100)
 
 
 def parse_catalog(html: str) -> tuple[list[VodCard], int]:
@@ -257,20 +289,26 @@ def _poster(node: Node) -> str | None:
     return url if url.startswith(("http://", "https://")) else None
 
 
-def _to_item(card: VodCard, price_minor: int) -> RawItem:
-    """Convert one card into the item the pipeline stores."""
+def _to_item(card: VodCard, price_minor: int | None) -> RawItem:
+    """Convert one card into the item the pipeline stores.
+
+    A title the Cinematheque gives away is a free offer, not a rental at zero;
+    one whose price could not be read stays a rental, priced None, because not
+    knowing what it costs is not the same as it being free.
+    """
+    free = price_minor == 0
     return RawItem(
         source_key=SOURCE_KEY,
         kind=TitleKind.MOVIE,
         name=card.name,
         year=card.year,
-        offer_type=OfferType.RENT,
-        deep_link_url=card.order_url,
+        offer_type=OfferType.FREE if free else OfferType.RENT,
+        deep_link_url=card.event_url,
         poster_url=card.poster_url,
-        price_minor=price_minor,
-        price_currency=PRICE_CURRENCY,
+        price_minor=None if free else price_minor,
+        price_currency=None if free or price_minor is None else PRICE_CURRENCY,
         extra={
-            "event_url": card.event_url,
+            "order_url": card.order_url,
             "country": card.country,
             "runtime_minutes": card.runtime_minutes,
         },

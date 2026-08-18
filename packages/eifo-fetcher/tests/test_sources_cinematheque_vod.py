@@ -15,12 +15,12 @@ import respx
 from recorded import load_fixture
 
 from eifo_core.enums import OfferType, SourceKind, TitleKind
-from eifo_core.settings import Settings, SourceConfig
+from eifo_core.settings import Settings
 from eifo_fetcher.robots import RobotsDisallowedError
 from eifo_fetcher.sources.base import FetchContext
 from eifo_fetcher.sources.cinematheque_vod import (
     CATALOG_URL,
-    DEFAULT_PRICE_MINOR,
+    PRICE_API,
     PRICE_CURRENCY,
     CinemathequeCatalogError,
     CinemathequeVodPlugin,
@@ -29,11 +29,39 @@ from eifo_fetcher.sources.cinematheque_vod import (
 
 ROBOTS_URL = "https://www.cinema.co.il/robots.txt"
 PERMISSIVE_ROBOTS = "User-Agent: *\nAllow: /wp-admin/admin-ajax.php\nDisallow: /wp-admin\n"
+#: The order ids the recorded catalog page links to, cheapest ticket type each.
+FIXTURE_PRICES = {
+    "132926": 19.9,
+    "132385": 24.9,  # prices differ per film, verified against the real API
+    "126461": 0,  # this one the Cinematheque gives away
+    "126460": 19.9,
+    "46171": 19.9,
+}
 
 
 @pytest.fixture
 def cinematheque_ctx(http: object, settings: Settings) -> FetchContext:
     return FetchContext(source_key="cinematheque_vod", http=http, settings=settings)  # type: ignore[arg-type]
+
+
+def _price_payload(price: float, name: str = "רגיל") -> dict:
+    """The slice of the ticketing document this plugin reads."""
+    return {
+        "presentation": {
+            "id": 1,
+            "priceLevels": [
+                {"ticketGroupId": 1, "name": name, "minPrice": price, "maxPrice": price}
+            ],
+        },
+        "serverTime": "2026-08-18T18:00:00",
+    }
+
+
+def _mock_prices(prices: dict[str, float] | None = None) -> None:
+    for order_id, price in (FIXTURE_PRICES if prices is None else prices).items():
+        respx.get(PRICE_API.format(order_id=order_id)).mock(
+            return_value=httpx.Response(200, json=_price_payload(price))
+        )
 
 
 def _mock_site(html: str | None = None, robots: str = PERMISSIVE_ROBOTS) -> None:
@@ -44,6 +72,7 @@ def _mock_site(html: str | None = None, robots: str = PERMISSIVE_ROBOTS) -> None
             text=html if html is not None else load_fixture("cinematheque_vod", "vod_catalog.html"),
         )
     )
+    _mock_prices()
 
 
 class TestSourceDeclaration:
@@ -79,42 +108,89 @@ class TestFetch:
         assert first.year == 2025
         assert first.kind is TitleKind.MOVIE
         assert first.offer_type is OfferType.RENT
-        assert first.deep_link_url == "https://cintlv.pres.global/order/132926"
+        assert first.deep_link_url is not None
+        assert first.deep_link_url.startswith("https://www.cinema.co.il/event/")
         assert first.poster_url is not None
         assert first.poster_url.startswith("https://www.cinema.co.il/wp-content/uploads/")
         assert first.extra["country"] == "צרפת"
         assert first.extra["runtime_minutes"] == 97
-        assert first.extra["event_url"].endswith("-vod/")
+        assert first.extra["order_url"] == "https://cintlv.pres.global/order/132926"
 
     @respx.mock
-    def test_every_offer_carries_the_rental_price(self, cinematheque_ctx: FetchContext) -> None:
+    def test_each_offer_carries_the_price_that_title_costs(
+        self, cinematheque_ctx: FetchContext
+    ) -> None:
+        """Prices are per film, not one house rate: 19.90 here, 24.90 there."""
+        by_name = {item.name: item for item in _fetch(cinematheque_ctx)}
+
+        assert by_name["נינו"].price_minor == 1990
+        assert by_name["כן"].price_minor == 2490
+        assert {item.price_currency for item in by_name.values()} <= {PRICE_CURRENCY, None}
+
+    @respx.mock
+    def test_a_title_given_away_is_a_free_offer(self, cinematheque_ctx: FetchContext) -> None:
+        """Zero is the Cinematheque giving a film away, not a rental at ₪0.00."""
+        by_name = {item.name: item for item in _fetch(cinematheque_ctx)}
+        free = by_name["אלפרידה ילינק לשון משוחררת"]
+
+        assert free.offer_type is OfferType.FREE
+        assert free.price_minor is None
+        assert free.price_currency is None
+
+    @respx.mock
+    def test_the_cheapest_ticket_type_is_the_price_shown(
+        self, cinematheque_ctx: FetchContext
+    ) -> None:
+        """One type today; a future concession must not inflate what we show."""
+        _mock_site()
+        respx.get(PRICE_API.format(order_id="132926")).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "presentation": {
+                        "priceLevels": [
+                            {"name": "רגיל", "minPrice": 29.9, "maxPrice": 29.9},
+                            {"name": "מנוי", "minPrice": 14.9, "maxPrice": 14.9},
+                        ]
+                    }
+                },
+            )
+        )
+
+        items = list(CinemathequeVodPlugin().fetch(cinematheque_ctx))
+
+        assert next(item for item in items if item.name == "נינו").price_minor == 1490
+
+    @respx.mock
+    def test_an_unreadable_price_leaves_the_offer_unpriced_and_counted(
+        self, cinematheque_ctx: FetchContext
+    ) -> None:
+        """Not knowing what it costs is not the same as it being free."""
+        _mock_site()
+        respx.get(PRICE_API.format(order_id="132926")).mock(return_value=httpx.Response(503))
+
+        items = list(CinemathequeVodPlugin().fetch(cinematheque_ctx))
+        unpriced = next(item for item in items if item.name == "נינו")
+
+        assert unpriced.offer_type is OfferType.RENT
+        assert unpriced.price_minor is None
+        assert unpriced.price_currency is None
+        assert any("without a readable price" in error for error in cinematheque_ctx.errors)
+
+    @respx.mock
+    def test_the_deep_link_shows_the_film_before_the_till(
+        self, cinematheque_ctx: FetchContext
+    ) -> None:
+        """Nobody should land on a checkout for a film they have not been shown."""
         items = list(_fetch(cinematheque_ctx))
 
-        assert {item.price_minor for item in items} == {DEFAULT_PRICE_MINOR}
-        assert {item.price_currency for item in items} == {PRICE_CURRENCY}
-
-    @respx.mock
-    def test_config_overrides_the_built_in_price(self, http: object, tmp_path: object) -> None:
-        """The site publishes no price, so a change must not need a release."""
-        settings = Settings(
-            _env_file=None,
-            sources={"cinematheque_vod": SourceConfig(price=24.5)},
-        )
-        ctx = FetchContext(source_key="cinematheque_vod", http=http, settings=settings)  # type: ignore[arg-type]
-
-        first = next(iter(_fetch(ctx)))
-
-        assert first.price_minor == 2450
-        assert first.price_currency == PRICE_CURRENCY
-
-    @respx.mock
-    def test_the_deep_link_is_where_you_rent_it(self, cinematheque_ctx: FetchContext) -> None:
-        """The ticketing link, not the article: a rent offer needs a till."""
         assert all(
             item.deep_link_url is not None
-            and item.deep_link_url.startswith("https://cintlv.pres.global/order/")
-            for item in _fetch(cinematheque_ctx)
+            and item.deep_link_url.startswith("https://www.cinema.co.il/event/")
+            for item in items
         )
+        # The till is still recorded: it is what proves the film is on offer.
+        assert all(item.extra["order_url"].startswith("https://cintlv.") for item in items)
 
 
 class TestNames:

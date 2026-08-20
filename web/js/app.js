@@ -221,12 +221,18 @@ function buildFooter(meta) {
 }
 
 let started = false;
+/* The router owning the `hashchange` listener right now. A rebuild (language
+ * change, sign-out) mounts a new `<main>`, so the previous router has to be
+ * retired or it would go on rendering into the element it captured. */
+let activeRouter = null;
 
 async function start() {
   const root = document.getElementById("root");
   const main = el("main", { id: "main" });
 
-  const router = createRouter(
+  activeRouter?.stop();
+
+  activeRouter = createRouter(
     {
       home: (route) => home(route),
       title: (route) => title(route),
@@ -249,6 +255,7 @@ async function start() {
       onChange: () => window.scrollTo({ top: 0 }),
     },
   );
+  const router = activeRouter;
 
   const home = createHomeView({ mount: main, app, router });
   const title = createTitleView({ mount: main, app, router, items });
@@ -266,17 +273,19 @@ async function start() {
 
   if (!started) {
     started = true;
-    // "/" focuses search, the way a catalog is expected to behave.
+    // "/" focuses search, the way a catalog is expected to behave. Bound to the
+    // document once, and it looks the input up per event, so a rebuild does not
+    // leave a stale handler behind.
     document.addEventListener("keydown", (event) => {
       if (event.key === "/" && !isTypingTarget(event.target)) {
         event.preventDefault();
         document.getElementById("search")?.focus();
       }
     });
-    await router.start();
-  } else {
-    await router.render();
   }
+
+  // Always start: this router now owns the hash, and renders the current route.
+  await router.start();
 }
 
 function isTypingTarget(node) {

@@ -31,6 +31,7 @@ export function buildHash(name, params = [], search = "") {
 
 export function createRouter(routes, { onChange } = {}) {
   let teardown = null;
+  let listening = false;
 
   async function render() {
     const route = parseHash(window.location.hash);
@@ -46,8 +47,31 @@ export function createRouter(routes, { onChange } = {}) {
   }
 
   function start() {
-    window.addEventListener("hashchange", render);
+    if (!listening) {
+      window.addEventListener("hashchange", render);
+      listening = true;
+    }
     return render();
+  }
+
+  /**
+   * Stop responding to the hash, and tear down whatever is on screen.
+   *
+   * The app rebuilds itself when the language changes or a session ends, which
+   * means a fresh router over a fresh `<main>`. Without this the old router
+   * keeps its `hashchange` listener and goes on rendering into the element it
+   * captured - which is no longer in the document, so every later link would
+   * change the URL and nothing else.
+   */
+  function stop() {
+    if (listening) {
+      window.removeEventListener("hashchange", render);
+      listening = false;
+    }
+    if (teardown) {
+      teardown();
+      teardown = null;
+    }
   }
 
   /**
@@ -66,5 +90,5 @@ export function createRouter(routes, { onChange } = {}) {
     window.location.hash = buildHash(name, params, search);
   }
 
-  return { start, render, navigate, replaceSearch };
+  return { start, stop, render, navigate, replaceSearch };
 }

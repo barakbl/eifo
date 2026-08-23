@@ -195,6 +195,49 @@ step and nothing to compile. Skipping the `playwright install` line costs you Ka
 Reshet 13 and nothing else: without a browser each fails its own sync with a clear error
 while every other source proceeds.
 
+### With an AI assistant
+
+If you would rather not read the two sections above, hand this to Claude Code, Codex,
+Cursor or any agent with a shell, and answer its questions:
+
+```text
+Install and run Eifo from https://github.com/barakbl/eifo on this machine.
+
+It is a self-hosted catalog of what is streaming in Israel: a Python 3.12 uv
+workspace (eifo-core, eifo-api, eifo-fetcher) plus a static web client, all on
+one SQLite file. Read the repository README first and follow it over any
+assumption of your own.
+
+Steps:
+1. Check whether Docker or uv is installed and use that path. Prefer Docker.
+2. Clone the repo somewhere sensible, then copy config/eifo.example.toml to
+   config/eifo.toml and .env.example to .env.
+3. Ask me for a free TMDB API key from
+   https://www.themoviedb.org/settings/api and put it in .env as
+   EIFO_TMDB_API_KEY. Do not invent a key, and never commit .env.
+4. Start it. Docker: `docker compose up -d`. Otherwise: `uv sync`, then
+   `uv run eifo-fetch db upgrade`, then
+   `uv run uvicorn eifo_api.main:app --host 0.0.0.0 --port 8000`.
+   On the uv path, run `uv run playwright install chromium` only if I want the
+   Kan and Reshet 13 sources; the Docker image already ships that browser.
+5. Fill the catalog once with `eifo-fetch all` (inside the fetcher container on
+   the Docker path). Warn me it takes a while, then let it finish.
+6. Verify: http://localhost:8000/api/v1/meta returns JSON and
+   http://localhost:8000 serves the client. Tell me how many titles landed and
+   which sources failed, if any.
+
+Rules:
+- This is an install, not a change: do not edit source files, and do not
+  "fix" the code if something fails. Show me the actual error instead.
+- Signing in is optional and needs OAuth credentials. Skip that section
+  unless I ask.
+- Everything it stores lives in data/ and config/. Tell me before deleting
+  anything there.
+```
+
+An agent will happily run the whole thing unattended, so read what it proposes before you
+let it loose on a machine you care about.
+
 ### Keeping it fresh
 
 Catalogs move daily. The Docker setup includes a `fetcher` service running the bundled

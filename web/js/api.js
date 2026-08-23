@@ -103,6 +103,10 @@ export function getTitle(id, options) {
   return request(`/titles/${encodeURIComponent(id)}`, options);
 }
 
+export function getPerson(personId, options) {
+  return request(`/people/${encodeURIComponent(personId)}`, options);
+}
+
 export function listSources(options) {
   return request("/sources", options);
 }

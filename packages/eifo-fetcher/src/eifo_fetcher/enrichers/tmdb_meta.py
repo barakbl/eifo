@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from eifo_core.enums import RatingProvider, TitleKind
+from eifo_core.enums import CreditRole, RatingProvider, TitleKind
 from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
 from eifo_fetcher.match import is_hebrew, similarity, years_match
 from eifo_fetcher.sources.base import FetchContext
@@ -23,6 +23,18 @@ from eifo_fetcher.tmdb import (
 
 #: Name similarity required before adopting a search hit as this title.
 MATCH_THRESHOLD = 90.0
+
+#: The crew jobs worth showing. TMDB spells the camera credit two ways.
+_CREW_ROLES = {
+    "Director": CreditRole.DIRECTOR,
+    "Director of Photography": CreditRole.CINEMATOGRAPHER,
+    "Cinematography": CreditRole.CINEMATOGRAPHER,
+}
+#: Cast kept per title. Deep enough that the page can offer "show all" and mean
+#: it, shallow enough that a blockbuster does not add a hundred rows.
+MAX_CAST = 20
+#: Where TMDB serves headshots, for a person page that wants a face.
+_PROFILE_SIZE = "w185"
 
 _WEB_BASE = "https://www.themoviedb.org"
 
@@ -48,7 +60,11 @@ class TmdbMetadataEnricher(Enricher):
 
         try:
             hebrew = client.details(title.kind, tmdb_id, language=HEBREW_LANGUAGE)
-            english = client.details(title.kind, tmdb_id, language=ENGLISH_LANGUAGE)
+            # Credits ride along on the English call: same request, and TMDB
+            # writes character names in the requested language.
+            english = client.details(
+                title.kind, tmdb_id, language=ENGLISH_LANGUAGE, append="credits"
+            )
             external = client.external_ids(title.kind, tmdb_id)
         except Exception as exc:
             ctx.record_error(f"TMDB lookup failed for title {title.id}", exc=exc)
@@ -111,6 +127,9 @@ class TmdbMetadataEnricher(Enricher):
         patch["runtime_minutes"] = _runtime(english, kind)
         patch["status"] = _clean(english.get("status"))
         patch["genres"] = _genres(hebrew, english)
+        patch["original_language"] = _clean(english.get("original_language"))
+        patch["origin_countries"] = _countries(english)
+        patch["credits"] = _credits(english)
 
         poster = _clean(english.get("poster_path")) or _clean(hebrew.get("poster_path"))
         if poster:
@@ -120,6 +139,64 @@ class TmdbMetadataEnricher(Enricher):
             patch["seasons"] = _int_or_none(english.get("number_of_seasons"))
 
         return {key: value for key, value in patch.items() if value is not None}
+
+
+def _countries(details: dict[str, Any]) -> str | None:
+    """Where it was made, as ISO 3166-1 codes: "IL", "IL,FR".
+
+    Codes rather than names so the client can render them in whichever
+    language the reader chose. Movies carry ``production_countries``; series
+    carry ``origin_country`` as bare codes.
+    """
+    codes: list[str] = []
+    for entry in details.get("production_countries") or []:
+        code = _clean(entry.get("iso_3166_1")) if isinstance(entry, dict) else None
+        if code and code not in codes:
+            codes.append(code.upper())
+    for code in details.get("origin_country") or []:
+        cleaned = _clean(code)
+        if cleaned and cleaned.upper() not in codes:
+            codes.append(cleaned.upper())
+    return ",".join(codes) or None
+
+
+def _credits(details: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Director, cinematographer and billed cast, in TMDB's own order.
+
+    None rather than an empty list when TMDB credits nobody, so the patch
+    offers only what it actually found.
+    """
+    payload = details.get("credits")
+    if not isinstance(payload, dict):
+        return None
+
+    entries: list[dict[str, Any]] = []
+    for member in payload.get("crew") or []:
+        if not isinstance(member, dict):
+            continue
+        role = _CREW_ROLES.get(str(member.get("job") or ""))
+        if role is not None:
+            entries.append(_person(member, role))
+
+    cast = [member for member in payload.get("cast") or [] if isinstance(member, dict)]
+    cast.sort(key=lambda member: _billing_order(member.get("order")) or 0)
+    for member in cast[:MAX_CAST]:
+        entry = _person(member, CreditRole.CAST)
+        entry["character"] = _clean(member.get("character"))
+        entry["billing_order"] = _billing_order(member.get("order"))
+        entries.append(entry)
+
+    return entries or None
+
+
+def _person(member: dict[str, Any], role: CreditRole) -> dict[str, Any]:
+    profile = _clean(member.get("profile_path"))
+    return {
+        "role": role,
+        "tmdb_id": _int_or_none(member.get("id")),
+        "name_en": _clean(member.get("name")) or _clean(member.get("original_name")),
+        "profile_source_url": image_url(profile, size=_PROFILE_SIZE) if profile else None,
+    }
 
 
 def web_url(kind: TitleKind, tmdb_id: int) -> str:
@@ -193,7 +270,13 @@ def _clean(value: Any) -> str | None:
 
 
 def _int_or_none(value: Any) -> int | None:
+    """A positive number, or None. Zero runtime means "unknown", not "instant"."""
     return int(value) if isinstance(value, int | float) and value > 0 else None
+
+
+def _billing_order(value: Any) -> int | None:
+    """Billing position, where zero is the lead rather than a missing value."""
+    return int(value) if isinstance(value, int | float) and value >= 0 else None
 
 
 def _client_from(ctx: FetchContext) -> TmdbClient:

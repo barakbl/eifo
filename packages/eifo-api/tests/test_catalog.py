@@ -6,8 +6,8 @@ from fastapi.testclient import TestClient
 from seed import Seeded
 from sqlalchemy.orm import Session, sessionmaker
 
-from eifo_core.enums import OfferType, SourceKind
-from eifo_core.models import Availability, Source
+from eifo_core.enums import CreditRole, OfferType, SourceKind
+from eifo_core.models import Availability, Credit, Person, Source, Title
 
 
 def names(payload: dict) -> list[str]:
@@ -426,3 +426,174 @@ class TestRentalPrices:
 
         assert all(entry["price_minor"] is None for entry in entries)
         assert all(entry["price_currency"] is None for entry in entries)
+
+
+class TestCreditsAndPeople:
+    """Who made a title, and one page per person per role.
+
+    Seeded here rather than in the shared catalog: the corpus other tests count
+    and sort must not shift because a film gained a director.
+    """
+
+    def _seed(self, session_factory: sessionmaker[Session], catalog: Seeded) -> tuple[int, int]:
+        """Returns the (director, actor) ids, which are how they are addressed."""
+        with session_factory() as session:
+            director = Person(name_he="איילת מנחמי", name_en="Ayelet Menachemi")
+            actor = Person(name_en="Lior Raz", tmdb_id=21)
+            session.add_all([director, actor])
+            session.flush()
+            ids = (director.id, actor.id)
+            session.add_all(
+                [
+                    Credit(
+                        title_id=catalog.foxtrot,
+                        person_id=director.id,
+                        role=CreditRole.DIRECTOR,
+                        source="israel_film_archive",
+                    ),
+                    Credit(
+                        title_id=catalog.foxtrot,
+                        person_id=actor.id,
+                        role=CreditRole.CAST,
+                        character="Doron",
+                        billing_order=0,
+                        source="tmdb",
+                    ),
+                    # The same person, a different hat, on another title.
+                    Credit(
+                        title_id=catalog.fauda,
+                        person_id=director.id,
+                        role=CreditRole.CAST,
+                        character="Herself",
+                        billing_order=1,
+                        source="tmdb",
+                    ),
+                ]
+            )
+            session.commit()
+        return ids
+
+    def test_a_title_carries_its_credits_crew_first(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        director_id, actor_id = self._seed(session_factory, catalog)
+
+        body = client.get(f"/api/v1/titles/{catalog.foxtrot}").json()
+
+        assert [(c["role"], c["person"]["id"]) for c in body["credits"]] == [
+            ("director", director_id),
+            ("cast", actor_id),
+        ]
+        assert body["credits"][1]["character"] == "Doron"
+
+    def test_a_person_page_lists_their_whole_body_of_work(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """One page per person: someone who directs and acts is one human."""
+        director_id, _ = self._seed(session_factory, catalog)
+
+        body = client.get(f"/api/v1/people/{director_id}").json()
+
+        assert body["name_he"] == "איילת מנחמי"
+        assert [(c["role"], c["title"]["id"]) for c in body["credits"]] == [
+            ("director", catalog.foxtrot),
+            ("cast", catalog.fauda),
+        ]
+
+    def test_credits_lead_with_what_they_made(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """Director before cast, so a page opens on their work, not a bit part."""
+        director_id, _ = self._seed(session_factory, catalog)
+
+        roles = [c["role"] for c in client.get(f"/api/v1/people/{director_id}").json()["credits"]]
+
+        assert roles == sorted(roles, key=["director", "cinematographer", "cast"].index)
+
+    def test_a_cast_credit_says_who_they_played(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        _, actor_id = self._seed(session_factory, catalog)
+
+        body = client.get(f"/api/v1/people/{actor_id}").json()
+
+        assert [(c["role"], c["character"]) for c in body["credits"]] == [("cast", "Doron")]
+
+    def test_an_unknown_person_is_a_404(self, client: TestClient, catalog: Seeded) -> None:
+        response = client.get("/api/v1/people/999999")
+
+        assert response.status_code == 404
+        assert response.headers["content-type"].startswith("application/problem+json")
+
+    def test_an_id_that_is_not_a_number_is_rejected(
+        self, client: TestClient, catalog: Seeded
+    ) -> None:
+        assert client.get("/api/v1/people/not-an-id").status_code == 422
+
+    def test_one_source_wins_a_role_rather_than_naming_a_person_twice(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """The archive's Hebrew director and TMDB's Latin one are one human."""
+        self._seed(session_factory, catalog)
+        with session_factory() as session:
+            canonical = Person(name_en="Ayelet Menachemi", tmdb_id=99)
+            session.add(canonical)
+            session.flush()
+            session.add(
+                Credit(
+                    title_id=catalog.foxtrot,
+                    person_id=canonical.id,
+                    role=CreditRole.DIRECTOR,
+                    source="tmdb",
+                )
+            )
+            session.commit()
+            canonical_id = canonical.id
+
+        body = client.get(f"/api/v1/titles/{catalog.foxtrot}").json()
+        directors = [c for c in body["credits"] if c["role"] == "director"]
+
+        assert [c["person"]["id"] for c in directors] == [canonical_id]
+
+    def test_a_role_tmdb_says_nothing_about_keeps_the_scraped_credit(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """Most Israeli cinema has no TMDB credits at all; the archive is it."""
+        director_id, _ = self._seed(session_factory, catalog)
+
+        body = client.get(f"/api/v1/titles/{catalog.foxtrot}").json()
+        directors = [c for c in body["credits"] if c["role"] == "director"]
+
+        assert [c["person"]["id"] for c in directors] == [director_id]
+
+    def test_a_title_without_credits_reports_an_empty_list(
+        self, client: TestClient, catalog: Seeded
+    ) -> None:
+        body = client.get(f"/api/v1/titles/{catalog.shtisel}").json()
+
+        assert body["credits"] == []
+
+
+class TestTitleMetadata:
+    def test_language_and_countries_are_codes_the_client_can_localise(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            title = session.get(Title, catalog.foxtrot)
+            assert title is not None
+            title.original_language = "he"
+            title.origin_countries = "IL,FR"
+            session.commit()
+
+        body = client.get(f"/api/v1/titles/{catalog.foxtrot}").json()
+
+        assert body["original_language"] == "he"
+        assert body["origin_countries"] == ["IL", "FR"]
+
+    def test_a_title_with_no_country_reports_none_rather_than_a_blank(
+        self, client: TestClient, catalog: Seeded
+    ) -> None:
+        body = client.get(f"/api/v1/titles/{catalog.fauda}").json()
+
+        assert body["origin_countries"] == []
+        assert body["original_language"] is None

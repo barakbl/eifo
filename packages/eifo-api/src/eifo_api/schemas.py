@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from eifo_core.enums import (
     AuthProvider,
+    CreditRole,
     FetchStatus,
     ItemStatus,
     OfferType,
@@ -146,6 +147,23 @@ class AggregateOut(BaseModel):
     components: dict[str, Any] = Field(default_factory=dict)
 
 
+class PersonRef(BaseModel):
+    """A person, as a title page needs to name and link to them."""
+
+    id: int
+    name_he: str | None = None
+    name_en: str | None = None
+    profile_url: str | None = None
+
+
+class CreditOut(BaseModel):
+    """One person's contribution to one title."""
+
+    role: CreditRole
+    person: PersonRef
+    character: str | None = None
+
+
 class TitleCard(BaseModel):
     """Everything the results grid needs, in one object.
 
@@ -174,8 +192,37 @@ class TitleDetail(TitleCard):
     seasons: int | None = None
     status: str | None = None
     backdrop_url: str | None = None
+    #: ISO 639-1, and ISO 3166-1 alpha-2 codes. Codes rather than names: the
+    #: client renders them in whichever language the reader chose.
+    original_language: str | None = None
+    origin_countries: list[str] = Field(default_factory=list)
+    #: Director, cinematographer and billed cast, in that order.
+    credits: list[CreditOut] = Field(default_factory=list)
     ratings: list[RatingOut] = Field(default_factory=list)
     aggregate: AggregateOut = Field(default_factory=AggregateOut)
+
+
+class PersonCredit(BaseModel):
+    """One title in a person's body of work."""
+
+    role: CreditRole
+    character: str | None = None
+    title: TitleCard
+
+
+class PersonDetail(BaseModel):
+    """A person and everything the catalog credits them with.
+
+    One object per person, not per role: someone who directs and acts is one
+    human. Each credit carries its own ``role``, so the client can group them.
+    """
+
+    id: int
+    name_he: str | None = None
+    name_en: str | None = None
+    profile_url: str | None = None
+    tmdb_id: int | None = None
+    credits: list[PersonCredit] = Field(default_factory=list)
 
 
 class UserOut(BaseModel):

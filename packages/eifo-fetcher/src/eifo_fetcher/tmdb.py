@@ -130,9 +130,19 @@ class TmdbClient:
         tmdb_id: int,
         *,
         language: str = HEBREW_LANGUAGE,
+        append: str | None = None,
     ) -> dict[str, Any]:
-        """Full record for one title."""
-        return self._get(f"/{_MEDIA_PATH[kind]}/{tmdb_id}", language=language)
+        """Full record for one title.
+
+        Args:
+            append: TMDB sub-resources to fold into the same response
+                (``"credits"``). These cost no extra request, which is the
+                whole reason to ask for them here rather than separately.
+        """
+        params: dict[str, Any] = {"language": language}
+        if append:
+            params["append_to_response"] = append
+        return self._get(f"/{_MEDIA_PATH[kind]}/{tmdb_id}", **params)
 
 
 def _parse_title(payload: dict[str, Any], kind: TitleKind) -> TmdbTitle:

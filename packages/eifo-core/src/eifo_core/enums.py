@@ -27,6 +27,18 @@ class OfferType(StrEnum):
     FREE = "free"
 
 
+class CreditRole(StrEnum):
+    """How a person contributed to a title.
+
+    Deliberately short: these are the credits a viewer scans before deciding
+    what to watch, not a full crew list.
+    """
+
+    DIRECTOR = "director"
+    CINEMATOGRAPHER = "cinematographer"
+    CAST = "cast"
+
+
 class RatingProvider(StrEnum):
     """Where a score came from.
 

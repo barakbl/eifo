@@ -617,8 +617,39 @@ img {
 
 @media (min-width: 48rem) {
   .detail__hero {
-    grid-template-columns: 15rem 1fr;
+    grid-template-columns: 15rem minmax(0, 1fr);
     gap: var(--space-6);
+  }
+}
+
+/* Wide enough for a third column: the metadata becomes a rail beside the
+   description rather than a block under it. Below this it spans the full
+   width and reads as the next block down, which is what a phone wants. */
+.detail__meta {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 64rem) {
+  .detail__hero {
+    grid-template-columns: 15rem minmax(0, 1fr) 19rem;
+  }
+
+  /* Placed explicitly: an item with a definite row is positioned before the
+     auto-placed poster and text, so `grid-row: 1` alone would steal column 1
+     and push the poster along. */
+  .detail__meta {
+    grid-column: 3;
+    grid-row: 1;
+    align-self: start;
+    margin-block-start: 0;
+  }
+
+  /* Label above value in the rail. Side by side, a label column wide enough
+     for "Cinematography" leaves too little for a name like "Keegan-Michael
+     Key"; stacked, both get the whole width. */
+  .detail__meta .meta__row {
+    grid-template-columns: 1fr;
+    gap: var(--space-1);
   }
 }
 
@@ -1252,4 +1283,180 @@ img {
   color: var(--fg-faint);
   text-decoration: none;
   font-style: italic;
+}
+
+/* -- credits and metadata ------------------------------------------------- */
+
+/* A definition list rather than a table: these are label/value pairs, and a
+   table would promise columns that the values do not line up in. */
+.meta {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  background: var(--surface);
+}
+
+.meta__row {
+  display: grid;
+  grid-template-columns: minmax(6rem, 9rem) 1fr;
+  gap: var(--space-2) var(--space-4);
+  align-items: baseline;
+  padding-block: var(--space-2);
+  border-block-start: 1px solid var(--line);
+}
+
+.meta__row:first-child {
+  border-block-start: 0;
+  padding-block-start: 0;
+}
+
+.meta__label {
+  color: var(--fg-faint);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.meta__value {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  align-items: baseline;
+}
+
+/* Names are links, so they carry the underline a link should have - but only
+   on the name itself, not across the separators between them. A name wraps as
+   a unit: "James Corden" broken across two lines reads as two people. */
+.meta__person {
+  white-space: nowrap;
+  color: var(--fg);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+
+.meta__person:hover,
+.meta__person:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+.meta__person:not(:last-child)::after {
+  content: "·";
+  color: var(--fg-faint);
+  text-decoration: none;
+  display: inline-block;
+  margin-inline-start: var(--space-2);
+}
+
+/* Four dots filled to the length band. Quiet on purpose: this is a hint you
+   catch while reading the minutes, not a thing to look at on its own. */
+.runtime {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.runtime__dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.runtime__dot {
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--line-strong);
+}
+
+.runtime__dot--on {
+  background: var(--fg-muted);
+}
+
+/* A flag is recognised before its name is read, so it leads. */
+.country {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.country__flag {
+  font-size: 1.05em;
+  line-height: 1;
+}
+
+.meta__more {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--fg-faint);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.meta__more:hover,
+.meta__more:focus-visible {
+  color: var(--accent);
+}
+
+/* -- a person's work ------------------------------------------------------ */
+
+.person__head {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+  margin-block: var(--space-4) var(--space-6);
+}
+
+.person__portrait {
+  inline-size: 5.5rem;
+  block-size: 5.5rem;
+  border-radius: var(--radius-pill);
+  object-fit: cover;
+  border: 1px solid var(--line);
+  flex: none;
+}
+
+.person__name {
+  margin: 0;
+}
+
+.person__alternate,
+.person__role {
+  margin-block: var(--space-1) 0;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  font-family: var(--font-data);
+}
+
+.person__count {
+  color: var(--fg-faint);
+}
+
+.person__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-block: var(--space-3) 0;
+}
+
+.person__link {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 0.2rem var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+
+.person__link:hover,
+.person__link:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
 }

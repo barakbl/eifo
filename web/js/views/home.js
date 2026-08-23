@@ -1,19 +1,10 @@
 /* The catalog grid: filters, search-as-you-type, and endless scrolling. */
 
 import { ApiError, listTitles } from "../api.js";
-import {
-  currentSources,
-  filtersToParams,
-  paramsToFilters,
-  sourceColorVar,
-} from "../format.js";
-import { displayName } from "../i18n.js";
-import { el, replace, scorePill, skeletonCards, spine, stateBlock } from "../ui.js";
+import { filtersToParams, paramsToFilters, sourceColorVar } from "../format.js";
+import { el, replace, skeletonCards, stateBlock, titleCard } from "../ui.js";
 
 const PAGE_SIZE = 24;
-// The first screen is loaded eagerly. Lazy-loading what is already visible
-// only delays the largest paint, which is the metric this page is judged on.
-const EAGER_IMAGES = 12;
 
 const TYPES = ["", "movie", "series"];
 const SORTS = ["score", "score_israeli", "year", "name", "recently_added"];
@@ -187,33 +178,6 @@ export function createHomeView({ mount, app, router }) {
 
     return () => observer?.disconnect();
   };
-}
-
-function titleCard(title, language, index = 0) {
-  const name = displayName(title, language);
-  const eager = index < EAGER_IMAGES;
-  const poster = title.poster_url
-    ? el("img", {
-        src: title.poster_url,
-        alt: "",
-        decoding: "async",
-        loading: eager ? "eager" : "lazy",
-        fetchpriority: eager ? "high" : "low",
-      })
-    : el("div", { class: "card__placeholder", text: name.slice(0, 1), "aria-hidden": "true" });
-
-  return el(
-    "li",
-    {},
-    el("a", { class: "card", href: `#/title/${title.id}` }, [
-      el("div", { class: "card__poster" }, [poster, spine(currentSources(title.availability))]),
-      el("span", { class: "card__title", text: name }),
-      el("span", { class: "card__meta" }, [
-        title.year ? el("span", { text: String(title.year) }) : null,
-        scorePill(title.score),
-      ]),
-    ]),
-  );
 }
 
 function buildFilterBar({ state, sources, user, t, onChange }) {

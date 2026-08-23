@@ -25,6 +25,7 @@ from eifo_core.enums import FetchPhase, FetchStatus, OfferType
 from eifo_core.models import Availability, FetchRun, Source, Title
 from eifo_core.types import utcnow
 from eifo_fetcher.match import MatchStats, TitleMatcher
+from eifo_fetcher.people import apply_credits
 from eifo_fetcher.sources.base import (
     FetchContext,
     RawItem,
@@ -168,6 +169,13 @@ def _ingest(
         # it later so a slow CDN never holds up a catalog sync.
         if item.poster_url and not match.title.poster_source_url:
             match.title.poster_source_url = item.poster_url
+        # A catalogue that knows who made a film is often the only thing that
+        # does: TMDB carries little Israeli cinema. Filling gaps only, as
+        # enrichment does, so a scrape never displaces a canonical answer.
+        if item.origin_countries and not match.title.origin_countries:
+            match.title.origin_countries = item.origin_countries
+        if item.credits:
+            apply_credits(session, match.title, item.credits, source=source.key)
         created = upsert_availability(
             session,
             title=match.title,

@@ -52,6 +52,13 @@ class RawItem:
     #: with its ISO-4217 code. Only a source that charges per title sets these.
     price_minor: int | None = None
     price_currency: str | None = None
+    #: Who made it, when the source says so. Each entry is a dict of the
+    #: :func:`~eifo_fetcher.people.apply_credits` shape: a ``role`` and a name.
+    #: TMDB does not carry most Israeli cinema, so for those titles a
+    #: catalogue's own credits are the only ones there will ever be.
+    credits: tuple[Mapping[str, Any], ...] = ()
+    #: ISO 3166-1 alpha-2, comma separated ("IL", "IL,FR").
+    origin_countries: str | None = None
     #: Kept verbatim in match_reviews so an unresolved item can be debugged.
     extra: Mapping[str, Any] = field(default_factory=dict)
 

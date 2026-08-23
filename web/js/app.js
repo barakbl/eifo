@@ -9,6 +9,7 @@ import { createStore, debounce } from "./store.js";
 import { el, replace, stateBlock } from "./ui.js";
 import { createHomeView } from "./views/home.js";
 import { createMyListView } from "./views/mylist.js";
+import { createPersonView } from "./views/person.js";
 import { createSettingsView } from "./views/settings.js";
 import { createTitleView } from "./views/title.js";
 
@@ -236,6 +237,7 @@ async function start() {
     {
       home: (route) => home(route),
       title: (route) => title(route),
+      people: (route) => person(route),
       me: (route) => mylist(route),
       settings: (route) => settings(route),
       notFound: () => {
@@ -261,6 +263,7 @@ async function start() {
   const title = createTitleView({ mount: main, app, router, items });
   const mylist = createMyListView({ mount: main, app, router, items });
   const settings = createSettingsView({ mount: main, app, router, onSignedOut: () => signOut(router) });
+  const person = createPersonView({ mount: main, app, router });
 
   const [sources, meta, user] = await Promise.all([
     listSources().catch(() => []),

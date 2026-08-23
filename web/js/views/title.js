@@ -2,7 +2,18 @@
 
 import { getTitle, listMyItems } from "../api.js";
 import { noteEditor, titleActions } from "../account.js";
-import { formatDate, formatPrice, offerState, sourceColorVar } from "../format.js";
+import {
+  RUNTIME_BANDS,
+  countryFlag,
+  countryName,
+  formatDate,
+  formatPrice,
+  languageName,
+  offerState,
+  personName,
+  runtimeBand,
+  sourceColorVar,
+} from "../format.js";
 import { displayName, secondaryName } from "../i18n.js";
 import { el, ratingPill, replace, scorePill, stateBlock } from "../ui.js";
 
@@ -80,10 +91,156 @@ function buildDetail(title, { t, language, user, items }) {
         aggregateBlock(title, t),
         userSection(title, { t, user, items }),
       ]),
+      creditsSection(title, { t, language }),
     ]),
     ratingsSection(title, { t, language }),
     offersSection(title, { t, language }),
   ]);
+}
+
+/* Who made it, and the facts about the thing itself.
+ *
+ * Names link to that person's page, so the block doubles as a way into the
+ * catalog sideways: by the people in it rather than by the title. */
+const CAST_SHOWN = 6;
+
+function creditsSection(title, { t, language }) {
+  const byRole = new Map();
+  for (const credit of title.credits ?? []) {
+    if (!byRole.has(credit.role)) byRole.set(credit.role, []);
+    byRole.get(credit.role).push(credit);
+  }
+
+  const facts = factRows(title, { t, language });
+  const crew = ["director", "cinematographer"]
+    .filter((role) => byRole.has(role))
+    .map((role) => {
+      const credits = byRole.get(role);
+      const key = credits.length > 1 ? `credit.${role}_plural` : `credit.${role}`;
+      return metaRow(
+        t(key),
+        credits.map((credit) => personLink(credit, { language })),
+      );
+    });
+
+  const cast = byRole.get("cast") ?? [];
+  const rows = [...crew, ...(cast.length ? [castRow(cast, { t, language })] : []), ...facts];
+  if (!rows.length) return null;
+
+  // A rail beside the description on a wide screen, and just another block
+  // under it on a narrow one - the CSS decides, the markup is the same.
+  //
+  // The heading is there but not on screen: the rows say what they are, so a
+  // sighted reader needs no label, while a section a screen reader announces
+  // without a name is just "section".
+  return el("section", { class: "section detail__meta" }, [
+    el("h2", { class: "section__heading visually-hidden", text: t("title.credits") }),
+    el("dl", { class: "meta" }, rows),
+  ]);
+}
+
+/** A label and its values, as one row of the metadata list. */
+function metaRow(label, values) {
+  return el("div", { class: "meta__row" }, [
+    el("dt", { class: "meta__label", text: label }),
+    el("dd", { class: "meta__value" }, values),
+  ]);
+}
+
+function factRows(title, { t, language }) {
+  const rows = [];
+  // A running time is a fact about a film; a series has seasons instead, and
+  // its per-episode runtime would be a different claim than the one we hold.
+  if (title.type === "movie" && title.runtime_minutes) {
+    rows.push(metaRow(t("title.length"), [runtimeValue(title.runtime_minutes, t)]));
+  }
+  if (title.original_language) {
+    rows.push(
+      metaRow(t("title.language"), [
+        el("span", { text: languageName(title.original_language, language) }),
+      ]),
+    );
+  }
+  const countries = title.origin_countries ?? [];
+  if (countries.length) {
+    rows.push(metaRow(t("title.country"), countries.map((code) => countryValue(code, language))));
+  }
+  return rows;
+}
+
+/* The minutes, and four dots filled to how long that is - so "can I start this
+ * tonight" is answered before the number is even read. The dots are decoration
+ * for a screen reader, which gets the band as words instead. */
+function runtimeValue(minutes, t) {
+  const band = runtimeBand(minutes);
+  const spoken = band ? `${t("title.runtime", { count: minutes })} · ${t(band.key)}` : "";
+
+  return el("span", { class: "runtime", title: band ? t(band.key) : undefined }, [
+    el("span", { text: t("title.runtime", { count: minutes }) }),
+    band
+      ? el(
+          "span",
+          { class: "runtime__dots", "aria-hidden": "true" },
+          RUNTIME_BANDS.map((step) =>
+            el("span", {
+              class: `runtime__dot${step.level <= band.level ? " runtime__dot--on" : ""}`,
+            }),
+          ),
+        )
+      : null,
+    band ? el("span", { class: "visually-hidden", text: ` ${spoken}` }) : null,
+  ]);
+}
+
+/** A country, flag first: recognisable before the name is read. */
+function countryValue(code, language) {
+  const flag = countryFlag(code);
+  return el("span", { class: "country" }, [
+    flag ? el("span", { class: "country__flag", "aria-hidden": "true", text: flag }) : null,
+    el("span", { text: countryName(code, language) }),
+  ]);
+}
+
+/** The billed leads, with the rest a click away rather than a scroll away. */
+function castRow(cast, { t, language }) {
+  const shown = cast.slice(0, CAST_SHOWN).map((credit) => personLink(credit, { language }));
+  const rest = cast.slice(CAST_SHOWN).map((credit) => personLink(credit, { language }));
+  const value = el("dd", { class: "meta__value" }, shown);
+
+  if (rest.length) {
+    let expanded = false;
+    const toggle = el("button", {
+      class: "meta__more",
+      type: "button",
+      text: t("credit.showAll", { count: cast.length }),
+      onClick: () => {
+        expanded = !expanded;
+        for (const node of rest) {
+          if (expanded) value.insertBefore(node, toggle);
+          else node.remove();
+        }
+        toggle.textContent = expanded
+          ? t("credit.showFewer")
+          : t("credit.showAll", { count: cast.length });
+      },
+    });
+    value.append(toggle);
+  }
+
+  return el("div", { class: "meta__row" }, [
+    el("dt", { class: "meta__label", text: t("credit.cast") }),
+    value,
+  ]);
+}
+
+function personLink(credit, { language }) {
+  return el("a", {
+    class: "meta__person",
+    href: `#/people/${credit.person.id}`,
+    // A cast credit knows who they played; hovering a name says so.
+    title: credit.character || undefined,
+    text: personName(credit.person, language),
+  });
 }
 
 /** Lists, rating and note - or an invitation to sign in and have them. */

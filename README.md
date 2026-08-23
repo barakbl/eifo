@@ -57,6 +57,15 @@ people actually trust, and puts a search box in front of it.
   audiences rarely rate the same film the same way.
 - **Bilingual search that actually works.** Hebrew and English over one FTS5 index, with
   prefix matching as you type. "פאודה" and "Fauda" find the same series.
+- **Who made it, and what else they made.** Every title page carries a metadata panel:
+  director, cinematographer and cast, alongside language, country and running time. Every
+  name links to that person's page, which lists everything the catalog credits them with,
+  grouped by whether they directed it, shot it or appeared in it. Israeli titles get their
+  credits from the archives that hold them, since TMDB carries little Israeli cinema, and
+  those are the credits that exist nowhere else.
+- **Small things that save a click.** Runtime comes with a four-dot scale, so you can tell
+  a 95-minute film from a three-hour one without reading the number. Countries carry their
+  flag. The cast list shows the billed leads and keeps the rest one tap away.
 - **It remembers what left.** A title that vanished from a service is badged, not deleted -
   and a service Eifo no longer tracks is badged differently, because "it's gone" and "we
   can't vouch for this any more" are different facts.
@@ -307,6 +316,10 @@ Register it in `registry.py` - **or don't**: plugins are also discovered through
 `eifo.sources` entry-point group, so a source can live in its own repository and install as
 an ordinary pip package with no change to this codebase.
 
+A plugin that knows who made a title can say so: put `credits` on the `RawItem` and the
+pipeline creates the people and attaches them, crediting your source. That is worth doing
+for Israeli catalogues in particular, whose films TMDB has never heard of.
+
 The pipeline handles everything after the yield: matching a listing to a canonical title,
 parking the ambiguous ones for review, expiring what disappeared, and downloading artwork.
 
@@ -320,7 +333,10 @@ weighted aggregate are already handled.
 
 Episode-level tracking for series, price *history* for rent/buy offers (an offer carries
 its current price already), CSV or Letterboxd import, notifications when a want-to-watch
-title lands on a service you have - the data model already supports the last one.
+title lands on a service you have - the data model already supports the last one. A person
+page links out to TMDB; IMDb needs one `imdb_id` column and a backfill through TMDB's
+`/person/{id}/external_ids` before its link can point at the right human rather than a
+search.
 
 ### House rules
 

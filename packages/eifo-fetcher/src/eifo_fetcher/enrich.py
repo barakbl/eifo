@@ -28,6 +28,7 @@ from eifo_core.models import (
 from eifo_core.settings import Settings
 from eifo_core.types import utcnow
 from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
+from eifo_fetcher.people import apply_credits
 from eifo_fetcher.scores import RatingInput, aggregate, normalise
 from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError
 
@@ -48,6 +49,8 @@ PATCHABLE_FIELDS = frozenset(
         "seasons",
         "status",
         "poster_source_url",
+        "original_language",
+        "origin_countries",
     }
 )
 
@@ -197,7 +200,7 @@ def _run_one(
     tally.ratings_written += written
     tally.by_enricher[enricher.key] = tally.by_enricher.get(enricher.key, 0) + written
 
-    if _apply_patch(session, title, result):
+    if _apply_patch(session, title, result, source=enricher.key):
         tally.metadata_updated += 1
 
 
@@ -245,13 +248,16 @@ def _store_ratings(
     return written
 
 
-def _apply_patch(session: Session, title: Title, result: EnrichResult) -> bool:
+def _apply_patch(session: Session, title: Title, result: EnrichResult, *, source: str) -> bool:
     """Fill empty fields only; never overwrite what is already known."""
     changed = False
 
     for field_name, value in result.metadata_patch.items():
         if field_name == "genres":
             changed |= _apply_genres(session, title, value)
+            continue
+        if field_name == "credits":
+            changed |= _apply_credits(session, title, value, source=source)
             continue
         if field_name not in PATCHABLE_FIELDS or value in (None, ""):
             continue
@@ -260,6 +266,13 @@ def _apply_patch(session: Session, title: Title, result: EnrichResult) -> bool:
             changed = True
 
     return changed
+
+
+def _apply_credits(session: Session, title: Title, entries: Any, *, source: str) -> bool:
+    """Attach who made this, crediting whoever said so."""
+    if not isinstance(entries, list):
+        return False
+    return apply_credits(session, title, entries, source=source) > 0
 
 
 def _apply_genres(session: Session, title: Title, genres: Any) -> bool:

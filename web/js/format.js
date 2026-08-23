@@ -51,6 +51,89 @@ export function formatPrice(minor, currency, language = "en") {
   }
 }
 
+/* How long a film feels, in four bands, so a viewer deciding what to start
+ * tonight can tell at a glance. The boundaries are the ones film itself uses:
+ * under an hour and a half is a short evening, two hours is the standard
+ * feature, and past two and a half you are committing to something. */
+export const RUNTIME_BANDS = [
+  { under: 90, level: 1, key: "runtime.short" },
+  { under: 120, level: 2, key: "runtime.standard" },
+  { under: 150, level: 3, key: "runtime.long" },
+  { under: Infinity, level: 4, key: "runtime.epic" },
+];
+
+/** Which band a runtime falls in, or null when there is no runtime to band. */
+export function runtimeBand(minutes) {
+  if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) return null;
+  return RUNTIME_BANDS.find((band) => minutes < band.under) ?? null;
+}
+
+/**
+ * An ISO 3166-1 code as its flag: "IL" becomes 🇮🇱.
+ *
+ * Built from regional indicator letters rather than an image, so it costs no
+ * request and inherits the text colour. Windows has no flag glyphs and will
+ * show the two letters instead, which is a legible fallback rather than tofu.
+ */
+export function countryFlag(code) {
+  if (typeof code !== "string" || !/^[A-Za-z]{2}$/.test(code)) return "";
+  const FIRST_REGIONAL_INDICATOR = 0x1f1e6; // 🇦
+  return [...code.toUpperCase()]
+    .map((letter) => String.fromCodePoint(FIRST_REGIONAL_INDICATOR + letter.charCodeAt(0) - 65))
+    .join("");
+}
+
+/* Region and language names, resolved by the browser rather than by a table we
+ * would have to translate and maintain. Cached because constructing one of
+ * these is not cheap and a page can ask for a dozen. */
+const displayNames = new Map();
+
+function namer(language, type) {
+  const locale = language === "he" ? "he-IL" : "en";
+  const key = `${locale}:${type}`;
+  if (!displayNames.has(key)) {
+    try {
+      displayNames.set(key, new Intl.DisplayNames([locale], { type }));
+    } catch {
+      displayNames.set(key, null);
+    }
+  }
+  return displayNames.get(key);
+}
+
+/**
+ * An ISO 639-1 code as a language name: "he" reads "עברית" or "Hebrew".
+ *
+ * The code itself is the fallback, which is honest - better a reader sees
+ * "yue" than nothing at all.
+ */
+export function languageName(code, language = "en") {
+  if (!code) return "";
+  try {
+    return namer(language, "language")?.of(code) || code;
+  } catch {
+    return code;
+  }
+}
+
+/** An ISO 3166-1 code as a country name: "IL" reads "ישראל" or "Israel". */
+export function countryName(code, language = "en") {
+  if (!code) return "";
+  try {
+    return namer(language, "region")?.of(code) || code;
+  } catch {
+    return code;
+  }
+}
+
+/** A person's name in the reader's language, falling back to the other. */
+export function personName(person, language = "en") {
+  if (!person) return "";
+  return language === "he"
+    ? person.name_he || person.name_en || ""
+    : person.name_en || person.name_he || "";
+}
+
 /** A date as the viewer's locale writes it. */
 export function formatDate(value, language = "en") {
   if (!value) return "";

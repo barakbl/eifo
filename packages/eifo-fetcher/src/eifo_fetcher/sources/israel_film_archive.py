@@ -41,7 +41,7 @@ from dataclasses import dataclass
 
 from selectolax.parser import HTMLParser
 
-from eifo_core.enums import OfferType, SourceKind, TitleKind
+from eifo_core.enums import CreditRole, OfferType, SourceKind, TitleKind
 from eifo_fetcher.http import USER_AGENT
 from eifo_fetcher.robots import RobotsPolicy
 from eifo_fetcher.sources.base import FetchContext, RawItem, SourceInfo, SourcePlugin
@@ -242,6 +242,17 @@ def _director(og_title: str | None) -> str | None:
     return parts[1] if len(parts) >= 3 and parts[1] else None
 
 
+def _credits(film: ArchiveFilm) -> tuple[dict[str, str], ...]:
+    """The director, named the way the page names them.
+
+    Hebrew, because that is what the archive publishes; a Latin name for the
+    same person can only come from a source that has one.
+    """
+    if not film.director:
+        return ()
+    return ({"role": CreditRole.DIRECTOR, "name_he": film.director},)
+
+
 def _to_item(film: ArchiveFilm) -> RawItem:
     """Convert one film into the item the pipeline stores.
 
@@ -259,6 +270,9 @@ def _to_item(film: ArchiveFilm) -> RawItem:
         poster_url=film.poster_url,
         price_minor=film.price_minor,
         price_currency=None if free else PRICE_CURRENCY,
+        # TMDB carries little of this collection, so the archive's own credit
+        # is the only one most of these films will ever have.
+        credits=_credits(film),
         extra={
             "director": film.director,
             "genre": film.genre,

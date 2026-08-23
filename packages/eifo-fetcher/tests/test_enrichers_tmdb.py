@@ -8,10 +8,10 @@ import httpx
 import pytest
 import respx
 
-from eifo_core.enums import RatingProvider, TitleKind
+from eifo_core.enums import CreditRole, RatingProvider, TitleKind
 from eifo_core.settings import Settings
 from eifo_fetcher.enrichers.base import TitleView
-from eifo_fetcher.enrichers.tmdb_meta import TmdbMetadataEnricher, web_url
+from eifo_fetcher.enrichers.tmdb_meta import TmdbMetadataEnricher, _countries, web_url
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.sources.base import FetchContext
 from eifo_fetcher.tmdb import BASE_URL, TmdbClient
@@ -52,6 +52,19 @@ def tv_details(language: str) -> dict[str, Any]:
             {"id": 18, "name": "דרמה" if hebrew else "Drama"},
             {"id": 10759, "name": "אקשן והרפתקאות" if hebrew else "Action & Adventure"},
         ],
+        "original_language": "he",
+        "origin_country": ["IL"],
+        "credits": {
+            "crew": [
+                {"id": 11, "name": "Assaf Bernstein", "job": "Director"},
+                {"id": 12, "name": "Boaz Yehonatan Yacov", "job": "Director of Photography"},
+                {"id": 13, "name": "Someone Else", "job": "Best Boy"},
+            ],
+            "cast": [
+                {"id": 21, "name": "Lior Raz", "character": "Doron", "order": 0},
+                {"id": 22, "name": "Itzik Cohen", "character": "Gabi", "order": 1},
+            ],
+        },
     }
 
 
@@ -243,3 +256,112 @@ class TestResolution:
 def test_web_url_points_at_the_public_page() -> None:
     assert web_url(TitleKind.MOVIE, 5) == "https://www.themoviedb.org/movie/5"
     assert web_url(TitleKind.SERIES, 5) == "https://www.themoviedb.org/tv/5"
+
+
+class TestCredits:
+    """Who made it rides along on the details call, at no extra request."""
+
+    @respx.mock
+    def test_reads_director_cinematographer_and_cast(
+        self, enricher: TmdbMetadataEnricher, ctx: FetchContext
+    ) -> None:
+        _mock_details()
+
+        result = enricher.enrich(view(), ctx)
+
+        assert result is not None
+        credits = result.metadata_patch["credits"]
+        by_role: dict[CreditRole, list[str]] = {}
+        for entry in credits:
+            by_role.setdefault(entry["role"], []).append(entry["name_en"])
+        assert by_role[CreditRole.DIRECTOR] == ["Assaf Bernstein"]
+        assert by_role[CreditRole.CINEMATOGRAPHER] == ["Boaz Yehonatan Yacov"]
+        assert by_role[CreditRole.CAST] == ["Lior Raz", "Itzik Cohen"]
+
+    @respx.mock
+    def test_ignores_crew_jobs_nobody_scans_a_page_for(
+        self, enricher: TmdbMetadataEnricher, ctx: FetchContext
+    ) -> None:
+        _mock_details()
+
+        result = enricher.enrich(view(), ctx)
+
+        assert result is not None
+        names = {entry["name_en"] for entry in result.metadata_patch["credits"]}
+        assert "Someone Else" not in names
+
+    @respx.mock
+    def test_keeps_the_lead_at_the_top_of_the_bill(
+        self, enricher: TmdbMetadataEnricher, ctx: FetchContext
+    ) -> None:
+        """Billing zero is the lead, not a missing value."""
+        _mock_details()
+
+        result = enricher.enrich(view(), ctx)
+
+        assert result is not None
+        cast = [e for e in result.metadata_patch["credits"] if e["role"] is CreditRole.CAST]
+        assert [(e["name_en"], e["billing_order"], e["character"]) for e in cast] == [
+            ("Lior Raz", 0, "Doron"),
+            ("Itzik Cohen", 1, "Gabi"),
+        ]
+
+    @respx.mock
+    def test_asks_for_credits_on_the_details_request_it_already_makes(
+        self, enricher: TmdbMetadataEnricher, ctx: FetchContext
+    ) -> None:
+        _mock_details()
+
+        enricher.enrich(view(), ctx)
+
+        appended = [
+            call.request.url.params.get("append_to_response")
+            for call in respx.calls
+            if str(call.request.url).startswith(f"{BASE_URL}/tv/{TMDB_ID}?")
+        ]
+        assert "credits" in appended
+
+    @respx.mock
+    def test_reads_language_and_origin_country(
+        self, enricher: TmdbMetadataEnricher, ctx: FetchContext
+    ) -> None:
+        _mock_details()
+
+        result = enricher.enrich(view(), ctx)
+
+        assert result is not None
+        assert result.metadata_patch["original_language"] == "he"
+        assert result.metadata_patch["origin_countries"] == "IL"
+
+    @respx.mock
+    def test_a_title_without_credits_offers_none(
+        self, enricher: TmdbMetadataEnricher, ctx: FetchContext
+    ) -> None:
+        payload = tv_details("en-US")
+        payload.pop("credits")
+        respx.get(f"{BASE_URL}/tv/{TMDB_ID}").mock(return_value=httpx.Response(200, json=payload))
+        respx.get(f"{BASE_URL}/tv/{TMDB_ID}/external_ids").mock(
+            return_value=httpx.Response(200, json={})
+        )
+
+        result = enricher.enrich(view(), ctx)
+
+        assert result is not None
+        assert "credits" not in result.metadata_patch
+
+
+class TestProductionCountries:
+    def test_a_co_production_keeps_every_country_in_order(self) -> None:
+        assert (
+            _countries({"production_countries": [{"iso_3166_1": "IL"}, {"iso_3166_1": "FR"}]})
+            == "IL,FR"
+        )
+
+    def test_a_country_listed_twice_appears_once(self) -> None:
+        assert (
+            _countries({"production_countries": [{"iso_3166_1": "IL"}], "origin_country": ["IL"]})
+            == "IL"
+        )
+
+    def test_no_country_is_no_claim(self) -> None:
+        assert _countries({}) is None

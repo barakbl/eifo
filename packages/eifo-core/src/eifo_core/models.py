@@ -28,6 +28,7 @@ from sqlalchemy.types import JSON
 
 from eifo_core.enums import (
     AuthProvider,
+    CreditRole,
     FetchPhase,
     FetchStatus,
     ItemStatus,
@@ -105,6 +106,18 @@ class Title(TimestampMixin, Base):
     seasons: Mapped[int | None]
     status: Mapped[str | None] = mapped_column(String(50))
 
+    #: ISO 639-1, the language the title was made in ("he", "en").
+    original_language: Mapped[str | None] = mapped_column(String(8))
+    #: ISO 3166-1 alpha-2, comma separated, in the order the source lists them
+    #: ("IL", "IL,FR"). Codes rather than names so the client can render them
+    #: in whichever language the reader chose.
+    origin_countries: Mapped[str | None] = mapped_column(String(100))
+
+    credits: Mapped[list[Credit]] = relationship(
+        back_populates="title",
+        cascade="all, delete-orphan",
+        order_by="(Credit.role, Credit.billing_order, Credit.id)",
+    )
     availability: Mapped[list[Availability]] = relationship(
         back_populates="title",
         cascade="all, delete-orphan",
@@ -149,6 +162,75 @@ class Genre(Base):
 
     def __repr__(self) -> str:
         return f"<Genre {self.id} {self.name_en!r}>"
+
+
+class Person(TimestampMixin, Base):
+    """Someone who worked on a title: a director, a cinematographer, an actor.
+
+    Addressed by ``id``, the way a title is. A person known to TMDB also
+    carries ``tmdb_id``; one scraped from an Israeli catalogue has only a name,
+    which is all that source knows.
+    """
+
+    __tablename__ = "people"
+    __table_args__ = (
+        CheckConstraint(
+            "name_en IS NOT NULL OR name_he IS NOT NULL",
+            name="ck_people_has_a_name",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tmdb_id: Mapped[int | None] = mapped_column(Integer, unique=True)
+    name_en: Mapped[str | None] = mapped_column(String(200))
+    name_he: Mapped[str | None] = mapped_column(String(200))
+    profile_source_url: Mapped[str | None] = mapped_column(String(1000))
+
+    credits: Mapped[list[Credit]] = relationship(
+        back_populates="person",
+        cascade="all, delete-orphan",
+    )
+
+    @property
+    def display_name(self) -> str:
+        """Best available name, Hebrew preferred, for logs and admin output."""
+        return self.name_he or self.name_en or f"person#{self.id}"
+
+    def __repr__(self) -> str:
+        return f"<Person {self.id} {self.display_name!r}>"
+
+
+class Credit(Base):
+    """One person's contribution to one title.
+
+    ``source`` records who said so - "tmdb", or the key of the plugin that
+    scraped it - because the Israeli catalogues are the only ones that know
+    about much of their own cinema, and a claim without a provenance is a
+    rumour.
+    """
+
+    __tablename__ = "credits"
+    __table_args__ = (
+        UniqueConstraint("title_id", "person_id", "role", "character", name="uq_credit"),
+        Index("ix_credits_person_role", "person_id", "role"),
+        Index("ix_credits_title_role", "title_id", "role"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title_id: Mapped[int] = mapped_column(ForeignKey("titles.id", ondelete="CASCADE"))
+    person_id: Mapped[int] = mapped_column(ForeignKey("people.id", ondelete="CASCADE"))
+    role: Mapped[CreditRole] = mapped_column(_enum(CreditRole, "credit_role"))
+    #: Who they played, for a cast credit.
+    character: Mapped[str | None] = mapped_column(String(300))
+    #: Billing order for cast; None for crew, who are shown as listed.
+    billing_order: Mapped[int | None]
+    source: Mapped[str] = mapped_column(String(50))
+
+    title: Mapped[Title] = relationship(back_populates="credits")
+    person: Mapped[Person] = relationship(back_populates="credits")
+
+    def __repr__(self) -> str:
+        return f"<Credit title={self.title_id} person={self.person_id} {self.role}>"
 
 
 class TitleGenre(Base):

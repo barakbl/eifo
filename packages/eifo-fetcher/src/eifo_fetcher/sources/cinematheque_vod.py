@@ -71,6 +71,57 @@ PRICE_API = f"https://{PRICE_API_HOST}/api/presentations/{{order_id}}?referralMi
 #: The API quotes bare numbers and the Cinematheque sells in shekels only.
 PRICE_CURRENCY = "ILS"
 
+#: The Cinematheque writes countries in Hebrew prose ("ישראל/צרפת"), and the
+#: catalog stores ISO 3166-1 codes so the client can render them in whichever
+#: language the reader chose. This covers every country the site has listed
+#: (checked 2026-08-22); an unrecognised one is left out rather than guessed,
+#: which costs an optional field and never invents a wrong one.
+_COUNTRY_CODES = {
+    "ישראל": "IL",
+    "צרפת": "FR",
+    'ארה"ב': "US",
+    "ארהב": "US",
+    "איטליה": "IT",
+    "גרמניה": "DE",
+    "בריטניה": "GB",
+    "אנגליה": "GB",
+    "ספרד": "ES",
+    "בלגיה": "BE",
+    "הולנד": "NL",
+    "קנדה": "CA",
+    "נורבגיה": "NO",
+    "שבדיה": "SE",
+    "דנמרק": "DK",
+    "פינלנד": "FI",
+    "איסלנד": "IS",
+    "אירלנד": "IE",
+    "אוסטריה": "AT",
+    "שוויץ": "CH",
+    "פולין": "PL",
+    "צ'כיה": "CZ",
+    "קרואטיה": "HR",
+    "רוסיה": "RU",
+    "יוון": "GR",  # noqa: RUF001 - Hebrew for Greece, every letter has a Latin lookalike
+    "גיאורגיה": "GE",
+    "לוקסמבורג": "LU",
+    "יפן": "JP",
+    "סין": "CN",  # noqa: RUF001 - Hebrew for China, every letter has a Latin lookalike
+    "טייוואן": "TW",
+    "טאיוואן": "TW",
+    "דרום קוריאה": "KR",
+    "הודו": "IN",
+    "איראן": "IR",
+    "טורקיה": "TR",
+    "מרוקו": "MA",
+    "מאוריטניה": "MR",
+    "חוף השנהב": "CI",
+    "ברזיל": "BR",
+    "ארגנטינה": "AR",
+    "מקסיקו": "MX",
+    "אוסטרליה": "AU",
+    "בהוטן": "BT",
+}
+
 CARD_SELECTOR = "div.slid"
 #: The ticketing host every live offer links to; a card without one is a
 #: leftover rather than something that can be rented today.
@@ -289,6 +340,16 @@ def _poster(node: Node) -> str | None:
     return url if url.startswith(("http://", "https://")) else None
 
 
+def _country_codes(country: str | None) -> str | None:
+    """ "ישראל/צרפת" as "IL,FR", dropping anything not recognised."""
+    codes: list[str] = []
+    for part in (country or "").split("/"):
+        code = _COUNTRY_CODES.get(part.strip())
+        if code and code not in codes:
+            codes.append(code)
+    return ",".join(codes) or None
+
+
 def _to_item(card: VodCard, price_minor: int | None) -> RawItem:
     """Convert one card into the item the pipeline stores.
 
@@ -307,6 +368,7 @@ def _to_item(card: VodCard, price_minor: int | None) -> RawItem:
         poster_url=card.poster_url,
         price_minor=None if free else price_minor,
         price_currency=None if free or price_minor is None else PRICE_CURRENCY,
+        origin_countries=_country_codes(card.country),
         extra={
             "order_url": card.order_url,
             "country": card.country,

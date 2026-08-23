@@ -2,11 +2,16 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  countryFlag,
+  countryName,
   currentSources,
   filtersToParams,
   formatPrice,
   formatScore,
+  languageName,
   offerState,
+  personName,
+  runtimeBand,
   paramsToFilters,
   scoreBand,
   sourceColorVar,
@@ -149,5 +154,97 @@ describe("filter round-tripping", () => {
       available: "current",
       sort: "score",
     });
+  });
+});
+
+describe("languageName", () => {
+  it("names a language in the reader's own language", () => {
+    assert.equal(languageName("he", "he"), "עברית");
+    assert.equal(languageName("he", "en"), "Hebrew");
+  });
+
+  it("falls back to the code rather than showing nothing", () => {
+    // Better a reader sees "zzz" than an empty row where a fact should be.
+    assert.equal(languageName("zzz", "en"), "zzz");
+  });
+
+  it("says nothing when there is no code", () => {
+    assert.equal(languageName(null), "");
+    assert.equal(languageName(""), "");
+  });
+});
+
+describe("countryName", () => {
+  it("names a country in the reader's own language", () => {
+    assert.equal(countryName("IL", "he"), "ישראל");
+    assert.equal(countryName("IL", "en"), "Israel");
+  });
+
+  it("says nothing when there is no code", () => {
+    assert.equal(countryName(undefined), "");
+  });
+});
+
+describe("personName", () => {
+  it("prefers the reader's language", () => {
+    const person = { name_he: "איילת מנחמי", name_en: "Ayelet Menachemi" };
+    assert.equal(personName(person, "he"), "איילת מנחמי");
+    assert.equal(personName(person, "en"), "Ayelet Menachemi");
+  });
+
+  it("falls back to the other language rather than leaving a name blank", () => {
+    // Most of the Israeli archive has Hebrew names only, and TMDB has Latin.
+    assert.equal(personName({ name_he: "איילת מנחמי" }, "en"), "איילת מנחמי");
+    assert.equal(personName({ name_en: "Jon Watts" }, "he"), "Jon Watts");
+  });
+
+  it("survives a missing person", () => {
+    assert.equal(personName(null, "he"), "");
+  });
+});
+
+describe("runtimeBand", () => {
+  it("bands a runtime the way film itself does", () => {
+    assert.equal(runtimeBand(72).key, "runtime.short");
+    assert.equal(runtimeBand(103).key, "runtime.standard");
+    assert.equal(runtimeBand(131).key, "runtime.long");
+    assert.equal(runtimeBand(195).key, "runtime.epic");
+  });
+
+  it("puts a boundary in the longer band", () => {
+    // 90 minutes is a standard feature, not a short one.
+    assert.equal(runtimeBand(89).key, "runtime.short");
+    assert.equal(runtimeBand(90).key, "runtime.standard");
+    assert.equal(runtimeBand(120).key, "runtime.long");
+    assert.equal(runtimeBand(150).key, "runtime.epic");
+  });
+
+  it("fills one more dot per band", () => {
+    assert.deepEqual([72, 103, 131, 195].map((m) => runtimeBand(m).level), [1, 2, 3, 4]);
+  });
+
+  it("has no band for a runtime we do not hold", () => {
+    // An unknown runtime must not read as "very short".
+    assert.equal(runtimeBand(0), null);
+    assert.equal(runtimeBand(null), null);
+    assert.equal(runtimeBand(undefined), null);
+    assert.equal(runtimeBand("120"), null);
+  });
+});
+
+describe("countryFlag", () => {
+  it("turns an ISO code into its flag", () => {
+    assert.equal(countryFlag("IL"), "🇮🇱");
+    assert.equal(countryFlag("FR"), "🇫🇷");
+  });
+
+  it("accepts a lowercase code", () => {
+    assert.equal(countryFlag("il"), "🇮🇱");
+  });
+
+  it("shows nothing rather than nonsense for a code that is not one", () => {
+    assert.equal(countryFlag("XYZ"), "");
+    assert.equal(countryFlag("I1"), "");
+    assert.equal(countryFlag(null), "");
   });
 });

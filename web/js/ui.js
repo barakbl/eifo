@@ -5,7 +5,8 @@
  * search terms, and neither is trusted markup.
  */
 
-import { formatScore, formatVotes, scoreBand, sourceColorVar } from "./format.js";
+import { currentSources, formatScore, formatVotes, scoreBand, sourceColorVar } from "./format.js";
+import { displayName } from "./i18n.js";
 
 /**
  * Create an element.
@@ -119,5 +120,38 @@ export function stateBlock({ title, body, actionLabel, onAction }) {
 export function skeletonCards(count = 12) {
   return Array.from({ length: count }, () =>
     el("li", {}, el("div", { class: "card" }, el("div", { class: "card__poster skeleton" }))),
+  );
+}
+
+
+/* How many posters load eagerly: roughly one screenful, so the grid paints
+ * without racing to fetch everything below the fold. */
+const EAGER_IMAGES = 12;
+
+/** One title in a grid: poster, name, year and score. */
+export function titleCard(title, language, index = 0) {
+  const name = displayName(title, language);
+  const eager = index < EAGER_IMAGES;
+  const poster = title.poster_url
+    ? el("img", {
+        src: title.poster_url,
+        alt: "",
+        decoding: "async",
+        loading: eager ? "eager" : "lazy",
+        fetchpriority: eager ? "high" : "low",
+      })
+    : el("div", { class: "card__placeholder", text: name.slice(0, 1), "aria-hidden": "true" });
+
+  return el(
+    "li",
+    {},
+    el("a", { class: "card", href: `#/title/${title.id}` }, [
+      el("div", { class: "card__poster" }, [poster, spine(currentSources(title.availability))]),
+      el("span", { class: "card__title", text: name }),
+      el("span", { class: "card__meta" }, [
+        title.year ? el("span", { text: String(title.year) }) : null,
+        scorePill(title.score),
+      ]),
+    ]),
   );
 }

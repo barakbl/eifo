@@ -15,18 +15,27 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import Select, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
-from eifo_api.converters import hydrate_titles, to_card, to_detail, to_genre, to_source
+from eifo_api.converters import (
+    hydrate_titles,
+    to_card,
+    to_detail,
+    to_genre,
+    to_person_detail,
+    to_source,
+)
 from eifo_api.deps import SessionDep
-from eifo_api.schemas import GenreOut, Page, SourceOut, TitleCard, TitleDetail
+from eifo_api.schemas import GenreOut, Page, PersonDetail, SourceOut, TitleCard, TitleDetail
 from eifo_api.search import apply_text_search
 from eifo_core.enums import FetchPhase, FetchStatus, TitleKind
 from eifo_core.models import (
     AggregateScore,
     Availability,
+    Credit,
     FetchRun,
     Genre,
+    Person,
     Source,
     Title,
     TitleGenre,
@@ -100,6 +109,43 @@ def get_title(title_id: int, session: SessionDep) -> TitleDetail:
     if not titles:
         raise HTTPException(status_code=404, detail=f"No title with id {title_id}")
     return to_detail(titles[0])
+
+
+@router.get("/people/{person_id}", response_model=PersonDetail, summary="One person's work")
+def get_person(person_id: int, session: SessionDep) -> PersonDetail:
+    """A person and everything the catalog credits them with.
+
+    One page per person rather than one per role: someone who directs and acts
+    is one human, and two unconnected pages would say otherwise. Credits come
+    back ordered by role - director, cinematographer, then cast - and newest
+    first within each. A title with no year sorts last: unknown is not the same
+    as ancient.
+    """
+    person = session.get(Person, person_id)
+    if person is None:
+        raise HTTPException(status_code=404, detail=f"No person with id {person_id}")
+
+    credits = list(
+        session.scalars(
+            select(Credit)
+            .where(Credit.person_id == person.id)
+            .join(Credit.title)
+            .order_by(Title.year.is_(None), Title.year.desc(), Title.id)
+            .options(selectinload(Credit.title))
+        ).all()
+    )
+
+    # One hydrate for every credited title, so a filmography costs a couple of
+    # round trips rather than one per film.
+    hydrated = {
+        title.id: title
+        for title in hydrate_titles(session, [credit.title_id for credit in credits])
+    }
+    for credit in credits:
+        if credit.title_id in hydrated:
+            credit.title = hydrated[credit.title_id]
+
+    return to_person_detail(person, credits)
 
 
 @router.get("/sources", response_model=list[SourceOut], summary="Every tracked service")

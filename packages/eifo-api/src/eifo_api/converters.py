@@ -14,7 +14,11 @@ from sqlalchemy.orm import Session, selectinload
 from eifo_api.schemas import (
     AggregateOut,
     AvailabilityOut,
+    CreditOut,
     GenreOut,
+    PersonCredit,
+    PersonDetail,
+    PersonRef,
     RatingOut,
     SourceOut,
     TitleCard,
@@ -22,12 +26,14 @@ from eifo_api.schemas import (
     UserItemOut,
     UserOut,
 )
-from eifo_core.enums import RatingProvider
+from eifo_core.enums import CreditRole, RatingProvider
 from eifo_core.models import (
     AggregateScore,
     Availability,
+    Credit,
     ExternalRating,
     Genre,
+    Person,
     Source,
     Title,
     User,
@@ -145,8 +151,98 @@ def to_detail(title: Title) -> TitleDetail:
         seasons=title.seasons,
         status=title.status,
         backdrop_url=image_url(title.backdrop_path),
+        original_language=title.original_language,
+        origin_countries=split_codes(title.origin_countries),
+        credits=[
+            to_credit(credit) for credit in sort_credits(preferred_credits(list(title.credits)))
+        ],
         ratings=[to_rating(rating) for rating in title.ratings],
         aggregate=to_aggregate(title.aggregate),
+    )
+
+
+#: How credits read on a page: who made it, then who shot it, then who is in
+#: it. Storage order is alphabetical by role, which would open on the cast.
+_ROLE_ORDER = {
+    CreditRole.DIRECTOR: 0,
+    CreditRole.CINEMATOGRAPHER: 1,
+    CreditRole.CAST: 2,
+}
+
+
+#: Who to believe when two sources credit the same role. A Hebrew name scraped
+#: from an archive and TMDB's Latin one are the same human, and listing both
+#: would show one director twice under two spellings - so where TMDB has spoken
+#: about a role, it wins. A role TMDB says nothing about keeps what the
+#: catalogue knew, which for most Israeli cinema is the only credit there is.
+TMDB_SOURCE = "tmdb"
+
+
+def preferred_credits(credits: list[Credit]) -> list[Credit]:
+    """One source per role, TMDB first (see :data:`TMDB_SOURCE`)."""
+    by_role: dict[CreditRole, list[Credit]] = {}
+    for credit in credits:
+        by_role.setdefault(credit.role, []).append(credit)
+
+    kept: list[Credit] = []
+    for entries in by_role.values():
+        canonical = [credit for credit in entries if credit.source == TMDB_SOURCE]
+        kept.extend(canonical or entries)
+    return kept
+
+
+def sort_credits(credits: list[Credit]) -> list[Credit]:
+    """Crew first, then cast in billing order."""
+    return sorted(
+        credits,
+        key=lambda credit: (
+            _ROLE_ORDER.get(credit.role, len(_ROLE_ORDER)),
+            credit.billing_order if credit.billing_order is not None else 1_000,
+            credit.id,
+        ),
+    )
+
+
+def split_codes(codes: str | None) -> list[str]:
+    """ "IL,FR" as ["IL", "FR"], and an absent value as no countries at all."""
+    return [code.strip() for code in (codes or "").split(",") if code.strip()]
+
+
+def to_person_ref(person: Person) -> PersonRef:
+    return PersonRef(
+        id=person.id,
+        name_he=person.name_he,
+        name_en=person.name_en,
+        profile_url=person.profile_source_url,
+    )
+
+
+def to_credit(credit: Credit) -> CreditOut:
+    return CreditOut(
+        role=credit.role,
+        person=to_person_ref(credit.person),
+        character=credit.character,
+    )
+
+
+def to_person_detail(person: Person, credits: list[Credit]) -> PersonDetail:
+    """A person and their whole body of work.
+
+    Ordered by role - director, cinematographer, then cast - so the page opens
+    on what they are best known for making rather than on a bit part. The
+    caller has already ordered each role's titles newest first.
+    """
+    ordered = sorted(credits, key=lambda credit: _ROLE_ORDER.get(credit.role, len(_ROLE_ORDER)))
+    return PersonDetail(
+        id=person.id,
+        name_he=person.name_he,
+        name_en=person.name_en,
+        profile_url=person.profile_source_url,
+        tmdb_id=person.tmdb_id,
+        credits=[
+            PersonCredit(role=credit.role, character=credit.character, title=to_card(credit.title))
+            for credit in ordered
+        ],
     )
 
 
@@ -197,6 +293,7 @@ def hydrate_titles(session: Session, title_ids: list[int]) -> list[Title]:
             selectinload(Title.genres),
             selectinload(Title.ratings),
             selectinload(Title.aggregate),
+            selectinload(Title.credits).selectinload(Credit.person),
         )
     ).all()
 

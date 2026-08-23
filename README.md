@@ -366,15 +366,17 @@ of the pull request. That is the whole formality - there is no CLA.
 Eifo displays data it does not own, and the licence in this repository covers the **code
 only**. If you run your own instance, the obligations are yours:
 
-- **TMDB** - metadata and artwork. Requires your own API key and carries an attribution
-  requirement. This product uses the TMDB API but is not endorsed or certified by TMDB.
+- **TMDB** - metadata, artwork and cast/crew credits. Requires your own API key and carries
+  an attribution requirement. This product uses the TMDB API but is not endorsed or
+  certified by TMDB.
 - **JustWatch** - streaming availability, reached via TMDB's provider data, with an
   attribution requirement.
 - **IMDb** - ratings come from the official datasets, which are licensed for
   **personal and non-commercial use only**. No scraping.
 - **Rotten Tomatoes**, **Seret** and the streaming services - scraped politely: one
   identifying user agent, `robots.txt` honoured, rate-limited, and no catalog is ever
-  redistributed as a bulk download.
+  redistributed as a bulk download. The Israeli Film Archive is also where the director
+  credits on its own films come from; each credit records the source that supplied it.
 
 The API serves these credits from `GET /api/v1/meta` and the client displays them. **Do
 not remove them.** If you intend to run this commercially, don't - the data licences above

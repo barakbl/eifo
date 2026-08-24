@@ -306,6 +306,38 @@ class TestFetchRuns:
 
         assert session.scalars(select(FetchRun)).one().status is FetchStatus.FAILED
 
+    def test_a_failure_records_what_went_wrong(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        """A row saying only that it failed leaves the one question anyone will ask."""
+        run_sync(
+            session, settings, sync_ctx, plugin=StaticPlugin(error=RuntimeError("browser blocked"))
+        )
+
+        errors = session.scalars(select(FetchRun)).one().stats["errors"]
+        assert errors == ["fatal: RuntimeError: browser blocked"]
+
+    def test_an_exhausted_error_budget_says_so_too(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        run_sync(
+            session,
+            settings,
+            sync_ctx,
+            plugin=StaticPlugin(error=TooManyErrorsError(INFO.key, 25)),
+        )
+
+        errors = session.scalars(select(FetchRun)).one().stats["errors"]
+        assert any("TooManyErrorsError" in entry for entry in errors)
+
+    def test_one_row_per_sync_not_one_per_outcome(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        """The row is opened at the start and closed at the end, not written twice."""
+        run_sync(session, settings, sync_ctx)
+
+        assert len(list(session.scalars(select(FetchRun)).all())) == 1
+
     def test_an_exhausted_error_budget_fails_the_source(
         self, session: Session, settings: Settings, sync_ctx: FetchContext
     ) -> None:

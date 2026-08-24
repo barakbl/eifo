@@ -21,7 +21,6 @@ from eifo_core.models import (
     Availability,
     EnrichAttempt,
     ExternalRating,
-    FetchRun,
     Genre,
     Title,
     TitleGenre,
@@ -30,10 +29,24 @@ from eifo_core.settings import Settings
 from eifo_core.types import utcnow
 from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
 from eifo_fetcher.people import apply_credits
+from eifo_fetcher.runs import close_run, open_run
 from eifo_fetcher.scores import RatingInput, aggregate, normalise
 from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError
 
 logger = logging.getLogger("eifo.fetch.enrich")
+
+#: Titles enriched between commits.
+#:
+#: SQLite allows one writer at a time, and every title here means network calls.
+#: One transaction for the batch held the write lock for the whole run - up to
+#: twenty-nine minutes, against a thirty-second busy timeout - so anything else
+#: touching the database during a nightly enrich waited half a minute and then
+#: failed. Committing as we go bounds that, and bounds what a crash loses.
+COMMIT_EVERY = 25
+
+#: Aggregates recomputed between commits. Cheaper per row than enrichment -
+#: no network - so a larger batch still keeps each lock short.
+AGGREGATE_COMMIT_EVERY = 200
 
 #: Metadata fields an enricher may fill. Anything else in a patch is ignored,
 #: so a provider cannot quietly write to columns it has no business setting.
@@ -212,9 +225,11 @@ def enrich_titles(
     started_at = utcnow()
     tally = EnrichResultTally()
     status = FetchStatus.OK
+    run = open_run(session, phase=FetchPhase.ENRICH, started_at=started_at)
+    fatal: str | None = None
 
     try:
-        for title in titles_due(session, settings, force=force, limit=limit):
+        for index, title in enumerate(titles_due(session, settings, force=force, limit=limit), 1):
             tally.titles_seen += 1
             view = _view_of(title)
             written = 0
@@ -236,24 +251,25 @@ def enrich_titles(
                 outcome=_outcome_of(title, written=written, errored=errored),
             )
             session.flush()
+            if index % COMMIT_EVERY == 0:
+                session.commit()
     except TooManyErrorsError as exc:
         logger.error("%s", exc)
         status = FetchStatus.FAILED
-    except Exception:
+        fatal = f"{type(exc).__name__}: {exc}"
+        session.rollback()
+    except Exception as exc:
         logger.exception("enrichment failed")
         status = FetchStatus.FAILED
+        fatal = f"{type(exc).__name__}: {exc}"
+        # Without this the session is left needing one, and recording the
+        # failure would itself raise - losing the row that explains the run.
+        session.rollback()
 
     tally.errors = list(ctx.errors)
-    session.add(
-        FetchRun(
-            phase=FetchPhase.ENRICH,
-            started_at=started_at,
-            finished_at=utcnow(),
-            status=status,
-            stats=tally.as_stats(),
-        )
-    )
-    session.commit()
+    if fatal is not None:
+        tally.errors.append(f"fatal: {fatal}")
+    close_run(session, run, status=status, stats=tally.as_stats())
     return tally
 
 
@@ -456,10 +472,14 @@ def recompute_all_aggregates(session: Session, settings: Settings) -> int:
         for (title_id,) in session.execute(select(ExternalRating.title_id).distinct()).all()
     ]
 
-    for title_id in rated_ids:
+    for index, title_id in enumerate(rated_ids, 1):
         title = session.get(Title, title_id)
         if title is not None:
             _recompute(session, title, settings, tally)
+        # Thousands of titles in one transaction is the same write-lock problem
+        # as the enrich loop, just after the IMDb pass rather than during it.
+        if index % AGGREGATE_COMMIT_EVERY == 0:
+            session.commit()
 
     session.commit()
     return tally.aggregates_computed

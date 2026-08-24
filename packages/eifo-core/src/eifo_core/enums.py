@@ -104,9 +104,15 @@ class FetchStatus(StrEnum):
     rather than treated as a mass catalog removal, so no sweep happens.
     """
 
+    #: Still going. Written when the phase starts, so a run that never reaches
+    #: an ending is distinguishable from a night when nothing was scheduled.
+    RUNNING = "running"
     OK = "ok"
     FAILED = "failed"
     ABORTED_SUSPICIOUS = "aborted_suspicious"
+    #: Found still RUNNING by a later fetcher: the process that opened it died
+    #: without saying how it went. An OOM, a power cut, a closed laptop.
+    CRASHED = "crashed"
 
 
 class EnrichOutcome(StrEnum):

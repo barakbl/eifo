@@ -26,6 +26,7 @@ from eifo_core.models import Availability, FetchRun, Source, Title
 from eifo_core.types import utcnow
 from eifo_fetcher.match import MatchStats, TitleMatcher
 from eifo_fetcher.people import apply_credits
+from eifo_fetcher.runs import close_run, open_run
 from eifo_fetcher.sources.base import (
     FetchContext,
     RawItem,
@@ -104,25 +105,36 @@ def sync_source(
     source = upsert_source(session, info)
     session.flush()
 
+    # Opened before any work, so a sync that dies mid-flight leaves a row
+    # saying it started rather than no row at all.
+    run = open_run(session, phase=FetchPhase.SYNC, source_key=info.key, started_at=started_at)
     result = SyncResult(source_key=info.key, status=FetchStatus.OK)
     matcher = TitleMatcher(session, tmdb=tmdb, stats=MatchStats())
 
+    fatal: str | None = None
     try:
         stream = items if items is not None else plugin.fetch(ctx)
         _ingest(session, stream, source, matcher, result, started_at)
     except TooManyErrorsError as exc:
         logger.error("%s", exc)
         result.status = FetchStatus.FAILED
+        fatal = f"{type(exc).__name__}: {exc}"
         session.rollback()
-    except Exception:
+    except Exception as exc:
         logger.exception("source %r failed", info.key)
         result.status = FetchStatus.FAILED
+        # Whatever ended the run goes into the row. Without this a failed sync
+        # records errors: [] - it says that it failed and nothing about why,
+        # which is the one question anyone reading it will have.
+        fatal = f"{type(exc).__name__}: {exc}"
         # A failure mid-flush leaves the session needing a rollback; without one
         # even recording the failure would raise, turning a bad source into a
         # crashed run.
         session.rollback()
 
     result.errors = list(ctx.errors)
+    if fatal is not None:
+        result.errors.append(f"fatal: {fatal}")
     result.matched_by = matcher.stats.as_dict()
 
     if result.status is FetchStatus.OK and _looks_truncated(session, info.key, result.items_seen):
@@ -138,8 +150,7 @@ def sync_source(
     if result.status is FetchStatus.OK:
         result.retired = sweep_source(session, source, run_started_at=started_at)
 
-    _record_run(session, result, phase=FetchPhase.SYNC, started_at=started_at)
-    session.commit()
+    close_run(session, run, status=result.status, stats=result.as_stats())
     return result
 
 
@@ -332,25 +343,6 @@ def _looks_truncated(session: Session, source_key: str, items_seen: int) -> bool
     if baseline < VOLUME_GUARD_MIN_ITEMS:
         return False
     return items_seen < baseline * VOLUME_GUARD_RATIO
-
-
-def _record_run(
-    session: Session,
-    result: SyncResult,
-    *,
-    phase: FetchPhase,
-    started_at: dt.datetime,
-) -> None:
-    session.add(
-        FetchRun(
-            source_key=result.source_key,
-            phase=phase,
-            started_at=started_at,
-            finished_at=utcnow(),
-            status=result.status,
-            stats=result.as_stats(),
-        )
-    )
 
 
 def _title_count(session: Session) -> int:

@@ -30,6 +30,7 @@ from eifo_fetcher.http import HttpClient
 from eifo_fetcher.lock import AlreadyRunningError, single_flight
 from eifo_fetcher.registry import declared_sources, discover_plugins
 from eifo_fetcher.runner import enrich_all, fetch_images, sync_all
+from eifo_fetcher.runs import close_abandoned_runs
 from eifo_fetcher.sources.base import SourceInfo
 
 EXIT_OK = 0
@@ -271,7 +272,10 @@ def _database(settings: Settings) -> Iterator[sessionmaker[Session]]:
     try:
         require_schema(engine, settings.db_url)
         ensure_search_triggers(engine)
-        yield make_session_factory(engine)
+        session_factory = make_session_factory(engine)
+        with session_factory() as session:
+            close_abandoned_runs(session)
+        yield session_factory
     finally:
         engine.dispose()
 

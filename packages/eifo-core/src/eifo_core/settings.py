@@ -93,6 +93,19 @@ class EnrichConfig(BaseModel):
     enabled: list[str] = Field(default_factory=list)
 
 
+class TmdbConfig(BaseModel):
+    """How hard to lean on the TMDB API.
+
+    Separate from the scraped sources' own limits, which exist to be polite to
+    somebody's website. This one is an API meant to be called, and the number
+    here sets the pace of the whole nightly run.
+    """
+
+    #: Requests per second, to both the API and the image CDN. See
+    #: ``eifo_fetcher.tmdb.DEFAULT_RATE_LIMIT_RPS`` for why it is what it is.
+    rate_limit_rps: float = 20.0
+
+
 class ScheduleConfig(BaseModel):
     """Daemon schedule; ignored when the phases are driven by system cron."""
 
@@ -151,6 +164,7 @@ class Settings(BaseSettings):
 
     sources: dict[str, SourceConfig] = Field(default_factory=dict)
     scores: ScoresConfig = Field(default_factory=ScoresConfig)
+    tmdb: TmdbConfig = Field(default_factory=TmdbConfig)
     enrich: EnrichConfig = Field(default_factory=EnrichConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
 

@@ -78,6 +78,15 @@ class EnrichConfig(BaseModel):
     hot_refresh_days: int = 3
     #: Titles per run, so a scheduled enrich has a bounded runtime.
     batch_size: int = 500
+    #: How long to leave a title alone after nobody could rate it. Doubles with
+    #: each consecutive fruitless attempt: most of a catalog this local will
+    #: never carry a score, and asking every month costs the whole batch.
+    retry_days: int = 30
+    #: The same, after a provider failed rather than came back empty - that is
+    #: the provider's problem and usually passes, so it is retried sooner.
+    retry_error_days: int = 1
+    #: Ceiling on those doublings, so nothing is written off for good.
+    retry_max_days: int = 365
     #: Providers switched off, by enricher key.
     disabled: list[str] = Field(default_factory=list)
     #: Providers switched on that are otherwise off by default.

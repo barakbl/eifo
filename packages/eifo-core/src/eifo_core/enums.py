@@ -107,3 +107,21 @@ class FetchStatus(StrEnum):
     OK = "ok"
     FAILED = "failed"
     ABORTED_SUSPICIOUS = "aborted_suspicious"
+
+
+class EnrichOutcome(StrEnum):
+    """What came of putting one title through the enrichers.
+
+    The distinction that matters is between the three ways of coming back
+    empty-handed, because they deserve different waits. ``NO_MATCH`` is "we do
+    not know which title this is" - no provider can be asked until matching
+    improves. ``NO_DATA`` is "we know exactly which title this is, and nobody
+    has rated it" - true of most of a catalog this local, and worth asking
+    again only occasionally. ``ERROR`` is the provider's problem, not the
+    title's, so it is the one worth retrying soon.
+    """
+
+    OK = "ok"
+    NO_DATA = "no_data"
+    NO_MATCH = "no_match"
+    ERROR = "error"

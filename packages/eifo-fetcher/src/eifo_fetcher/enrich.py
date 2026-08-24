@@ -12,13 +12,14 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from eifo_core.enums import FetchPhase, FetchStatus, RatingProvider
+from eifo_core.enums import EnrichOutcome, FetchPhase, FetchStatus, RatingProvider
 from eifo_core.models import (
     AggregateScore,
     Availability,
+    EnrichAttempt,
     ExternalRating,
     FetchRun,
     Genre,
@@ -85,50 +86,117 @@ def titles_due(
     force: bool = False,
     limit: int | None = None,
 ) -> list[Title]:
-    """Titles whose ratings are missing or stale.
+    """Titles it is worth putting through the enrichers now.
 
-    Titles currently available on some service are refreshed more often than
-    ones nothing carries: those are the ones people are actually looking at.
+    Least recently attempted first, with never attempted counting as infinitely
+    long ago, so a run always advances instead of re-reading the head of the
+    catalog. When a title next falls due is decided at the end of its last
+    attempt: a rated one comes back on the refresh schedule, and one nobody
+    could rate waits progressively longer.
     """
     batch = limit if limit is not None else settings.enrich.batch_size
 
     if force:
         return list(session.scalars(select(Title).order_by(Title.id).limit(batch)).all())
 
+    statement = (
+        select(Title)
+        .outerjoin(EnrichAttempt, EnrichAttempt.title_id == Title.id)
+        .where(or_(EnrichAttempt.title_id.is_(None), EnrichAttempt.due_at <= utcnow()))
+        # Never attempted sorts first: is_(None) is true there, and true is the
+        # high value, so descending puts it at the front. Spelled out rather
+        # than left to the dialect, which may sort NULLs either way.
+        .order_by(
+            EnrichAttempt.attempted_at.is_(None).desc(),
+            EnrichAttempt.attempted_at,
+            Title.id,
+        )
+        .limit(batch)
+    )
+    return list(session.scalars(statement).all())
+
+
+def _record_attempt(
+    session: Session,
+    title: Title,
+    settings: Settings,
+    *,
+    outcome: EnrichOutcome,
+) -> None:
+    """Write down that this title was tried, and when it is worth trying again."""
     now = utcnow()
-    cold_cutoff = now - dt.timedelta(days=settings.enrich.refresh_days)
-    hot_cutoff = now - dt.timedelta(days=settings.enrich.hot_refresh_days)
+    attempt = session.get(EnrichAttempt, title.id)
+    previous = attempt.fruitless if attempt is not None else 0
+    fruitless = 0 if outcome is EnrichOutcome.OK else previous + 1
+    due_at = now + _wait_after(session, title, settings, outcome=outcome, fruitless=fruitless)
 
-    hot_ids = {
-        title_id
-        for (title_id,) in session.execute(
-            select(Availability.title_id).where(Availability.is_current.is_(True)).distinct()
-        ).all()
-    }
-    freshest = _freshest_rating_by_title(session)
-
-    due: list[Title] = []
-    for title in session.scalars(select(Title).order_by(Title.id)).all():
-        fetched_at = freshest.get(title.id)
-        cutoff = hot_cutoff if title.id in hot_ids else cold_cutoff
-        if fetched_at is None or fetched_at < cutoff:
-            due.append(title)
-        if len(due) >= batch:
-            break
-    return due
-
-
-def _freshest_rating_by_title(session: Session) -> dict[int, dt.datetime]:
-    """When each title was last enriched, by its most recent rating."""
-    return {
-        title_id: fetched_at
-        for title_id, fetched_at in session.execute(
-            select(ExternalRating.title_id, func.max(ExternalRating.fetched_at)).group_by(
-                ExternalRating.title_id
+    if attempt is None:
+        session.add(
+            EnrichAttempt(
+                title_id=title.id,
+                attempted_at=now,
+                outcome=outcome,
+                fruitless=fruitless,
+                due_at=due_at,
             )
-        ).all()
-        if fetched_at is not None
-    }
+        )
+        return
+
+    attempt.attempted_at = now
+    attempt.outcome = outcome
+    attempt.fruitless = fruitless
+    attempt.due_at = due_at
+
+
+def _wait_after(
+    session: Session,
+    title: Title,
+    settings: Settings,
+    *,
+    outcome: EnrichOutcome,
+    fruitless: int,
+) -> dt.timedelta:
+    """How long to leave a title alone after this outcome.
+
+    A title that was rated comes back on the ordinary refresh schedule, sooner
+    if some service currently carries it, since that is the one somebody may be
+    looking at tonight. Everything else backs off, doubling with each
+    consecutive empty-handed attempt, so the titles no provider covers cannot
+    crowd out the ones worth asking about.
+    """
+    enrich = settings.enrich
+    if outcome is EnrichOutcome.OK:
+        fresher = _is_available(session, title.id)
+        return dt.timedelta(days=enrich.hot_refresh_days if fresher else enrich.refresh_days)
+
+    base = enrich.retry_error_days if outcome is EnrichOutcome.ERROR else enrich.retry_days
+    return dt.timedelta(days=min(base * 2 ** max(fruitless - 1, 0), enrich.retry_max_days))
+
+
+def _is_available(session: Session, title_id: int) -> bool:
+    """Whether any service currently carries this title."""
+    found = session.scalar(
+        select(Availability.title_id)
+        .where(Availability.title_id == title_id, Availability.is_current.is_(True))
+        .limit(1)
+    )
+    return found is not None
+
+
+def _outcome_of(title: Title, *, written: int, errored: bool) -> EnrichOutcome:
+    """Read the outcome off what one title's pass through the enrichers produced.
+
+    The order matters: a rating written is a success whatever else went wrong,
+    and a provider failure says nothing about whether the title is rateable, so
+    it outranks the two empty-handed verdicts below it.
+    """
+    if written:
+        return EnrichOutcome.OK
+    if errored:
+        return EnrichOutcome.ERROR
+    if title.tmdb_id is not None or title.imdb_id is not None:
+        return EnrichOutcome.NO_DATA
+    return EnrichOutcome.NO_MATCH
 
 
 def enrich_titles(
@@ -149,9 +217,24 @@ def enrich_titles(
         for title in titles_due(session, settings, force=force, limit=limit):
             tally.titles_seen += 1
             view = _view_of(title)
+            written = 0
+            errored = False
             for enricher in enrichers:
-                _run_one(session, enricher, title, view, ctx, tally)
+                found = _run_one(session, enricher, title, view, ctx, tally)
+                if found is None:
+                    errored = True
+                else:
+                    written += found
             _recompute(session, title, settings, tally)
+            # Before the flush, so a title that yielded nothing still says so:
+            # the queue has to learn from the attempts that found nothing, or
+            # it spends every run on the same titles.
+            _record_attempt(
+                session,
+                title,
+                settings,
+                outcome=_outcome_of(title, written=written, errored=errored),
+            )
             session.flush()
     except TooManyErrorsError as exc:
         logger.error("%s", exc)
@@ -181,19 +264,25 @@ def _run_one(
     view: TitleView,
     ctx: FetchContext,
     tally: EnrichResultTally,
-) -> None:
-    """Apply one enricher to one title, tolerating provider failures."""
+) -> int | None:
+    """Apply one enricher to one title, tolerating provider failures.
+
+    Returns:
+        How many ratings it wrote, or None if the provider itself failed - a
+        distinction the caller needs, because "nobody rates this title" and
+        "this provider is down" deserve different waits before trying again.
+    """
     try:
         result = enricher.enrich(view, ctx)
     except TooManyErrorsError:
         raise
     except Exception as exc:
         ctx.record_error(f"{enricher.key} failed for title {title.id}", exc=exc)
-        return
+        return None
 
     if result is None or result.is_empty:
         # A provider having nothing on a title is ordinary, not a failure.
-        return
+        return 0
 
     ctx.record_success()
     written = _store_ratings(session, title, result.ratings, ctx)
@@ -202,6 +291,7 @@ def _run_one(
 
     if _apply_patch(session, title, result, source=enricher.key):
         tally.metadata_updated += 1
+    return written
 
 
 def _store_ratings(

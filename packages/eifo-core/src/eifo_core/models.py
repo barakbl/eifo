@@ -29,6 +29,7 @@ from sqlalchemy.types import JSON
 from eifo_core.enums import (
     AuthProvider,
     CreditRole,
+    EnrichOutcome,
     FetchPhase,
     FetchStatus,
     ItemStatus,
@@ -131,6 +132,11 @@ class Title(TimestampMixin, Base):
         cascade="all, delete-orphan",
     )
     aggregate: Mapped[AggregateScore | None] = relationship(
+        back_populates="title",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    enrich_attempt: Mapped[EnrichAttempt | None] = relationship(
         back_populates="title",
         cascade="all, delete-orphan",
         uselist=False,
@@ -371,6 +377,42 @@ class AggregateScore(Base):
 
     def __repr__(self) -> str:
         return f"<AggregateScore title={self.title_id} score={self.score}>"
+
+
+class EnrichAttempt(Base):
+    """When a title was last put through the enrichers, and what came of it.
+
+    Enrichment used to work out what was due from the ratings it had already
+    written, which quietly meant "anything nobody has ever rated is due", and a
+    title no provider carries is exactly that, permanently. The lowest-numbered
+    such titles filled every batch and were asked about again the next night,
+    for as long as that lasted - so the queue recorded successes and never
+    learned from the failures.
+
+    One row per title, rewritten on each attempt: the attempt is the fact worth
+    keeping, not its history.
+    """
+
+    __tablename__ = "enrich_attempts"
+    __table_args__ = (Index("ix_enrich_attempts_due_at", "due_at"),)
+
+    title_id: Mapped[int] = mapped_column(
+        ForeignKey("titles.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    attempted_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+    outcome: Mapped[EnrichOutcome] = mapped_column(_enum(EnrichOutcome, "enrich_outcome"))
+    #: Consecutive attempts that produced no rating; back to zero on one that
+    #: did. Each one earns a longer wait, so a title nobody will ever rate
+    #: stops costing a slot every month.
+    fruitless: Mapped[int] = mapped_column(default=0)
+    #: Not to be attempted again before this.
+    due_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+
+    title: Mapped[Title] = relationship(back_populates="enrich_attempt")
+
+    def __repr__(self) -> str:
+        return f"<EnrichAttempt title={self.title_id} {self.outcome} due={self.due_at}>"
 
 
 #: Length limits shared by the schema and the API's request validation, so the

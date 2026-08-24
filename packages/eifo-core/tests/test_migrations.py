@@ -8,7 +8,7 @@ import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import Engine, create_engine, inspect
+from sqlalchemy import Engine, create_engine, inspect, text
 
 from eifo_core.migrate import (
     alembic_config,
@@ -24,6 +24,7 @@ from eifo_core.models import Base
 
 EXPECTED_TABLES = {
     "availability",
+    "enrich_attempts",
     "fetch_runs",
     "genres",
     "match_reviews",
@@ -89,6 +90,73 @@ def test_migrated_schema_matches_the_models(tmp_path: Path) -> None:
         engine.dispose()
 
     assert diff == [], f"models and migrations have diverged: {diff}"
+
+
+class TestEnrichAttemptBackfill:
+    """0009 has to take existing ratings as evidence of a past attempt.
+
+    Without that, every already-rated title would look never attempted, and
+    the first run after the upgrade would re-read the whole catalog instead of
+    the titles that have genuinely never been tried.
+    """
+
+    def _seed(self, db_url: str) -> Engine:
+        upgrade(db_url, "0008_fts_triggers")
+        engine = create_engine(db_url)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO titles (id, type, name_en, created_at, updated_at) VALUES "
+                    "(1, 'movie', 'Rated', '2026-08-01 00:00:00', '2026-08-01 00:00:00'), "
+                    "(2, 'movie', 'Unrated', '2026-08-01 00:00:00', '2026-08-01 00:00:00')"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO external_ratings "
+                    "(title_id, provider, score_raw, score_normalized, fetched_at) VALUES "
+                    "(1, 'imdb', 8.4, 84, '2026-08-10 12:00:00'), "
+                    "(1, 'tmdb', 7.9, 79, '2026-08-12 12:00:00')"
+                )
+            )
+        return engine
+
+    def test_a_rated_title_is_dated_by_its_freshest_rating(self, tmp_path: Path) -> None:
+        db_url = f"sqlite:///{tmp_path / 'backfill.db'}"
+        engine = self._seed(db_url)
+        try:
+            upgrade(db_url)
+
+            with engine.connect() as connection:
+                row = connection.execute(
+                    text(
+                        "SELECT attempted_at, outcome, fruitless, due_at "
+                        "FROM enrich_attempts WHERE title_id = 1"
+                    )
+                ).one()
+            attempted_at, outcome, fruitless, due_at = row
+            assert str(attempted_at).startswith("2026-08-12")
+            assert outcome == "ok"
+            assert fruitless == 0
+            # Immediately eligible: never-attempted titles still sort ahead of it.
+            assert due_at == attempted_at
+        finally:
+            engine.dispose()
+
+    def test_a_title_that_was_never_rated_gets_no_row(self, tmp_path: Path) -> None:
+        """It has to stay 'never attempted' - that is what puts it at the front."""
+        db_url = f"sqlite:///{tmp_path / 'backfill-unrated.db'}"
+        engine = self._seed(db_url)
+        try:
+            upgrade(db_url)
+
+            with engine.connect() as connection:
+                found = connection.execute(
+                    text("SELECT count(*) FROM enrich_attempts WHERE title_id = 2")
+                ).scalar()
+            assert found == 0
+        finally:
+            engine.dispose()
 
 
 def test_downgrade_removes_the_schema(tmp_path: Path) -> None:

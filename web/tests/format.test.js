@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  DEFAULT_FILTERS,
   countryFlag,
   countryName,
   currentSources,
@@ -136,6 +137,7 @@ describe("filter round-tripping", () => {
 
   it("survives a round trip", () => {
     const filters = {
+      ...DEFAULT_FILTERS,
       q: "פאודה",
       sources: ["mako", "netflix_il"],
       type: "series",
@@ -146,14 +148,27 @@ describe("filter round-tripping", () => {
     assert.deepEqual(paramsToFilters(filtersToParams(filters).toString()), filters);
   });
 
+  it("carries the advanced filters too, so a filtered view is shareable", () => {
+    const filters = {
+      ...DEFAULT_FILTERS,
+      yearMin: "1980",
+      yearMax: "1989",
+      genres: ["18", "35"],
+      scoreMin: "70",
+    };
+
+    assert.deepEqual(paramsToFilters(filtersToParams(filters).toString()), filters);
+  });
+
+  it("names the year parameters the way the API does", () => {
+    const params = filtersToParams({ ...DEFAULT_FILTERS, yearMin: "1980", yearMax: "1989" });
+
+    assert.equal(params.get("year_min"), "1980");
+    assert.equal(params.get("year_max"), "1989");
+  });
+
   it("falls back to sensible defaults for an empty query string", () => {
-    assert.deepEqual(paramsToFilters(""), {
-      q: "",
-      sources: [],
-      type: "",
-      available: "current",
-      sort: "score",
-    });
+    assert.deepEqual(paramsToFilters(""), DEFAULT_FILTERS);
   });
 });
 

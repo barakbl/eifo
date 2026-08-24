@@ -382,6 +382,85 @@ img {
   font-style: italic;
 }
 
+/* Search-as-you-type, under the header box. */
+.suggest {
+  position: absolute;
+  inset-block-start: calc(100% + var(--space-1));
+  inset-inline: 0;
+  z-index: 40;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  max-block-size: min(26rem, 70vh);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+
+.suggest[hidden] {
+  display: none;
+}
+
+.suggest__group {
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.suggest__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.suggest__option:hover,
+.suggest__option--active {
+  background: var(--surface);
+}
+
+.suggest__poster {
+  flex: none;
+  inline-size: 1.75rem;
+  block-size: 2.5rem;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+}
+
+.suggest__poster--person {
+  border-radius: 50%;
+  block-size: 1.75rem;
+}
+
+.suggest__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggest__meta {
+  flex: none;
+  font-family: var(--font-data);
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+}
+
+.suggest__empty {
+  padding: var(--space-3) var(--space-2);
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+}
+
 /* Reverse the sort. Square so it reads as a button, not a truncated select. */
 .control--order {
   inline-size: 2.25rem;

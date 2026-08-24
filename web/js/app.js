@@ -6,6 +6,7 @@ import { DEFAULT_LANGUAGE, directionOf, isSupported, translator } from "./i18n.j
 import { createItemStore } from "./items.js";
 import { createRouter } from "./router.js";
 import { createStore, debounce } from "./store.js";
+import { createSuggest } from "./suggest.js";
 import { el, replace, stateBlock } from "./ui.js";
 import { createHomeView } from "./views/home.js";
 import { createMyListView } from "./views/mylist.js";
@@ -126,6 +127,7 @@ function buildHeader({ router }) {
       el("div", { class: "search" }, [
         input,
         el("kbd", { class: "search__hint", text: t("search.shortcut"), "aria-hidden": "true" }),
+        createSuggest({ input, router, app }).node,
       ]),
       el("div", { class: "header__actions" }, [
         el("button", {

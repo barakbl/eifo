@@ -109,6 +109,10 @@ const STRINGS = {
     "auth.unavailable": "התחברות אינה זמינה בהתקנה הזו.",
     "auth.menu": "תפריט חשבון",
 
+    "suggest.titles": "כותרים",
+    "suggest.people": "אנשים",
+    "suggest.credits": "{count} כותרים",
+    "suggest.empty": "אין הצעות",
     "filters.order.desc": "מהגבוה לנמוך — לחצו כדי להפוך",
     "filters.order.asc": "מהנמוך לגבוה — לחצו כדי להפוך",
     "filters.more": "עוד מסננים",

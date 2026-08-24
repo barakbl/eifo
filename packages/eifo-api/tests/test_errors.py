@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, text
 from eifo_api.app import create_app
 from eifo_api.errors import PROBLEM_MEDIA_TYPE
 from eifo_core.db import DatabaseNotReadyError
-from eifo_core.fts import TRIGGERS, missing_triggers
+from eifo_core.fts import TITLES, missing_triggers
 from eifo_core.migrate import current_revision, head_revision, upgrade
 from eifo_core.settings import Settings
 
@@ -75,7 +75,7 @@ def test_a_search_index_nothing_updates_is_rewired_on_start(tmp_path: object) ->
     engine = create_engine(db_url)
     try:
         with engine.begin() as connection:
-            for name in TRIGGERS:
+            for name in TITLES.triggers:
                 connection.execute(text(f"DROP TRIGGER {name}"))
 
         with TestClient(create_app(Settings(_env_file=None, db_url=db_url))) as client:
@@ -96,7 +96,7 @@ def test_a_start_told_not_to_migrate_reports_an_unwired_index(
     engine = create_engine(db_url)
     try:
         with engine.begin() as connection:
-            for name in TRIGGERS:
+            for name in TITLES.triggers:
                 connection.execute(text(f"DROP TRIGGER {name}"))
 
         app = create_app(Settings(_env_file=None, db_url=db_url, auto_migrate=False))
@@ -105,7 +105,7 @@ def test_a_start_told_not_to_migrate_reports_an_unwired_index(
 
         assert "search index is not being updated" in caplog.text
         with engine.connect() as connection:
-            assert len(missing_triggers(connection)) == len(TRIGGERS)
+            assert len(missing_triggers(connection)) == len(TITLES.triggers)
     finally:
         engine.dispose()
 

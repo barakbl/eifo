@@ -112,6 +112,10 @@ export function getPerson(personId, options) {
   return request(`/people/${encodeURIComponent(personId)}`, options);
 }
 
+export function suggest(q, options) {
+  return request(`/suggest?q=${encodeURIComponent(q)}`, options);
+}
+
 export function listGenres(options) {
   return request("/genres", options);
 }

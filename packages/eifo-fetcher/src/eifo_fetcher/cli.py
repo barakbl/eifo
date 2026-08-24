@@ -29,7 +29,7 @@ from eifo_core.types import utcnow
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.lock import AlreadyRunningError, single_flight
 from eifo_fetcher.registry import declared_sources, discover_plugins
-from eifo_fetcher.runner import enrich_all, fetch_images, sync_all
+from eifo_fetcher.runner import enrich_all, fetch_images, repair_names, sync_all
 from eifo_fetcher.runs import close_abandoned_runs
 from eifo_fetcher.sources.base import SourceInfo
 
@@ -77,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
     images.add_argument("--limit", type=int, default=None, help="stop after N titles")
 
     subcommands.add_parser("all", help="sync, enrich, then fetch artwork")
+
+    repair = subcommands.add_parser(
+        "repair-names", help="re-ask TMDB for names stored in the wrong script"
+    )
+    repair.add_argument("--limit", type=int, default=None, help="stop after N titles")
 
     sources = subcommands.add_parser("sources", help="inspect configured sources")
     sources.add_subparsers(dest="sources_command", required=True).add_parser(
@@ -172,6 +177,12 @@ def _cmd_enrich(args: argparse.Namespace, settings: Settings) -> int:
             limit=args.limit,
             skip_imdb=args.skip_imdb,
         )
+    return EXIT_PARTIAL if tally.errors else EXIT_OK
+
+
+def _cmd_repair_names(args: argparse.Namespace, settings: Settings) -> int:
+    with single_flight(settings), _database(settings) as session_factory, HttpClient() as http:
+        tally = repair_names(session_factory, settings, http=http, limit=args.limit)
     return EXIT_PARTIAL if tally.errors else EXIT_OK
 
 
@@ -339,6 +350,7 @@ _COMMANDS = {
     "sync": _cmd_sync,
     "enrich": _cmd_enrich,
     "images": _cmd_images,
+    "repair-names": _cmd_repair_names,
     "all": _cmd_all,
     "sources": _cmd_sources,
     "review": _cmd_review,

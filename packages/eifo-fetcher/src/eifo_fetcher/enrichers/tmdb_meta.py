@@ -12,7 +12,7 @@ from typing import Any
 
 from eifo_core.enums import CreditRole, RatingProvider, TitleKind
 from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
-from eifo_fetcher.match import is_hebrew, similarity, years_match
+from eifo_fetcher.match import is_hebrew, latin_script, similarity, years_match
 from eifo_fetcher.sources.base import FetchContext
 from eifo_fetcher.tmdb import (
     ENGLISH_LANGUAGE,
@@ -220,7 +220,10 @@ def _names(
     en_value = _clean(english.get(field))
 
     he_name = he_value if he_value and is_hebrew(he_value) else None
-    en_name = en_value if en_value and not is_hebrew(en_value) else None
+    # Not "anything that is not Hebrew": TMDB answers an en-US request with the
+    # original title when it has no English one, so this field arrives in
+    # Japanese, Tamil or Korean as readily as in English.
+    en_name = en_value if en_value and latin_script(en_value) else None
     return he_name, en_name
 
 

@@ -125,6 +125,24 @@ def is_hebrew(text: str) -> bool:
     return bool(_HEBREW.search(text))
 
 
+def latin_script(text: str) -> bool:
+    """Whether every letter in a string is Latin.
+
+    The counterpart to :func:`is_hebrew`, and the reason both exist: this
+    catalog has a column for Hebrew names and a column for English ones, and
+    nothing else. Anything written in a third script is neither, and calling it
+    English because it is not Hebrew is how "Spirited Away" came to be stored as
+    "千と千尋の神隠し" - unfindable by the name every English speaker knows it by.
+
+    Accented Latin passes: "Amélie" and "Cien años de soledad" are English-column
+    names in every sense that matters here.
+    """
+    letters = [char for char in text if char.isalpha()]
+    if not letters:
+        return False
+    return all(unicodedata.name(char, "").startswith("LATIN") for char in letters)
+
+
 def normalise(name: str) -> str:
     """Fold a title down to what two catalogs are likely to agree on.
 
@@ -173,7 +191,12 @@ def years_match(
 
 
 def names_of(item: RawItem) -> tuple[str | None, str | None]:
-    """Split an item's names into (Hebrew, English) by script."""
+    """Split an item's names into (Hebrew, English) by script.
+
+    A name in a third script is neither, and is returned as neither. Callers
+    that must store something decide what to do with that; see
+    :func:`fallback_name`.
+    """
     hebrew: str | None = None
     english: str | None = None
     for candidate in (item.name, item.name_alt):
@@ -181,9 +204,21 @@ def names_of(item: RawItem) -> tuple[str | None, str | None]:
             continue
         if is_hebrew(candidate):
             hebrew = hebrew or candidate
-        else:
+        elif latin_script(candidate):
             english = english or candidate
     return hebrew, english
+
+
+def fallback_name(item: RawItem) -> str:
+    """Something to call a title whose name is in neither of our two scripts.
+
+    A row must carry a name, so a Japanese or Tamil title goes into the English
+    column for want of anywhere better - which is what the schema has always
+    done, only now knowingly and only when there is no alternative. The metadata
+    enricher replaces it with a real English title on its first visit, and TMDB
+    has one for very nearly all of them.
+    """
+    return item.name
 
 
 class TitleMatcher:
@@ -448,6 +483,8 @@ class TitleMatcher:
 
     def _create_title(self, item: RawItem) -> Title:
         hebrew, english = names_of(item)
+        if hebrew is None and english is None:
+            english = fallback_name(item)
         title = Title(
             type=item.kind,
             tmdb_id=item.tmdb_id,
@@ -462,13 +499,24 @@ class TitleMatcher:
         return title
 
     def _create_from_tmdb(self, item: RawItem, hit: TmdbTitle) -> Title:
-        """Create a title anchored on a TMDB hit, keeping both names."""
+        """Create a title anchored on a TMDB hit, keeping both names.
+
+        The script decides which column a name goes in, never which field TMDB
+        returned it in. Asking for Hebrew and taking whatever comes back as
+        Hebrew, then calling the original title English, is how Israeli films
+        ended up with the same Hebrew string in both columns - and how a
+        Japanese original title ended up labelled English.
+        """
         hebrew, english = names_of(item)
-        if is_hebrew(hit.name):
-            hebrew = hebrew or hit.name
-            english = english or hit.original_name
-        else:
-            english = english or hit.name
+        for value in (hit.name, hit.original_name):
+            if not value:
+                continue
+            if is_hebrew(value):
+                hebrew = hebrew or value
+            elif latin_script(value):
+                english = english or value
+        if hebrew is None and english is None:
+            english = fallback_name(item)
 
         title = Title(
             type=item.kind,

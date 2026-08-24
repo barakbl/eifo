@@ -117,6 +117,9 @@ enabled = false
 refresh_days = 14        # ratings older than this are refetched
 hot_refresh_days = 3     # titles currently available somewhere stay fresher
 batch_size = 500         # titles per run, bounding a scheduled enrich
+retry_days = 30          # wait after nobody could rate a title; doubles each time
+retry_error_days = 1     # wait after a provider failed rather than came back empty
+retry_max_days = 365     # ceiling on those doublings
 disabled = []            # enricher keys to switch off, e.g. ["rt"]
 # Seret is off by default: the site publishes no working title search, so a
 # title cannot be resolved to a page id. See docs.internal/06-enrichment.md.

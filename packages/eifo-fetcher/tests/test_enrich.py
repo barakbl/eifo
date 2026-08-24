@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from eifo_core.enums import (
+    EnrichOutcome,
     FetchPhase,
     FetchStatus,
     OfferType,
@@ -19,6 +20,7 @@ from eifo_core.enums import (
 from eifo_core.models import (
     AggregateScore,
     Availability,
+    EnrichAttempt,
     ExternalRating,
     FetchRun,
     Genre,
@@ -73,6 +75,40 @@ def add_title(session: Session, **overrides: Any) -> Title:
     return title
 
 
+def add_attempt(session: Session, title: Title, **overrides: Any) -> EnrichAttempt:
+    values: dict[str, Any] = {
+        "title_id": title.id,
+        "attempted_at": utcnow(),
+        "outcome": EnrichOutcome.OK,
+        "fruitless": 0,
+        "due_at": utcnow() + dt.timedelta(days=3),
+    }
+    values.update(overrides)
+    attempt = EnrichAttempt(**values)
+    session.add(attempt)
+    session.commit()
+    return attempt
+
+
+def _attempt(session: Session, title: Title) -> EnrichAttempt:
+    attempt = session.get(EnrichAttempt, title.id)
+    assert attempt is not None, f"title {title.id} was not recorded as attempted"
+    return attempt
+
+
+def _attempt_now(session: Session, title: Title) -> None:
+    """Bring a title forward so the next run picks it up again."""
+    attempt = session.get(EnrichAttempt, title.id)
+    if attempt is not None:
+        attempt.due_at = utcnow()
+        session.commit()
+
+
+def _days_until(moment: dt.datetime) -> int:
+    """Whole days from now, rounded to the nearest, so a test reads as its policy."""
+    return round((moment - utcnow()).total_seconds() / 86400)
+
+
 def add_rating(session: Session, title: Title, **overrides: Any) -> ExternalRating:
     values: dict[str, Any] = {
         "title_id": title.id,
@@ -90,24 +126,104 @@ def add_rating(session: Session, title: Title, **overrides: Any) -> ExternalRati
 
 
 class TestTitlesDue:
-    def test_a_title_with_no_ratings_is_due(self, session: Session, settings: Settings) -> None:
+    def test_a_title_never_attempted_is_due(self, session: Session, settings: Settings) -> None:
         add_title(session)
 
         assert len(titles_due(session, settings)) == 1
 
-    def test_a_freshly_rated_title_is_not_due(self, session: Session, settings: Settings) -> None:
-        add_rating(session, add_title(session))
+    def test_a_title_inside_its_cooldown_is_not_due(
+        self, session: Session, settings: Settings
+    ) -> None:
+        add_attempt(session, add_title(session), due_at=utcnow() + dt.timedelta(days=3))
 
         assert titles_due(session, settings) == []
 
-    def test_a_stale_title_is_due(self, session: Session, settings: Settings) -> None:
-        title = add_title(session)
-        add_rating(session, title, fetched_at=utcnow() - dt.timedelta(days=30))
+    def test_a_title_whose_cooldown_has_passed_is_due(
+        self, session: Session, settings: Settings
+    ) -> None:
+        add_attempt(session, add_title(session), due_at=utcnow() - dt.timedelta(minutes=1))
 
         assert len(titles_due(session, settings)) == 1
 
-    def test_available_titles_are_refreshed_sooner(
+    def test_a_rating_alone_does_not_make_a_title_look_attempted(
         self, session: Session, settings: Settings
+    ) -> None:
+        """Ratings are what an attempt produced, not the record that it happened.
+
+        The IMDb bulk pass writes ratings for titles it never visited one by
+        one, and the migration backfills the rest; neither should be mistaken
+        for a per-title attempt that fixed a schedule.
+        """
+        add_rating(session, add_title(session))
+
+        assert len(titles_due(session, settings)) == 1
+
+    def test_titles_never_attempted_go_first(self, session: Session, settings: Settings) -> None:
+        """Otherwise a refresh backlog can starve first-time enrichment indefinitely."""
+        waiting = add_title(session, name_he="ותיק")
+        add_attempt(session, waiting, due_at=utcnow() - dt.timedelta(days=1))
+        fresh = add_title(session, name_he="חדש")
+
+        assert [title.id for title in titles_due(session, settings)] == [fresh.id, waiting.id]
+
+    def test_the_least_recently_attempted_goes_first(
+        self, session: Session, settings: Settings
+    ) -> None:
+        recent = add_title(session, name_he="לאחרונה")
+        long_ago = add_title(session, name_he="מזמן")
+        overdue = utcnow() - dt.timedelta(days=1)
+        add_attempt(session, recent, attempted_at=utcnow() - dt.timedelta(days=2), due_at=overdue)
+        add_attempt(
+            session, long_ago, attempted_at=utcnow() - dt.timedelta(days=90), due_at=overdue
+        )
+
+        assert [title.id for title in titles_due(session, settings)] == [long_ago.id, recent.id]
+
+    def test_force_ignores_the_schedule(self, session: Session, settings: Settings) -> None:
+        add_attempt(session, add_title(session), due_at=utcnow() + dt.timedelta(days=365))
+
+        assert len(titles_due(session, settings, force=True)) == 1
+
+    def test_the_batch_size_bounds_a_run(self, session: Session, settings: Settings) -> None:
+        for index in range(5):
+            add_title(session, name_he=f"תוכנית {index}")
+
+        assert len(titles_due(session, settings, limit=2)) == 2
+
+
+class TestSchedulingTheNextAttempt:
+    """Every title leaves a run with a date on it; these are how it is chosen."""
+
+    def _ctx(self, http: Any, settings: Settings) -> FetchContext:
+        return FetchContext(source_key="enrich", http=http, settings=settings)
+
+    def _run(
+        self,
+        session: Session,
+        settings: Settings,
+        http: Any,
+        enricher: FakeEnricher,
+        **kwargs: Any,
+    ) -> None:
+        enrich_titles(session, [enricher], self._ctx(http, settings), settings, **kwargs)
+
+    def test_a_rated_title_comes_back_on_the_refresh_schedule(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        title = add_title(session)
+        rated = FakeEnricher(EnrichResult(ratings=[Rating(RatingProvider.SERET_VIEWERS, 8.0)]))
+
+        self._run(session, settings, http, rated)
+
+        attempt = session.get(EnrichAttempt, title.id)
+        assert attempt is not None
+        assert attempt.outcome is EnrichOutcome.OK
+        assert attempt.fruitless == 0
+        # Nothing carries it, so the slower of the two refresh rates applies.
+        assert _days_until(attempt.due_at) == settings.enrich.refresh_days
+
+    def test_available_titles_are_refreshed_sooner(
+        self, session: Session, settings: Settings, http: Any
     ) -> None:
         """What people can actually watch is worth keeping fresher."""
         source = Source(
@@ -121,25 +237,111 @@ class TestTitlesDue:
         cold = add_title(session, name_he="לא זמין")
         session.flush()
         session.add(Availability(title_id=hot.id, source_id=source.id, offer_type=OfferType.FREE))
-        # Older than the hot cutoff (3d) but newer than the cold one (14d).
-        stamp = utcnow() - dt.timedelta(days=5)
-        add_rating(session, hot, fetched_at=stamp)
-        add_rating(session, cold, fetched_at=stamp)
+        session.commit()
+        rated = FakeEnricher(EnrichResult(ratings=[Rating(RatingProvider.SERET_VIEWERS, 8.0)]))
 
-        due = titles_due(session, settings)
+        self._run(session, settings, http, rated)
 
-        assert [title.id for title in due] == [hot.id]
+        assert _days_until(_attempt(session, hot).due_at) == settings.enrich.hot_refresh_days
+        assert _days_until(_attempt(session, cold).due_at) == settings.enrich.refresh_days
 
-    def test_force_ignores_freshness(self, session: Session, settings: Settings) -> None:
-        add_rating(session, add_title(session))
+    def test_a_title_nobody_rates_is_recorded_as_no_data(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """Known exactly, and simply not carried by any provider - most of this catalog."""
+        title = add_title(session, tmdb_id=1234)
 
-        assert len(titles_due(session, settings, force=True)) == 1
+        self._run(session, settings, http, FakeEnricher(None))
 
-    def test_the_batch_size_bounds_a_run(self, session: Session, settings: Settings) -> None:
-        for index in range(5):
-            add_title(session, name_he=f"תוכנית {index}")
+        attempt = _attempt(session, title)
+        assert attempt.outcome is EnrichOutcome.NO_DATA
+        assert attempt.fruitless == 1
+        assert _days_until(attempt.due_at) == settings.enrich.retry_days
 
-        assert len(titles_due(session, settings, limit=2)) == 2
+    def test_a_title_with_no_external_id_is_recorded_as_no_match(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """Nothing to look it up by; matching has to improve before asking again."""
+        title = add_title(session, tmdb_id=None, imdb_id=None)
+
+        self._run(session, settings, http, FakeEnricher(None))
+
+        assert _attempt(session, title).outcome is EnrichOutcome.NO_MATCH
+
+    def test_a_provider_failure_is_retried_sooner_than_an_empty_answer(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """A provider being down says nothing about whether the title is rateable."""
+        title = add_title(session, tmdb_id=1234)
+
+        self._run(session, settings, http, FakeEnricher(error=RuntimeError("boom")))
+
+        attempt = _attempt(session, title)
+        assert attempt.outcome is EnrichOutcome.ERROR
+        assert _days_until(attempt.due_at) == settings.enrich.retry_error_days
+
+    def test_each_fruitless_attempt_waits_longer(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        title = add_title(session, tmdb_id=1234)
+        nothing = FakeEnricher(None)
+
+        waits = []
+        for _ in range(3):
+            _attempt_now(session, title)
+            self._run(session, settings, http, nothing)
+            waits.append(_days_until(_attempt(session, title).due_at))
+
+        base = settings.enrich.retry_days
+        assert waits == [base, base * 2, base * 4]
+        assert _attempt(session, title).fruitless == 3
+
+    def test_the_wait_stops_doubling_at_the_ceiling(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """Nothing is written off for good: a title TMDB has not rated yet may be rated later."""
+        title = add_title(session, tmdb_id=1234)
+        add_attempt(session, title, outcome=EnrichOutcome.NO_DATA, fruitless=40, due_at=utcnow())
+
+        self._run(session, settings, http, FakeEnricher(None))
+
+        assert _days_until(_attempt(session, title).due_at) == settings.enrich.retry_max_days
+
+    def test_a_rating_clears_the_backoff(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        title = add_title(session, tmdb_id=1234)
+        add_attempt(session, title, outcome=EnrichOutcome.NO_DATA, fruitless=5, due_at=utcnow())
+        rated = FakeEnricher(EnrichResult(ratings=[Rating(RatingProvider.SERET_VIEWERS, 8.0)]))
+
+        self._run(session, settings, http, rated)
+
+        attempt = _attempt(session, title)
+        assert attempt.outcome is EnrichOutcome.OK
+        assert attempt.fruitless == 0
+
+    def test_a_run_moves_past_the_titles_the_last_one_could_not_rate(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """The wedge itself.
+
+        Ten consecutive runs on the deployed catalog read the same 500 titles
+        and wrote nothing, because a title with no rating was due again the
+        moment the run that failed to rate it finished.
+        """
+        for index in range(4):
+            add_title(session, name_he=f"סרט {index}", tmdb_id=1000 + index)
+        nothing = FakeEnricher(None)
+
+        self._run(session, settings, http, nothing, limit=2)
+        first = [view.id for view in nothing.seen]
+        nothing.seen.clear()
+        self._run(session, settings, http, nothing, limit=2)
+        second = [view.id for view in nothing.seen]
+
+        assert len(first) == 2
+        assert len(second) == 2
+        assert set(first).isdisjoint(second)
 
 
 class TestEnrichTitles:

@@ -6,12 +6,15 @@ leftover cron entry from asking every source for the same catalog at once.
 
 from __future__ import annotations
 
+import ast
 import os
+import pathlib
 from pathlib import Path
 
 import pytest
 
 from eifo_core.settings import Settings
+from eifo_fetcher import lock
 from eifo_fetcher.lock import LOCK_FILENAME, AlreadyRunningError, lock_path, single_flight
 
 
@@ -76,3 +79,28 @@ class TestExclusion:
 
         with single_flight(settings):
             pass
+
+
+class TestBothPlatforms:
+    """The two platforms do not spell "lock this file" the same way.
+
+    An `import fcntl` at the top of this module made every eifo-fetch command
+    unrunnable on Windows - not the locking, the import: the CLI could not start
+    at all. These say what the module is allowed to assume.
+    """
+
+    def test_the_module_names_no_platform_only_import_unconditionally(self) -> None:
+        source = pathlib.Path(lock.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+
+        top_level = {
+            alias.name for node in tree.body if isinstance(node, ast.Import) for alias in node.names
+        }
+
+        assert "fcntl" not in top_level
+        assert "msvcrt" not in top_level
+
+    def test_locking_is_one_call_that_differs(self) -> None:
+        """Everything else about a lock is the same on both, so only this differs."""
+        assert callable(lock._take)
+        assert callable(lock._release)

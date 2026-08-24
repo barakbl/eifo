@@ -8,17 +8,22 @@ fine - the loser spends the night waiting on a busy timeout and then failing,
 and both processes ask every source for the same catalog at the same time,
 which is exactly the behaviour a scraper should not exhibit.
 
-The lock is an ``flock`` on a file beside the database rather than a pid file,
-because the kernel releases it when the holder dies. A fetcher killed mid-run
-leaves nothing to clean up and nothing to explain: the next one simply takes
-the lock.
+The lock is an advisory lock on a file beside the database rather than a pid
+file, because the operating system releases it when the holder dies. A fetcher
+killed mid-run leaves nothing to clean up and nothing to explain: the next one
+simply takes the lock.
+
+Both platforms have such a thing and neither calls it the same: ``flock`` on
+POSIX, ``msvcrt.locking`` on Windows. The property that matters - released by
+the OS when the process goes, whether or not it went politely - is the same in
+both, so only the one call differs.
 """
 
 from __future__ import annotations
 
-import fcntl
 import logging
 import os
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -29,6 +34,28 @@ from eifo_core.settings import Settings
 logger = logging.getLogger("eifo.fetch.lock")
 
 LOCK_FILENAME = ".eifo-fetch.lock"
+
+
+if sys.platform == "win32":  # pragma: no cover - exercised on Windows only
+    import msvcrt
+
+    def _take(handle: int) -> None:
+        """Lock the first byte, or raise OSError if somebody already has it."""
+        msvcrt.locking(handle, msvcrt.LK_NBLCK, 1)
+
+    def _release(handle: int) -> None:
+        os.lseek(handle, 0, os.SEEK_SET)
+        msvcrt.locking(handle, msvcrt.LK_UNLCK, 1)
+
+else:
+    import fcntl
+
+    def _take(handle: int) -> None:
+        """Lock the file, or raise OSError if somebody already has it."""
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _release(handle: int) -> None:
+        """Nothing to do: closing the descriptor drops the flock."""
 
 
 class AlreadyRunningError(RuntimeError):
@@ -63,19 +90,25 @@ def single_flight(settings: Settings) -> Iterator[None]:
 
     try:
         try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # Windows locks a byte range from wherever the file pointer is, so
+            # both platforms are given the same answer to "which byte".
+            os.lseek(handle, 0, os.SEEK_SET)
+            _take(handle)
         except OSError as exc:
             raise AlreadyRunningError(
                 f"another fetcher is already running ({_holder(path)}); leaving it to it"
             ) from exc
 
-        os.ftruncate(handle, 0)
-        os.write(handle, f"pid {os.getpid()}\n".encode())
-        logger.debug("holding %s", path)
-        yield
+        try:
+            os.ftruncate(handle, 0)
+            os.lseek(handle, 0, os.SEEK_SET)
+            os.write(handle, f"pid {os.getpid()}\n".encode())
+            logger.debug("holding %s", path)
+            yield
+        finally:
+            _release(handle)
     finally:
-        # Closing releases the lock. The file stays: unlinking it would race
-        # with whoever opens it next.
+        # The file stays: unlinking it would race with whoever opens it next.
         os.close(handle)
 
 

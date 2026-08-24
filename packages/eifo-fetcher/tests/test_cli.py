@@ -8,11 +8,12 @@ from pathlib import Path
 
 import pytest
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_core.db import create_engine_from_settings, make_session_factory
 from eifo_core.enums import FetchPhase, FetchStatus, OfferType, SourceKind, TitleKind
+from eifo_core.fts import TRIGGERS, missing_triggers
 from eifo_core.migrate import alembic_config, upgrade
 from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
 from eifo_core.settings import Settings, get_settings
@@ -79,6 +80,23 @@ class TestDatabaseCommands:
         assert main(["db", "current"]) == EXIT_OK
 
         assert capsys.readouterr().out.strip() == head
+
+
+class TestCommandsRewireSearchBeforeWriting:
+    def test_a_command_restores_triggers_a_rebuild_removed(self, migrated: Path) -> None:
+        """This is the process that writes titles: it must not write into a dead index."""
+        engine = create_engine(f"sqlite:///{migrated}")
+        try:
+            with engine.begin() as connection:
+                for name in TRIGGERS:
+                    connection.execute(text(f"DROP TRIGGER {name}"))
+
+            assert main(["images"]) == EXIT_OK
+
+            with engine.connect() as connection:
+                assert missing_triggers(connection) == ()
+        finally:
+            engine.dispose()
 
 
 class TestCommandsRequireAMigratedDatabase:

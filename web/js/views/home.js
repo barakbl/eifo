@@ -1,12 +1,34 @@
 /* The catalog grid: filters, search-as-you-type, and endless scrolling. */
 
-import { ApiError, listTitles } from "../api.js";
-import { filtersToParams, paramsToFilters, sourceColorVar } from "../format.js";
+import { ApiError, listGenres, listTitles } from "../api.js";
+import {
+  DEFAULT_FILTERS,
+  filtersToParams,
+  paramsToFilters,
+  sourceColorVar,
+} from "../format.js";
 import { el, replace, skeletonCards, stateBlock, titleCard } from "../ui.js";
 
 const PAGE_SIZE = 24;
 
 const TYPES = ["", "movie", "series"];
+/** Minimum-score steps. Coarse on purpose: nobody filters by 63. */
+const SCORES = ["", "60", "70", "80"];
+
+/**
+ * Decade shortcuts, newest first, and the open-ended one at the end.
+ *
+ * They fill the year boxes rather than being a mode of their own: editing the
+ * boxes is what "custom" means, so there is no third state to keep in step.
+ */
+const DECADES = [
+  { key: "2020s", min: 2020, max: 2029 },
+  { key: "2010s", min: 2010, max: 2019 },
+  { key: "2000s", min: 2000, max: 2009 },
+  { key: "1990s", min: 1990, max: 1999 },
+  { key: "1980s", min: 1980, max: 1989 },
+  { key: "older", min: 1880, max: 1979 },
+];
 const SORTS = ["score", "score_israeli", "year", "name", "recently_added"];
 const AVAILABILITY = ["current", "any", "gone"];
 
@@ -64,7 +86,23 @@ export function createHomeView({ mount, app, router }) {
     const sentinel = el("div", { class: "sentinel" });
     const region = el("section", { class: "results shell" }, [status, grid, sentinel]);
 
-    const filterBar = buildFilterBar({ state, sources, user, t, onChange: apply });
+    // A genre list is a nicety; failing to load one must not cost the catalog.
+    let genres = [];
+    try {
+      genres = await listGenres();
+    } catch {
+      genres = [];
+    }
+
+    const filterBar = buildFilterBar({
+      state,
+      sources,
+      genres,
+      language,
+      user,
+      t,
+      onChange: apply,
+    });
     replace(mount, filterBar.node, region);
 
     let observer = null;
@@ -130,7 +168,10 @@ export function createHomeView({ mount, app, router }) {
               title: t("empty.title"),
               body: t("empty.body"),
               actionLabel: t("empty.clear"),
-              onAction: () => apply({ q: "", sources: [], type: "", available: "current" }),
+              // Everything, including the folded-away filters: leaving those
+              // set is how you end up staring at no results with no visible
+              // reason why.
+              onAction: () => apply({ ...DEFAULT_FILTERS }),
             }),
           ),
         );
@@ -180,8 +221,9 @@ export function createHomeView({ mount, app, router }) {
   };
 }
 
-function buildFilterBar({ state, sources, user, t, onChange }) {
+function buildFilterBar({ state, sources, genres, language, user, t, onChange }) {
   const combo = serviceCombo({ state, sources, user, t, onChange });
+  const more = moreFilters({ state, genres, language, t, onChange });
 
   const selects = [
     select({
@@ -207,10 +249,177 @@ function buildFilterBar({ state, sources, user, t, onChange }) {
   const node = el(
     "div",
     { class: "filters" },
-    el("div", { class: "filters__row shell" }, [combo.node, ...selects]),
+    el("div", { class: "filters__row shell" }, [combo.node, ...selects, more.node]),
   );
 
-  return { node, sync: combo.sync };
+  return {
+    node,
+    sync: () => {
+      combo.sync();
+      more.sync();
+    },
+  };
+}
+
+/**
+ * Year, genre and minimum score - the filters that answer "80s films" and
+ * "something well reviewed", which the API has always accepted and the client
+ * has never sent.
+ *
+ * Folded away behind a disclosure because they are the second question, not the
+ * first: the bar stays as short as it was for anybody who does not want them.
+ */
+function moreFilters({ state, genres, language, t, onChange }) {
+  const years = yearRange({ state, t, onChange });
+  const chosenGenres = () => new Set(state.filters.genres);
+  const boxes = new Map();
+
+  const genreOptions = genres.map((genre) => {
+    const id = String(genre.id);
+    const box = el("input", {
+      type: "checkbox",
+      class: "combo__check",
+      checked: chosenGenres().has(id) || undefined,
+      onChange: () => {
+        const next = chosenGenres();
+        if (box.checked) next.add(id);
+        else next.delete(id);
+        onChange({ genres: [...next] });
+      },
+    });
+    boxes.set(id, box);
+    return el(
+      "li",
+      {},
+      el("label", { class: "combo__option" }, [
+        box,
+        el("span", { class: "combo__name", text: genreName(genre, language) }),
+      ]),
+    );
+  });
+
+  const score = select({
+    values: SCORES,
+    current: state.filters.scoreMin,
+    label: (value) => (value ? t("filters.scoreAtLeast", { score: value }) : t("filters.scoreAny")),
+    onChange: (value) => onChange({ scoreMin: value }),
+  });
+
+  const label = el("span", { class: "combo__label" });
+  const node = el("details", { class: "combo combo--more" }, [
+    el("summary", { class: "combo__trigger" }, [
+      label,
+      el("span", { class: "combo__caret", "aria-hidden": "true", text: "▾" }),
+    ]),
+    el("div", { class: "combo__panel combo__panel--wide" }, [
+      el("div", { class: "morefilters__group" }, [
+        el("h3", { class: "morefilters__heading", text: t("filters.years") }),
+        years.node,
+        el("p", { class: "morefilters__note", text: t("filters.yearsNote") }),
+      ]),
+      genreOptions.length
+        ? el("div", { class: "morefilters__group" }, [
+            el("h3", { class: "morefilters__heading", text: t("filters.genres") }),
+            el("ul", { class: "combo__list" }, genreOptions),
+          ])
+        : null,
+      el("div", { class: "morefilters__group" }, [
+        el("h3", { class: "morefilters__heading", text: t("filters.score") }),
+        score,
+        el("p", { class: "morefilters__note", text: t("filters.scoreNote") }),
+      ]),
+    ]),
+  ]);
+
+  function sync() {
+    const active = chosenGenres();
+    for (const [id, box] of boxes) box.checked = active.has(id);
+    score.value = state.filters.scoreMin;
+    years.sync();
+
+    const count = countActive(state.filters);
+    label.textContent = count ? t("filters.moreSome", { count }) : t("filters.more");
+    node.classList.toggle("combo--active", count > 0);
+  }
+
+  sync();
+  return { node, sync };
+}
+
+/** How many of the folded-away filters are doing something. */
+function countActive(filters) {
+  return (
+    (filters.yearMin || filters.yearMax ? 1 : 0) +
+    filters.genres.length +
+    (filters.scoreMin ? 1 : 0)
+  );
+}
+
+/** A genre in the reader's language, falling back rather than showing nothing. */
+function genreName(genre, language) {
+  return language === "he" ? genre.name_he || genre.name_en : genre.name_en || genre.name_he;
+}
+
+/**
+ * Two year boxes and a row of decade shortcuts.
+ *
+ * The boxes are the state; a decade just fills them, and lights up while they
+ * still say what it set. A title whose year nobody knows is left out of a year
+ * filter, which is what somebody asking for the eighties means.
+ */
+function yearRange({ state, t, onChange }) {
+  const box = (which, placeholder) =>
+    el("input", {
+      type: "number",
+      class: "control control--year",
+      inputmode: "numeric",
+      min: "1880",
+      max: "2100",
+      placeholder,
+      "aria-label": t(`filters.year.${which}`),
+      value: state.filters[which] || "",
+      onChange: (event) => onChange({ [which]: event.currentTarget.value.trim() }),
+    });
+
+  const from = box("yearMin", t("filters.year.fromShort"));
+  const to = box("yearMax", t("filters.year.toShort"));
+
+  const chips = DECADES.map((decade) =>
+    el("button", {
+      class: "chip",
+      type: "button",
+      "aria-pressed": "false",
+      text: t(`filters.decade.${decade.key}`),
+      onClick: () =>
+        onChange(
+          isDecade(state.filters, decade)
+            ? { yearMin: "", yearMax: "" }
+            : { yearMin: String(decade.min), yearMax: String(decade.max) },
+        ),
+    }),
+  );
+
+  const node = el("div", { class: "morefilters__years" }, [
+    el("div", { class: "morefilters__boxes" }, [from, el("span", { text: "–" }), to]),
+    el("div", { class: "morefilters__chips" }, chips),
+  ]);
+
+  function sync() {
+    from.value = state.filters.yearMin || "";
+    to.value = state.filters.yearMax || "";
+    DECADES.forEach((decade, index) => {
+      // aria-pressed is both the state and the styling hook, exactly as the
+      // service chips in settings already use it.
+      chips[index].setAttribute("aria-pressed", String(isDecade(state.filters, decade)));
+    });
+  }
+
+  sync();
+  return { node, sync };
+}
+
+function isDecade(filters, decade) {
+  return filters.yearMin === String(decade.min) && filters.yearMax === String(decade.max);
 }
 
 /**

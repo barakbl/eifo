@@ -382,6 +382,64 @@ img {
   font-style: italic;
 }
 
+/* The second question, not the first: year, genre and score, folded away. */
+.combo__panel--wide {
+  min-inline-size: 20rem;
+  max-inline-size: min(26rem, 92vw);
+}
+
+.morefilters__group + .morefilters__group {
+  margin-block-start: var(--space-3);
+  padding-block-start: var(--space-3);
+  border-block-start: 1px solid var(--line);
+}
+
+.morefilters__heading {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.morefilters__note {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+}
+
+.morefilters__years {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.morefilters__boxes {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-faint);
+}
+
+.morefilters__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.control--year {
+  inline-size: 6rem;
+  /* Digits only; the spinners cost width and nobody steps a year one at a time. */
+  appearance: textfield;
+}
+
+.control--year::-webkit-outer-spin-button,
+.control--year::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
 .combo__list {
   list-style: none;
   margin: 0;

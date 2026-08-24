@@ -183,6 +183,25 @@ export function offerState(offer) {
   return "available";
 }
 
+/**
+ * What the catalog shows when nobody has asked for anything.
+ *
+ * One place rather than a default repeated at every reader: the empty state's
+ * "clear filters" used to reset the four it knew about and silently keep the
+ * rest, which left you looking at no results with no visible reason why.
+ */
+export const DEFAULT_FILTERS = Object.freeze({
+  q: "",
+  sources: [],
+  type: "",
+  available: "current",
+  sort: "score",
+  yearMin: "",
+  yearMax: "",
+  genres: [],
+  scoreMin: "",
+});
+
 /** Query-string parameters from the current filter state, omitting defaults. */
 export function filtersToParams(filters) {
   const params = new URLSearchParams();
@@ -193,18 +212,27 @@ export function filtersToParams(filters) {
     params.set("available", filters.available);
   }
   if (filters.sort && filters.sort !== "score") params.set("sort", filters.sort);
+  if (filters.yearMin) params.set("year_min", String(filters.yearMin));
+  if (filters.yearMax) params.set("year_max", String(filters.yearMax));
+  if (filters.genres?.length) params.set("genres", filters.genres.join(","));
+  if (filters.scoreMin) params.set("score_min", String(filters.scoreMin));
   return params;
 }
 
 /** Filter state parsed back out of a query string. */
 export function paramsToFilters(search) {
   const params = new URLSearchParams(search);
-  const sources = params.get("sources");
+  const list = (name) => (params.get(name) ?? "").split(",").filter(Boolean);
   return {
+    ...DEFAULT_FILTERS,
     q: params.get("q") ?? "",
-    sources: sources ? sources.split(",").filter(Boolean) : [],
+    sources: list("sources"),
     type: params.get("type") ?? "",
     available: params.get("available") ?? "current",
     sort: params.get("sort") ?? "score",
+    yearMin: params.get("year_min") ?? "",
+    yearMax: params.get("year_max") ?? "",
+    genres: list("genres"),
+    scoreMin: params.get("score_min") ?? "",
   };
 }

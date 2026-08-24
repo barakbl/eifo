@@ -90,6 +90,10 @@ export function titlesQuery(filters = {}, { page = 1, pageSize = 24 } = {}) {
   if (filters.type) params.set("type", filters.type);
   if (filters.available) params.set("available", filters.available);
   if (filters.sort) params.set("sort", filters.sort);
+  if (filters.yearMin) params.set("year_min", String(filters.yearMin));
+  if (filters.yearMax) params.set("year_max", String(filters.yearMax));
+  if (filters.genres?.length) params.set("genres", filters.genres.join(","));
+  if (filters.scoreMin) params.set("score_min", String(filters.scoreMin));
   params.set("page", String(page));
   params.set("page_size", String(pageSize));
   return params.toString();
@@ -105,6 +109,10 @@ export function getTitle(id, options) {
 
 export function getPerson(personId, options) {
   return request(`/people/${encodeURIComponent(personId)}`, options);
+}
+
+export function listGenres(options) {
+  return request("/genres", options);
 }
 
 export function listSources(options) {

@@ -245,18 +245,105 @@ daemon, so it keeps itself current with nothing further from you. Running withou
 container, the same thing:
 
 ```bash
-uv run eifo-fetch daemon      # sync 03:00, enrich 04:30, artwork 05:30 UTC
+uv run eifo-fetch daemon      # catalogs, then ratings, then artwork - 03:00 UTC
 ```
 
-Or skip the long-running process and drive the phases from cron:
+Or skip the long-running process and put one line in cron:
 
 ```bash
-uv run eifo-fetch sync        # catalogs
-uv run eifo-fetch enrich      # ratings and metadata
-uv run eifo-fetch images      # posters and backdrops
+uv run eifo-fetch all         # the same run, start to finish
 ```
 
-Times come from `[schedule]` in `config/eifo.toml`. `eifo-fetch all` runs all three once.
+The three phases are a chain rather than three jobs: enrichment needs the titles the
+sync creates, and artwork needs the URLs enrichment fills in. The start time comes from
+`[schedule]` in `config/eifo.toml`. They can still be run one at a time
+(`eifo-fetch sync`, `enrich`, `images`) when you want just one of them.
+
+<details>
+<summary><b>On macOS, use launchd rather than cron</b></summary>
+
+cron does not run a job the machine slept through - the occurrence is simply gone, not
+deferred. On a Mac that sleeps overnight, a 03:00 crontab line may never fire at all, and
+nothing will say so. launchd runs a missed `StartCalendarInterval` job as soon as the
+machine wakes, which is the whole reason to prefer it here.
+
+Save this as `~/Library/LaunchAgents/com.eifo.fetch.plist`, replacing both paths with
+your own (`which uv` gives the first; the second is wherever you cloned Eifo):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.eifo.fetch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/you/.local/bin/uv</string>
+        <string>run</string>
+        <string>eifo-fetch</string>
+        <string>all</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/you/eifo</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>3</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/you/Library/Logs/eifo-fetch.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/you/Library/Logs/eifo-fetch.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
+```
+
+Write it with an editor, or with a **quoted** heredoc (`cat > file <<'EOF'`). Pasting XML
+straight into zsh does not work: `<?xml` looks like a redirection and `<!` triggers
+history expansion, so the first two lines never reach the file and `launchctl` rejects the
+result with the memorable `Bootstrap failed: 5: Input/output error`. `plutil -lint` on the
+file says plainly what `launchctl` will not.
+
+The absolute path to `uv` and the `WorkingDirectory` both matter: a scheduled job inherits
+almost no `PATH`, and `config/eifo.toml`, `data/eifo.db` and `.env` are all resolved
+relative to the working directory.
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.eifo.fetch.plist
+launchctl kickstart -p gui/$(id -u)/com.eifo.fetch   # run it now rather than waiting
+launchctl print gui/$(id -u)/com.eifo.fetch | head   # state, and the last exit code
+tail -f ~/Library/Logs/eifo-fetch.log
+```
+
+`launchctl bootout gui/$(id -u)/com.eifo.fetch` removes it again. The exit code is worth
+reading: 0 is a clean run, 2 means it finished but at least one source failed, 1 is fatal.
+
+Two limits worth knowing. A LaunchAgent runs only while you are logged in - put the plist
+in `/Library/LaunchDaemons` instead if it must run at the login screen, at the cost of
+running as root. And if a scheduled run appears to do nothing at all, the usual cause is
+Full Disk Access: macOS blocks scheduled processes from parts of the filesystem, so a
+checkout under `~/Documents` or `~/Desktop` needs the permission granted in System
+Settings, and one outside those does not.
+
+</details>
+
+Only one fetcher runs at a time, whichever way you start it. A second one - cron firing
+over a daemon that is still going, or an impatient second terminal - notices, says so and
+exits without doing anything, rather than competing for the database and asking every
+source for the same catalog twice.
+
+A run that stops happening is the failure worth catching, and nothing inside the box can
+report its own absence. Set `EIFO_HEALTHCHECK_URL` to a watchdog that takes a plain GET
+(healthchecks.io, an Uptime Kuma push monitor) and the run pings it as it starts,
+finishes, and fails.
 
 Upgrading Eifo itself is `git pull` (or `docker compose pull`) and a restart: the API
 applies any pending database migration as it starts. Set `auto_migrate = false` if you

@@ -139,6 +139,8 @@ edb = 0.5
 # ---------------------------------------------------------------------------
 
 [schedule]
-sync = "03:00"
-enrich = "04:30"
-images = "05:30"
+# When the nightly run starts, UTC. One time for the whole thing: sync, enrich
+# and artwork are a chain, not three independent jobs - enrichment needs the
+# titles sync creates, and artwork needs the URLs enrichment fills in. A config
+# written when they had an hour each still works; its sync time is read as this.
+nightly = "03:00"

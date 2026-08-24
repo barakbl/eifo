@@ -31,8 +31,12 @@ class DatabaseNotReadyError(RuntimeError):
         )
 
 
-def _sqlite_path(db_url: str) -> Path | None:
-    """Filesystem path for a file-backed SQLite URL, else None."""
+def sqlite_path(db_url: str) -> Path | None:
+    """Filesystem path for a file-backed SQLite URL, else None.
+
+    Public because it answers "where does this deployment keep its state", which
+    is where anything else on disk beside the database belongs too.
+    """
     prefix = "sqlite:///"
     if not db_url.startswith(prefix):
         return None
@@ -50,7 +54,7 @@ def ensure_sqlite_parent(db_url: str) -> None:
     fresh install where ``data/`` does not exist yet. Every path that opens a
     database - including migrations, which build their own engine - calls this.
     """
-    path = _sqlite_path(db_url)
+    path = sqlite_path(db_url)
     if path is not None:
         path.parent.mkdir(parents=True, exist_ok=True)
 

@@ -139,3 +139,24 @@ def test_get_settings_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     assert first is second
     assert second.public_origin == "https://first.example"
     get_settings.cache_clear()
+
+
+class TestScheduleConfig:
+    """The phases became one chain; configs written for three still work."""
+
+    def test_the_nightly_run_has_a_default_time(self) -> None:
+        assert Settings(_env_file=None).schedule.nightly == "03:00"
+
+    def test_a_config_written_before_the_chain_keeps_its_start_time(self) -> None:
+        """Its first phase time is when the run began, so that is when it still begins."""
+        settings = Settings(
+            _env_file=None,
+            schedule={"sync": "02:15", "enrich": "04:30", "images": "05:30"},
+        )
+
+        assert settings.schedule.nightly == "02:15"
+
+    def test_an_explicit_nightly_time_wins(self) -> None:
+        settings = Settings(_env_file=None, schedule={"nightly": "01:00", "sync": "02:15"})
+
+        assert settings.schedule.nightly == "01:00"

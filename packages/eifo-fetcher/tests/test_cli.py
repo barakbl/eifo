@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -17,7 +18,8 @@ from eifo_core.fts import TRIGGERS, missing_triggers
 from eifo_core.migrate import alembic_config, upgrade
 from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
 from eifo_core.settings import Settings, get_settings
-from eifo_fetcher.cli import EXIT_FATAL, EXIT_OK, build_parser, main
+from eifo_fetcher.cli import EXIT_FATAL, EXIT_OK, EXIT_PARTIAL, build_parser, main
+from eifo_fetcher.lock import single_flight
 
 
 @pytest.fixture
@@ -97,6 +99,50 @@ class TestCommandsRewireSearchBeforeWriting:
                 assert missing_triggers(connection) == ()
         finally:
             engine.dispose()
+
+
+class TestOnlyOneFetcherAtATime:
+    def _settings(self, migrated: Path) -> Settings:
+        return Settings(_env_file=None, db_url=f"sqlite:///{migrated}")
+
+    @pytest.mark.parametrize("command", [["sync"], ["enrich"], ["images"], ["all"]])
+    def test_a_writing_command_stands_down_while_another_fetcher_runs(
+        self, migrated: Path, caplog: pytest.LogCaptureFixture, command: list[str]
+    ) -> None:
+        """Cron firing over a long-running daemon is ordinary, not an incident."""
+        with single_flight(self._settings(migrated)), caplog.at_level(logging.WARNING):
+            assert main(command) == EXIT_OK
+
+        assert "another fetcher is already running" in caplog.text
+
+    def test_reading_the_catalog_is_never_blocked(self, migrated: Path) -> None:
+        """The lock guards writes; asking what is in there is always allowed."""
+        with single_flight(self._settings(migrated)):
+            assert main(["sources", "list"]) == EXIT_OK
+            assert main(["review", "list"]) == EXIT_OK
+
+
+class TestTheNightlyCommand:
+    def test_all_runs_the_same_chain_the_daemon_schedules(
+        self, migrated: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """So a catalog kept current by cron and one kept by the daemon are kept identically."""
+        runs: list[object] = []
+        monkeypatch.setattr(
+            "eifo_fetcher.daemon.run_nightly", lambda settings: bool(runs.append(settings)) or True
+        )
+
+        assert main(["all"]) == EXIT_OK
+        assert len(runs) == 1
+
+    def test_a_failed_phase_is_reported_to_cron(
+        self, migrated: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The documented exit codes are the only thing a cron job can be judged on."""
+        monkeypatch.setattr("eifo_fetcher.daemon.run_nightly", lambda _settings: False)
+
+        assert main(["all"]) == EXIT_PARTIAL
+        assert main(["daemon", "--once"]) == EXIT_PARTIAL
 
 
 class TestCommandsRequireAMigratedDatabase:

@@ -27,6 +27,7 @@ from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
 from eifo_core.settings import MissingSettingsError, Settings, get_settings
 from eifo_core.types import utcnow
 from eifo_fetcher.http import HttpClient
+from eifo_fetcher.lock import AlreadyRunningError, single_flight
 from eifo_fetcher.registry import declared_sources, discover_plugins
 from eifo_fetcher.runner import enrich_all, fetch_images, sync_all
 from eifo_fetcher.sources.base import SourceInfo
@@ -144,7 +145,7 @@ def _cmd_db(args: argparse.Namespace, settings: Settings) -> int:
 
 
 def _cmd_sync(args: argparse.Namespace, settings: Settings) -> int:
-    with _database(settings) as session_factory, HttpClient() as http:
+    with single_flight(settings), _database(settings) as session_factory, HttpClient() as http:
         report = sync_all(session_factory, settings, http=http, only=args.sources)
 
     if not report.results:
@@ -153,7 +154,7 @@ def _cmd_sync(args: argparse.Namespace, settings: Settings) -> int:
 
 
 def _cmd_images(args: argparse.Namespace, settings: Settings) -> int:
-    with _database(settings) as session_factory, HttpClient() as http:
+    with single_flight(settings), _database(settings) as session_factory, HttpClient() as http:
         result = fetch_images(
             session_factory, settings, http=http, force=args.force, limit=args.limit
         )
@@ -161,7 +162,7 @@ def _cmd_images(args: argparse.Namespace, settings: Settings) -> int:
 
 
 def _cmd_enrich(args: argparse.Namespace, settings: Settings) -> int:
-    with _database(settings) as session_factory, HttpClient() as http:
+    with single_flight(settings), _database(settings) as session_factory, HttpClient() as http:
         tally = enrich_all(
             session_factory,
             settings,
@@ -174,14 +175,14 @@ def _cmd_enrich(args: argparse.Namespace, settings: Settings) -> int:
 
 
 def _cmd_all(_args: argparse.Namespace, settings: Settings) -> int:
-    """Sync, enrich, then fetch artwork - the whole cycle in dependency order."""
-    with _database(settings) as session_factory, HttpClient() as http:
-        report = sync_all(session_factory, settings, http=http)
-        tally = enrich_all(session_factory, settings, http=http)
-        images = fetch_images(session_factory, settings, http=http)
+    """The nightly run: sync, enrich, then artwork, in dependency order.
 
-    failed = report.failed or tally.errors or images.failed
-    return EXIT_PARTIAL if failed else EXIT_OK
+    The same function the daemon schedules, so a catalog kept current by cron
+    and one kept current by the daemon are kept current identically.
+    """
+    from eifo_fetcher.daemon import run_nightly
+
+    return EXIT_OK if run_nightly(settings) else EXIT_PARTIAL
 
 
 def _cmd_sources(_args: argparse.Namespace, settings: Settings) -> int:
@@ -250,7 +251,7 @@ def _cmd_daemon(args: argparse.Namespace, settings: Settings) -> int:
     from eifo_fetcher.daemon import run_daemon, run_once
 
     if args.once:
-        return run_once(settings)
+        return EXIT_OK if run_once(settings) else EXIT_PARTIAL
     return run_daemon(settings)
 
 
@@ -352,6 +353,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except MissingSettingsError as exc:
         logger.error("%s", exc)
         return EXIT_FATAL
+    except AlreadyRunningError as exc:
+        # Not a failure: the work is in hand, just not by this process. Cron
+        # firing over a long-running daemon must not look like an incident.
+        logger.warning("%s", exc)
+        return EXIT_OK
     except KeyboardInterrupt:
         logger.warning("interrupted")
         return EXIT_FATAL

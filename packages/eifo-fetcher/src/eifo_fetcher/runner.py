@@ -23,7 +23,7 @@ from eifo_fetcher.images import ImageFetcher, ImageResult
 from eifo_fetcher.pipeline import SyncResult, deactivate_missing_sources, sync_source
 from eifo_fetcher.registry import discover_plugins, enabled_sources, plugins_for
 from eifo_fetcher.sources.base import FetchContext, SourcePlugin
-from eifo_fetcher.tmdb import TmdbClient
+from eifo_fetcher.tmdb import IMAGE_HOST, TmdbClient
 
 logger = logging.getLogger("eifo.fetch.runner")
 
@@ -146,6 +146,10 @@ def fetch_images(
     limit: int | None = None,
 ) -> ImageResult:
     """Download artwork for titles that still lack it."""
+    # Most artwork comes from TMDB's image CDN, which was being asked for one
+    # poster a second - a static CDN, at the pace set for scraping somebody's
+    # website. Anything hosted elsewhere keeps the polite default.
+    http.rate_limiter.set_host_rate(IMAGE_HOST, settings.tmdb.rate_limit_rps)
     fetcher = ImageFetcher(http, Path(settings.images_dir))
     with session_factory() as session:
         result = fetcher.fetch_missing(session, force=force, limit=limit)
@@ -167,4 +171,8 @@ def _tmdb_client(http: HttpClient, settings: Settings) -> TmdbClient | None:
     if settings.tmdb_api_key is None:
         logger.warning("EIFO_TMDB_API_KEY is not set; TMDB matching is disabled")
         return None
-    return TmdbClient(http, settings.tmdb_api_key.get_secret_value())
+    return TmdbClient(
+        http,
+        settings.tmdb_api_key.get_secret_value(),
+        rate_limit_rps=settings.tmdb.rate_limit_rps,
+    )

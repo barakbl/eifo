@@ -2,21 +2,35 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
 import pytest
 import respx
+from pydantic import SecretStr
 
+from eifo_core.db import create_engine_from_settings, make_session_factory
 from eifo_core.enums import OfferType, TitleKind
+from eifo_core.models import Base
 from eifo_core.settings import Settings, SourceConfig
-from eifo_fetcher.http import HttpClient
+from eifo_fetcher.enrichers.tmdb_meta import _client_from as _enricher_client_from
+from eifo_fetcher.http import HttpClient, RateLimiter
+from eifo_fetcher.runner import _tmdb_client, fetch_images
 from eifo_fetcher.sources.base import FetchContext
 from eifo_fetcher.sources.tmdb_providers import (
     PROVIDER_SOURCES,
     TmdbProvidersPlugin,
 )
-from eifo_fetcher.tmdb import BASE_URL, TmdbClient, image_url
+from eifo_fetcher.sources.tmdb_providers import _client_from as _provider_client_from
+from eifo_fetcher.tmdb import (
+    API_HOST,
+    BASE_URL,
+    DEFAULT_RATE_LIMIT_RPS,
+    IMAGE_HOST,
+    TmdbClient,
+    image_url,
+)
 
 API_KEY = "test-key"
 
@@ -262,3 +276,88 @@ class TestProviderHarvester:
 
         with pytest.raises(Exception, match="EIFO_TMDB_API_KEY"):
             list(TmdbProvidersPlugin().fetch(ctx))
+
+
+class TestTheRateItIsAskedAt:
+    """TMDB is the one host every phase leans on, so its pace is the run's pace.
+
+    Measured the way the limiter is measured elsewhere: ask twice, and see how
+    long the second call is made to wait.
+    """
+
+    @pytest.fixture
+    def limited(self) -> Iterator[HttpClient]:
+        """A client with the fetcher's real default limit, but a costless sleep."""
+        client = HttpClient(rate_limiter=RateLimiter(), sleep=lambda _seconds: None)
+        yield client
+        client.close()
+
+    def _spacing(self, http: HttpClient, host: str) -> float:
+        http.rate_limiter.wait(host, sleep=lambda _s: None, now=lambda: 0.0)
+        return http.rate_limiter.wait(host, sleep=lambda _s: None, now=lambda: 0.0)
+
+    def test_a_client_raises_the_api_host_off_the_scraping_default(
+        self, limited: HttpClient
+    ) -> None:
+        TmdbClient(limited, API_KEY)
+
+        assert self._spacing(limited, API_HOST) == pytest.approx(1 / DEFAULT_RATE_LIMIT_RPS)
+
+    def test_a_configured_rate_is_honoured(self, limited: HttpClient) -> None:
+        TmdbClient(limited, API_KEY, rate_limit_rps=5.0)
+
+        assert self._spacing(limited, API_HOST) == pytest.approx(0.2)
+
+    def test_other_hosts_keep_the_polite_default(self, limited: HttpClient) -> None:
+        """The limit belongs to TMDB, not to every site the fetcher reads."""
+        TmdbClient(limited, API_KEY)
+
+        assert self._spacing(limited, "www.mako.co.il") == pytest.approx(1.0)
+
+    def test_the_image_cdn_is_raised_for_the_artwork_phase(
+        self, limited: HttpClient, tmp_path: Any
+    ) -> None:
+        """A static CDN was being asked for one poster a second."""
+        settings = Settings(
+            _env_file=None,
+            db_url="sqlite:///:memory:",
+            images_dir=tmp_path,
+            tmdb={"rate_limit_rps": 10.0},
+        )
+        engine = create_engine_from_settings(settings)
+        Base.metadata.create_all(engine)
+        try:
+            fetch_images(make_session_factory(engine), settings, http=limited)
+        finally:
+            engine.dispose()
+
+        assert self._spacing(limited, IMAGE_HOST) == pytest.approx(0.1)
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda settings, http: _tmdb_client(http, settings),
+            lambda settings, http: _enricher_client_from(
+                FetchContext(source_key="enrich", http=http, settings=settings)
+            ),
+            lambda settings, http: _provider_client_from(
+                FetchContext(source_key="netflix_il", http=http, settings=settings)
+            ),
+        ],
+        ids=["runner", "enricher", "provider-harvester"],
+    )
+    def test_every_place_a_client_is_built_carries_the_setting(
+        self, limited: HttpClient, build: Any, tmp_path: Any
+    ) -> None:
+        """Three call sites today; any one that forgot would cost an hour a night."""
+        settings = Settings(
+            _env_file=None,
+            db_url="sqlite:///:memory:",
+            images_dir=tmp_path,
+            tmdb_api_key=SecretStr(API_KEY),
+            tmdb={"rate_limit_rps": 7.0},
+        )
+
+        build(settings, limited)
+
+        assert self._spacing(limited, API_HOST) == pytest.approx(1 / 7.0)

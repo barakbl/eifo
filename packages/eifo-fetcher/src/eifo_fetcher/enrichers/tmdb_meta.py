@@ -282,4 +282,8 @@ def _billing_order(value: Any) -> int | None:
 def _client_from(ctx: FetchContext) -> TmdbClient:
     ctx.settings.require("tmdb_api_key")
     assert ctx.settings.tmdb_api_key is not None
-    return TmdbClient(ctx.http, ctx.settings.tmdb_api_key.get_secret_value())
+    return TmdbClient(
+        ctx.http,
+        ctx.settings.tmdb_api_key.get_secret_value(),
+        rate_limit_rps=ctx.settings.tmdb.rate_limit_rps,
+    )

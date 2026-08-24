@@ -113,6 +113,14 @@ enabled = false
 # ---------------------------------------------------------------------------
 
 # How often ratings are refreshed, and which providers are switched on.
+[tmdb]
+# Requests per second to the TMDB API and its image CDN. TMDB is an API built
+# to be called, not somebody's website being scraped, and it is the one host
+# every phase leans on - so this number sets the pace of the whole nightly run.
+# Well inside what TMDB serves happily; on a 429 the client backs off and
+# honours Retry-After, so guessing high costs a slower run, not a failed one.
+rate_limit_rps = 20
+
 [enrich]
 refresh_days = 14        # ratings older than this are refetched
 hot_refresh_days = 3     # titles currently available somewhere stay fresher

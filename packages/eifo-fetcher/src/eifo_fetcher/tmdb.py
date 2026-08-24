@@ -18,6 +18,21 @@ from eifo_fetcher.http import HttpClient
 BASE_URL = "https://api.themoviedb.org/3"
 IMAGE_BASE_URL = "https://image.tmdb.org/t/p"
 
+API_HOST = "api.themoviedb.org"
+IMAGE_HOST = "image.tmdb.org"
+
+#: TMDB is an API built to be called, not a site being scraped, and it is the
+#: one host in this system that every phase leans on: the matcher asks it about
+#: every unmatched item, the metadata enricher about every due title. At the
+#: fetcher's default of one request a second that arithmetic sets the pace of
+#: the whole nightly run - a 3,479-item sync took 3,479 seconds, which is one
+#: item per second and no coincidence.
+#:
+#: Twenty is well inside what TMDB serves happily and still far short of asking
+#: for trouble. If they ever disagree, the client retries on 429 and honours
+#: Retry-After, so the floor is a slower run rather than a failed one.
+DEFAULT_RATE_LIMIT_RPS = 20.0
+
 HEBREW_LANGUAGE = "he-IL"
 ENGLISH_LANGUAGE = "en-US"
 
@@ -49,10 +64,21 @@ class TmdbTitle:
 class TmdbClient:
     """Thin, typed wrapper over the endpoints the fetcher actually uses."""
 
-    def __init__(self, http: HttpClient, api_key: str, *, region: str = "IL") -> None:
+    def __init__(
+        self,
+        http: HttpClient,
+        api_key: str,
+        *,
+        region: str = "IL",
+        rate_limit_rps: float = DEFAULT_RATE_LIMIT_RPS,
+    ) -> None:
         self._http = http
         self._api_key = api_key
         self.region = region
+        # Here rather than at each of the places that build a client: the host
+        # is this class's business, and a fourth caller added later should not
+        # have to know that forgetting one line costs an hour a night.
+        http.rate_limiter.set_host_rate(API_HOST, rate_limit_rps)
 
     def _get(self, path: str, **params: Any) -> dict[str, Any]:
         payload = self._http.get_json(

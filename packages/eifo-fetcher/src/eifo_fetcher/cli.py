@@ -26,6 +26,12 @@ from eifo_core.fts import ensure_search_triggers
 from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
 from eifo_core.settings import MissingSettingsError, Settings, get_settings
 from eifo_core.types import utcnow
+from eifo_fetcher.dedupe import (
+    apply_merges,
+    dangling_references,
+    needs_a_human,
+    plan_merges,
+)
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.lock import AlreadyRunningError, single_flight
 from eifo_fetcher.registry import declared_sources, discover_plugins
@@ -82,6 +88,13 @@ def build_parser() -> argparse.ArgumentParser:
         "repair-names", help="re-ask TMDB for names stored in the wrong script"
     )
     repair.add_argument("--limit", type=int, default=None, help="stop after N titles")
+
+    dedupe = subcommands.add_parser("dedupe", help="merge titles the catalog holds twice")
+    dedupe.add_argument(
+        "--apply",
+        action="store_true",
+        help="perform the merges; without it the plan is only printed",
+    )
 
     sources = subcommands.add_parser("sources", help="inspect configured sources")
     sources.add_subparsers(dest="sources_command", required=True).add_parser(
@@ -184,6 +197,51 @@ def _cmd_repair_names(args: argparse.Namespace, settings: Settings) -> int:
     with single_flight(settings), _database(settings) as session_factory, HttpClient() as http:
         tally = repair_names(session_factory, settings, http=http, limit=args.limit)
     return EXIT_PARTIAL if tally.errors else EXIT_OK
+
+
+def _cmd_dedupe(args: argparse.Namespace, settings: Settings) -> int:
+    """Show what would be merged, and merge it only when asked twice.
+
+    Merging is irreversible and a wrong one silently loses a real title, so the
+    plan prints by default and ``--apply`` is the second asking.
+    """
+    with single_flight(settings), _database(settings) as session_factory, session_factory() as s:
+        plans = plan_merges(s)
+        for plan in plans:
+            print(plan.describe())
+
+        unresolved = needs_a_human(s)
+        if not plans:
+            print("no confident duplicates found")
+        else:
+            print(
+                f"\n{len(plans)} group(s), {sum(len(p.losers) for p in plans)} title(s) to remove"
+            )
+        if any(unresolved.values()):
+            print(
+                f"not touching {unresolved['cross_kind']} film/series pair(s) and "
+                f"{unresolved['year_gap']} pair(s) whose years disagree - these need eyes"
+            )
+
+        if not args.apply:
+            if plans:
+                print("\nnothing written; pass --apply to merge")
+            return EXIT_OK
+
+        tally = apply_merges(s, plans)
+        print(
+            f"merged {tally.groups} group(s): removed {tally.titles_removed} title(s), "
+            f"moved {tally.availability_moved} offer(s) "
+            f"(folded {tally.availability_folded}), {tally.ratings_moved} rating(s), "
+            f"{tally.credits_moved} credit(s), {tally.user_items_moved} list entry(s); "
+            f"recorded {tally.aliases_recorded} alias(es)"
+        )
+        for problem in dangling_references(s):
+            logger.error("dangling reference after merge: %s", problem)
+            tally.errors.append(f"dangling reference: {problem}")
+        for failure in tally.errors:
+            logger.error("%s", failure)
+        return EXIT_PARTIAL if tally.errors else EXIT_OK
 
 
 def _cmd_all(_args: argparse.Namespace, settings: Settings) -> int:
@@ -351,6 +409,7 @@ _COMMANDS = {
     "enrich": _cmd_enrich,
     "images": _cmd_images,
     "repair-names": _cmd_repair_names,
+    "dedupe": _cmd_dedupe,
     "all": _cmd_all,
     "sources": _cmd_sources,
     "review": _cmd_review,

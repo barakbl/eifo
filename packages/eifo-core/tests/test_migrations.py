@@ -159,6 +159,39 @@ class TestEnrichAttemptBackfill:
             engine.dispose()
 
 
+class TestPlaceholderYears:
+    """0 means "we do not know" and 2999 means "not scheduled"; neither is a year."""
+
+    def _years(self, tmp_path: Path, seeded: str) -> list[int | None]:
+        db_url = f"sqlite:///{tmp_path / 'years.db'}"
+        upgrade(db_url, "0010_run_statuses")
+        engine = create_engine(db_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(text(seeded))
+            upgrade(db_url)
+            with engine.connect() as connection:
+                return [
+                    row[0]
+                    for row in connection.execute(text("SELECT year FROM titles ORDER BY id")).all()
+                ]
+        finally:
+            engine.dispose()
+
+    def test_placeholders_are_cleared_and_real_years_kept(self, tmp_path: Path) -> None:
+        years = self._years(
+            tmp_path,
+            "INSERT INTO titles (id, type, name_he, year, created_at, updated_at) VALUES "
+            "(1, 'movie', 'אפס', 0, '2026-08-01 00:00:00', '2026-08-01 00:00:00'), "
+            "(2, 'movie', 'עתיד', 2999, '2026-08-01 00:00:00', '2026-08-01 00:00:00'), "
+            "(3, 'movie', 'אמיתי', 2015, '2026-08-01 00:00:00', '2026-08-01 00:00:00'), "
+            "(4, 'movie', 'ישן', 1927, '2026-08-01 00:00:00', '2026-08-01 00:00:00'), "
+            "(5, 'movie', 'ללא', NULL, '2026-08-01 00:00:00', '2026-08-01 00:00:00')",
+        )
+
+        assert years == [None, None, 2015, 1927, None]
+
+
 def test_downgrade_removes_the_schema(tmp_path: Path) -> None:
     db_url = f"sqlite:///{tmp_path / 'reversible.db'}"
     upgrade(db_url)

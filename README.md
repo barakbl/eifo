@@ -245,18 +245,29 @@ daemon, so it keeps itself current with nothing further from you. Running withou
 container, the same thing:
 
 ```bash
-uv run eifo-fetch daemon      # sync 03:00, enrich 04:30, artwork 05:30 UTC
+uv run eifo-fetch daemon      # catalogs, then ratings, then artwork - 03:00 UTC
 ```
 
-Or skip the long-running process and drive the phases from cron:
+Or skip the long-running process and put one line in cron:
 
 ```bash
-uv run eifo-fetch sync        # catalogs
-uv run eifo-fetch enrich      # ratings and metadata
-uv run eifo-fetch images      # posters and backdrops
+uv run eifo-fetch all         # the same run, start to finish
 ```
 
-Times come from `[schedule]` in `config/eifo.toml`. `eifo-fetch all` runs all three once.
+The three phases are a chain rather than three jobs: enrichment needs the titles the
+sync creates, and artwork needs the URLs enrichment fills in. The start time comes from
+`[schedule]` in `config/eifo.toml`. They can still be run one at a time
+(`eifo-fetch sync`, `enrich`, `images`) when you want just one of them.
+
+Only one fetcher runs at a time, whichever way you start it. A second one - cron firing
+over a daemon that is still going, or an impatient second terminal - notices, says so and
+exits without doing anything, rather than competing for the database and asking every
+source for the same catalog twice.
+
+A run that stops happening is the failure worth catching, and nothing inside the box can
+report its own absence. Set `EIFO_HEALTHCHECK_URL` to a watchdog that takes a plain GET
+(healthchecks.io, an Uptime Kuma push monitor) and the run pings it as it starts,
+finishes, and fails.
 
 Upgrading Eifo itself is `git pull` (or `docker compose pull`) and a restart: the API
 applies any pending database migration as it starts. Set `auto_migrate = false` if you

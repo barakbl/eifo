@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -96,9 +96,20 @@ class EnrichConfig(BaseModel):
 class ScheduleConfig(BaseModel):
     """Daemon schedule; ignored when the phases are driven by system cron."""
 
-    sync: str = "03:00"
-    enrich: str = "04:30"
-    images: str = "05:30"
+    #: When the nightly run starts, UTC. One time for the whole thing, because
+    #: the phases are a chain rather than three independent jobs: enrichment
+    #: needs the titles sync creates, and artwork needs the URLs enrichment
+    #: fills in. Giving each its own hour only worked while every phase
+    #: reliably finished inside it, and a full sync no longer does.
+    nightly: str = "03:00"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_the_old_phase_times(cls, data: Any) -> Any:
+        """Read a pre-chain config: its first phase time is when the run began."""
+        if isinstance(data, dict) and "nightly" not in data and "sync" in data:
+            return {**data, "nightly": data["sync"]}
+        return data
 
 
 class Settings(BaseSettings):
@@ -127,6 +138,12 @@ class Settings(BaseSettings):
     # Secrets - never in the TOML file.
     secret_key: SecretStr | None = None
     tmdb_api_key: SecretStr | None = None
+    #: Pinged when the nightly run starts, finishes and fails, so a run that
+    #: stops happening is noticed by something other than a person wondering
+    #: why the catalog looks old. Any watchdog taking a plain GET will do
+    #: (healthchecks.io, Uptime Kuma's push monitors); the URL embeds a token,
+    #: which is why it belongs with the secrets. Unset means no pinging.
+    healthcheck_url: SecretStr | None = None
     google_client_id: SecretStr | None = None
     google_client_secret: SecretStr | None = None
     x_client_id: SecretStr | None = None

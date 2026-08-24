@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from typing import Any
 
 import pytest
 from sqlalchemy import select
@@ -11,8 +12,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from eifo_core.enums import FetchStatus, SourceKind, TitleKind
 from eifo_core.models import Source
 from eifo_core.settings import Settings, SourceConfig
-from eifo_fetcher.daemon import _parse_time, run_once
+from eifo_fetcher.daemon import _parse_time, run_daemon, run_nightly, run_once
 from eifo_fetcher.http import HttpClient
+from eifo_fetcher.lock import single_flight
 from eifo_fetcher.runner import sync_all
 from eifo_fetcher.sources.base import FetchContext, RawItem, SourceInfo, SourcePlugin
 
@@ -147,9 +149,34 @@ class TestScheduleParsing:
             _parse_time(value)
 
 
-class TestRunOnce:
+@pytest.fixture
+def phases(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record which phases ran, without any of them doing anything."""
+    ran: list[str] = []
+
+    def record(name: str) -> Callable[..., None]:
+        def phase(*_args: object, **_kwargs: object) -> None:
+            ran.append(name)
+
+        return phase
+
+    monkeypatch.setattr("eifo_fetcher.daemon.require_schema", lambda *_a: None)
+    for name in ("sync_all", "enrich_all", "fetch_images"):
+        monkeypatch.setattr(f"eifo_fetcher.daemon.{name}", record(name))
+    return ran
+
+
+class TestTheNightlyChain:
+    def test_the_phases_run_in_dependency_order(
+        self, settings: Settings, phases: list[str]
+    ) -> None:
+        """Enrichment needs the titles sync creates; artwork needs the URLs enrichment fills in."""
+        assert run_nightly(settings) is True
+
+        assert phases == ["sync_all", "enrich_all", "fetch_images"]
+
     def test_a_failing_phase_does_not_propagate(
-        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+        self, settings: Settings, phases: list[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A scheduled run must never take the daemon down with it."""
 
@@ -157,6 +184,130 @@ class TestRunOnce:
             raise RuntimeError("catalog exploded")
 
         monkeypatch.setattr("eifo_fetcher.daemon.sync_all", explode)
-        monkeypatch.setattr("eifo_fetcher.daemon.require_schema", lambda *_a: None)
 
-        assert run_once(settings) == 0
+        assert run_nightly(settings) is False
+
+    def test_a_failing_phase_does_not_stop_the_ones_after_it(
+        self, settings: Settings, phases: list[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """There is more to gain from enriching yesterday's titles than from standing still."""
+
+        def explode(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("every source is down")
+
+        monkeypatch.setattr("eifo_fetcher.daemon.sync_all", explode)
+
+        run_nightly(settings)
+
+        assert phases == ["enrich_all", "fetch_images"]
+
+    def test_run_once_is_the_same_run(self, settings: Settings, phases: list[str]) -> None:
+        assert run_once(settings) is True
+        assert phases == ["sync_all", "enrich_all", "fetch_images"]
+
+
+class TestOnlyOneFetcherAtATime:
+    def test_a_run_stands_down_while_another_holds_the_lock(
+        self, settings: Settings, phases: list[str]
+    ) -> None:
+        """Cron firing over a long-running daemon is ordinary, not an incident."""
+        with single_flight(settings):
+            assert run_nightly(settings) is True
+
+        assert phases == []
+
+    def test_the_lock_is_released_afterwards(self, settings: Settings, phases: list[str]) -> None:
+        run_nightly(settings)
+
+        with single_flight(settings):
+            pass  # would raise if the nightly run had not let go
+
+    def test_the_lock_is_released_after_a_failing_phase(
+        self, settings: Settings, phases: list[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def explode(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("catalog exploded")
+
+        monkeypatch.setattr("eifo_fetcher.daemon.sync_all", explode)
+        run_nightly(settings)
+
+        with single_flight(settings):
+            pass
+
+
+class TestHeartbeat:
+    """A run that stops happening can only be noticed from outside the box."""
+
+    def _pings(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        seen: list[str] = []
+        monkeypatch.setattr(
+            "eifo_fetcher.daemon.ping",
+            lambda _settings, event="": seen.append(event),
+        )
+        return seen
+
+    def test_a_completed_run_pings_start_then_success(
+        self, settings: Settings, phases: list[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pings = self._pings(monkeypatch)
+
+        run_nightly(settings)
+
+        assert pings == ["start", ""]
+
+    def test_a_failed_run_says_so(
+        self, settings: Settings, phases: list[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pings = self._pings(monkeypatch)
+
+        def explode(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("catalog exploded")
+
+        monkeypatch.setattr("eifo_fetcher.daemon.sync_all", explode)
+
+        run_nightly(settings)
+
+        assert pings == ["start", "fail"]
+
+    def test_a_run_that_stood_down_pings_nothing(
+        self, settings: Settings, phases: list[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The watchdog is watching the run, and this process did not make one."""
+        pings = self._pings(monkeypatch)
+
+        with single_flight(settings):
+            run_nightly(settings)
+
+        assert pings == []
+
+
+class TestTheSchedule:
+    def _added_job(self, settings: Settings, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        captured: dict[str, Any] = {}
+
+        class FakeScheduler:
+            def __init__(self, **_kwargs: Any) -> None: ...
+
+            def add_job(self, _job: Any, _trigger: Any, **kwargs: Any) -> None:
+                captured.update(kwargs)
+
+            def start(self) -> None:
+                raise KeyboardInterrupt
+
+        monkeypatch.setattr("eifo_fetcher.daemon.BlockingScheduler", FakeScheduler)
+        run_daemon(settings)
+        return captured
+
+    def test_a_machine_asleep_at_the_hour_runs_on_waking(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """APScheduler's default grace is one second, which writes off every suspended laptop."""
+        assert self._added_job(settings, monkeypatch)["misfire_grace_time"] == 3600
+
+    def test_a_backlog_collapses_into_one_run(
+        self, settings: Settings, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        job = self._added_job(settings, monkeypatch)
+
+        assert job["coalesce"] is True
+        assert job["max_instances"] == 1

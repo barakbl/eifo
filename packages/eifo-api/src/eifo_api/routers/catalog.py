@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import Select, func, select
@@ -63,6 +63,23 @@ class Sort(StrEnum):
     RECENTLY_ADDED = "recently_added"
 
 
+class SortOrder(StrEnum):
+    ASC = "asc"
+    DESC = "desc"
+
+
+#: Which way round each sort reads when nobody says. Best first for anything
+#: scored or dated, A to Z for a name - and leaving ``order`` unset keeps every
+#: URL written before it existed answering exactly as it did.
+NATURAL_ORDER = {
+    Sort.SCORE: SortOrder.DESC,
+    Sort.SCORE_ISRAELI: SortOrder.DESC,
+    Sort.YEAR: SortOrder.DESC,
+    Sort.NAME: SortOrder.ASC,
+    Sort.RECENTLY_ADDED: SortOrder.DESC,
+}
+
+
 @router.get("/titles", response_model=Page[TitleCard], summary="Search and filter titles")
 def list_titles(
     session: SessionDep,
@@ -75,6 +92,10 @@ def list_titles(
     year_max: Annotated[int | None, Query(ge=1880, le=2200)] = None,
     score_min: Annotated[int | None, Query(ge=0, le=100)] = None,
     sort: Annotated[Sort, Query()] = Sort.SCORE,
+    order: Annotated[
+        SortOrder | None,
+        Query(description="Sort direction; the field's own default when unset"),
+    ] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
 ) -> Page[TitleCard]:
@@ -92,7 +113,7 @@ def list_titles(
     )
 
     total = session.scalar(select(func.count()).select_from(filtered.subquery())) or 0
-    ordered = _apply_sort(filtered, sort).limit(page_size).offset((page - 1) * page_size)
+    ordered = _apply_sort(filtered, sort, order).limit(page_size).offset((page - 1) * page_size)
     title_ids = list(session.scalars(ordered).all())
 
     return Page(
@@ -229,29 +250,46 @@ def _availability_ids(source_keys: list[str], available: AvailabilityFilter) -> 
     return statement
 
 
-def _apply_sort(statement: Select[tuple[int]], sort: Sort) -> Select[tuple[int]]:
-    """Order the id query. SQLite sorts NULL lowest, so DESC puts gaps last."""
+def _apply_sort(
+    statement: Select[tuple[int]],
+    sort: Sort,
+    order: SortOrder | None = None,
+) -> Select[tuple[int]]:
+    """Order the id query, in whichever direction was asked for.
+
+    What the catalog does not know sorts last either way. SQLite sorts NULL
+    lowest, so descending put the gaps at the end by accident rather than on
+    purpose - and asking for the oldest films would have answered with the 1,836
+    whose year nobody knows, the worst possible response to that question. The
+    leading ``is_(None)`` key says it deliberately, and says it in both
+    directions.
+    """
+    # Deliberately loose: a mapped column, a coalesce and a scalar subquery are
+    # all orderable and share no useful static type.
+    column: Any
     if sort is Sort.SCORE or sort is Sort.SCORE_ISRAELI:
         column = AggregateScore.score if sort is Sort.SCORE else AggregateScore.score_israeli
-        return statement.outerjoin(AggregateScore, AggregateScore.title_id == Title.id).order_by(
-            column.desc(), Title.id
+        statement = statement.outerjoin(AggregateScore, AggregateScore.title_id == Title.id)
+    elif sort is Sort.YEAR:
+        column = Title.year
+    elif sort is Sort.NAME:
+        column = func.coalesce(Title.name_he, Title.name_en)
+    else:
+        # recently_added: when the title first appeared anywhere, not when we
+        # created the row - a long-known film can arrive on a service today.
+        column = (
+            select(func.max(Availability.first_seen))
+            .where(Availability.title_id == Title.id)
+            .correlate(Title)
+            .scalar_subquery()
         )
 
-    if sort is Sort.YEAR:
-        return statement.order_by(Title.year.desc(), Title.id)
-
-    if sort is Sort.NAME:
-        return statement.order_by(func.coalesce(Title.name_he, Title.name_en), Title.id)
-
-    # recently_added: when the title first appeared anywhere, not when we
-    # created the row - a long-known film can arrive on a service today.
-    first_seen = (
-        select(func.max(Availability.first_seen))
-        .where(Availability.title_id == Title.id)
-        .correlate(Title)
-        .scalar_subquery()
+    descending = (order or NATURAL_ORDER[sort]) is SortOrder.DESC
+    return statement.order_by(
+        column.is_(None),
+        column.desc() if descending else column.asc(),
+        Title.id,
     )
-    return statement.order_by(first_seen.desc(), Title.id)
 
 
 def _current_counts_by_source(session: Session) -> dict[int, int]:

@@ -225,6 +225,61 @@ class TestSorting:
         assert ids(body)[0] == catalog.fauda
 
 
+class TestSortDirection:
+    """Every sort reads both ways; what the catalog does not know sorts last."""
+
+    def _ids(self, client: TestClient, **params: object) -> list[int]:
+        return ids(client.get("/api/v1/titles", params={"available": "any", **params}).json())
+
+    def test_ascending_is_the_reverse_of_descending(self, client: TestClient) -> None:
+        assert self._ids(client, sort="year", order="asc") == list(
+            reversed(self._ids(client, sort="year", order="desc"))
+        )
+
+    def test_leaving_it_unset_answers_as_it_always_did(
+        self, client: TestClient, catalog: Seeded
+    ) -> None:
+        """Every URL written before this parameter existed keeps its meaning."""
+        assert self._ids(client, sort="year") == self._ids(client, sort="year", order="desc")
+        assert self._ids(client, sort="name") == self._ids(client, sort="name", order="asc")
+
+    def test_the_worst_reviewed_can_be_asked_for(self, client: TestClient, catalog: Seeded) -> None:
+        scored = self._ids(client, sort="score", order="asc")
+
+        assert scored[0] == catalog.fauda  # the lower of the two scores
+        assert scored.index(catalog.foxtrot) < scored.index(catalog.shtisel)
+
+    def test_an_unscored_title_sorts_last_in_both_directions(
+        self, client: TestClient, catalog: Seeded
+    ) -> None:
+        """Asking for the worst reviewed must not answer with the unreviewed."""
+        assert self._ids(client, sort="score", order="desc")[-1] == catalog.shtisel
+        assert self._ids(client, sort="score", order="asc")[-1] == catalog.shtisel
+
+    def test_a_title_with_no_year_sorts_last_in_both_directions(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """The 1,836 titles nobody has dated are the worst possible answer to
+        "show me the oldest", which is what a naive ascending sort gives: SQLite
+        sorts NULL lowest."""
+        with session_factory() as session:
+            session.get(Title, catalog.shtisel).year = None
+            session.commit()
+
+        assert self._ids(client, sort="year", order="asc")[-1] == catalog.shtisel
+        assert self._ids(client, sort="year", order="desc")[-1] == catalog.shtisel
+
+    def test_names_can_be_read_backwards(self, client: TestClient) -> None:
+        forwards = self._ids(client, sort="name", order="asc")
+
+        assert self._ids(client, sort="name", order="desc") == list(reversed(forwards))
+
+    def test_an_unknown_direction_is_rejected(self, client: TestClient) -> None:
+        response = client.get("/api/v1/titles", params={"sort": "year", "order": "sideways"})
+
+        assert response.status_code == 422
+
+
 class TestPaging:
     def test_pages_the_results(self, client: TestClient, catalog: Seeded) -> None:
         first = client.get("/api/v1/titles", params={"page_size": 1, "available": "any"}).json()

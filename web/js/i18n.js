@@ -109,6 +109,8 @@ const STRINGS = {
     "auth.unavailable": "התחברות אינה זמינה בהתקנה הזו.",
     "auth.menu": "תפריט חשבון",
 
+    "filters.order.desc": "מהגבוה לנמוך — לחצו כדי להפוך",
+    "filters.order.asc": "מהנמוך לגבוה — לחצו כדי להפוך",
     "filters.more": "עוד מסננים",
     "filters.moreSome": "עוד מסננים ({count})",
     "filters.years": "שנים",
@@ -273,6 +275,8 @@ const STRINGS = {
     "auth.unavailable": "Sign-in is not available on this installation.",
     "auth.menu": "Account menu",
 
+    "filters.order.desc": "Highest first \u2014 click to reverse",
+    "filters.order.asc": "Lowest first \u2014 click to reverse",
     "filters.more": "More filters",
     "filters.moreSome": "More filters ({count})",
     "filters.years": "Years",

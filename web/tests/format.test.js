@@ -160,6 +160,14 @@ describe("filter round-tripping", () => {
     assert.deepEqual(paramsToFilters(filtersToParams(filters).toString()), filters);
   });
 
+  it("carries a sort direction only when it was argued with", () => {
+    const natural = filtersToParams({ ...DEFAULT_FILTERS, sort: "year", order: "" });
+    const flipped = filtersToParams({ ...DEFAULT_FILTERS, sort: "year", order: "asc" });
+
+    assert.equal(natural.has("order"), false);
+    assert.equal(flipped.get("order"), "asc");
+  });
+
   it("names the year parameters the way the API does", () => {
     const params = filtersToParams({ ...DEFAULT_FILTERS, yearMin: "1980", yearMax: "1989" });
 

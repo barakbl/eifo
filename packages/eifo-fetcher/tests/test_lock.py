@@ -104,3 +104,13 @@ class TestBothPlatforms:
         """Everything else about a lock is the same on both, so only this differs."""
         assert callable(lock._take)
         assert callable(lock._release)
+
+    def test_the_holder_can_still_be_read_while_locked(self, settings: Settings) -> None:
+        """Windows enforces its locks against readers, POSIX does not.
+
+        Locking the byte the pid is written to would have meant the next
+        fetcher knew somebody was running and not who - the one thing its
+        error message is for.
+        """
+        with single_flight(settings):
+            assert lock_path(settings).read_text(encoding="utf-8").strip() == f"pid {os.getpid()}"

@@ -35,6 +35,14 @@ logger = logging.getLogger("eifo.fetch.lock")
 
 LOCK_FILENAME = ".eifo-fetch.lock"
 
+#: Which byte is locked, chosen to be far past anything written to the file.
+#:
+#: POSIX locks the whole file and does not care. Windows locks the byte range
+#: asked for and enforces it against readers too, so locking byte zero would
+#: stop the next fetcher reading the pid it wants to name in its own error
+#: message - it would know somebody was running and not who.
+LOCK_OFFSET = 4096
+
 
 if sys.platform == "win32":  # pragma: no cover - exercised on Windows only
     import msvcrt
@@ -44,7 +52,7 @@ if sys.platform == "win32":  # pragma: no cover - exercised on Windows only
         msvcrt.locking(handle, msvcrt.LK_NBLCK, 1)
 
     def _release(handle: int) -> None:
-        os.lseek(handle, 0, os.SEEK_SET)
+        os.lseek(handle, LOCK_OFFSET, os.SEEK_SET)
         msvcrt.locking(handle, msvcrt.LK_UNLCK, 1)
 
 else:
@@ -92,7 +100,7 @@ def single_flight(settings: Settings) -> Iterator[None]:
         try:
             # Windows locks a byte range from wherever the file pointer is, so
             # both platforms are given the same answer to "which byte".
-            os.lseek(handle, 0, os.SEEK_SET)
+            os.lseek(handle, LOCK_OFFSET, os.SEEK_SET)
             _take(handle)
         except OSError as exc:
             raise AlreadyRunningError(

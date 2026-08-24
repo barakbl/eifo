@@ -33,6 +33,7 @@ from eifo_core.enums import (
     FetchPhase,
     FetchStatus,
     ItemStatus,
+    MatchDecision,
     OfferType,
     RatingProvider,
     SourceKind,
@@ -589,7 +590,12 @@ class FetchRun(Base):
 
 
 class MatchReview(Base):
-    """A source item the matcher could not confidently resolve to a title."""
+    """A source item the matcher could not confidently resolve to a title.
+
+    Until somebody rules, the item is not in the catalog at all: no title, no
+    availability, nothing to search for. That is the cost of parking one, and
+    the reason the band that parks them is narrow.
+    """
 
     __tablename__ = "match_reviews"
 
@@ -601,6 +607,14 @@ class MatchReview(Base):
     resolved_at: Mapped[dt.datetime | None]
     resolved_title_id: Mapped[int | None] = mapped_column(
         ForeignKey("titles.id", ondelete="SET NULL")
+    )
+    #: What was decided. Null while the item is still waiting. Kept alongside
+    #: ``resolved_title_id`` rather than inferred from it, because "not that
+    #: title, but a real one" and "not a title at all" are different rulings and
+    #: an absent id cannot say which.
+    decision: Mapped[MatchDecision | None] = mapped_column(
+        _enum(MatchDecision, "match_decision"),
+        default=None,
     )
 
     def __repr__(self) -> str:

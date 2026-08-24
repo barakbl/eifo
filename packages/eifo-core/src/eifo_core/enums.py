@@ -115,6 +115,25 @@ class FetchStatus(StrEnum):
     CRASHED = "crashed"
 
 
+class MatchDecision(StrEnum):
+    """What somebody decided about an item the matcher could not place.
+
+    Three answers, because the queue holds three kinds of thing: a listing of a
+    title already in the catalog under another name, a title genuinely not in it
+    yet, and content that is not a title at all - a trailer, a promo, a daily
+    Olympics recap. Only the third needs a word of its own; without it the only
+    way to say "not the suggested match" was to say "so make it a title", and
+    the catalog filled up with sing-alongs.
+    """
+
+    #: The suggested candidate was right; the offer belongs to that title.
+    ATTACHED = "attached"
+    #: Not the candidate, but a real title. It gets one of its own.
+    CREATED = "created"
+    #: Not catalog content. Never offer it again.
+    DISMISSED = "dismissed"
+
+
 class EnrichOutcome(StrEnum):
     """What came of putting one title through the enrichers.
 

@@ -32,6 +32,10 @@ class Variant:
     width: int
 
 
+#: Posters stored between commits, bounding both the write lock and what an
+#: interrupted run throws away.
+COMMIT_EVERY = 50
+
 POSTER_VARIANTS = (Variant("w200", 200), Variant("w500", 500))
 BACKDROP_VARIANTS = (Variant("w1280", 1280),)
 
@@ -116,9 +120,14 @@ class ImageFetcher:
             limit: stop after this many titles, for a quick first run.
         """
         result = ImageResult()
-        for title, url in self._pending(session, force=force, limit=limit):
+        for index, (title, url) in enumerate(self._pending(session, force=force, limit=limit), 1):
             if self._store_poster(title, url, force=force, result=result):
                 session.flush()
+            # Artwork is downloaded one title at a time; holding the write lock
+            # for the whole set would block anything else for as long as that
+            # takes, and lose every stored path if the run were interrupted.
+            if index % COMMIT_EVERY == 0:
+                session.commit()
         session.commit()
         return result
 

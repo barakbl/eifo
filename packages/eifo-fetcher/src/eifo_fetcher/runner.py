@@ -13,8 +13,9 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from eifo_core.enums import FetchStatus
+from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.settings import Settings
+from eifo_core.types import utcnow
 from eifo_fetcher.enrich import EnrichResultTally, enrich_titles, recompute_all_aggregates
 from eifo_fetcher.enrichers import discover_enrichers
 from eifo_fetcher.enrichers.imdb import ImdbDatasetLoader
@@ -22,8 +23,13 @@ from eifo_fetcher.http import HttpClient
 from eifo_fetcher.images import ImageFetcher, ImageResult
 from eifo_fetcher.pipeline import SyncResult, deactivate_missing_sources, sync_source
 from eifo_fetcher.registry import discover_plugins, enabled_sources, plugins_for
+from eifo_fetcher.runs import close_run, open_run
 from eifo_fetcher.sources.base import FetchContext, SourcePlugin
 from eifo_fetcher.tmdb import IMAGE_HOST, TmdbClient
+
+#: Source key the IMDb bulk pass records itself under. It is one join over a
+#: dataset rather than a catalog, so it is not a source, but it needs a name.
+IMDB_RUN_KEY = "imdb"
 
 logger = logging.getLogger("eifo.fetch.runner")
 
@@ -121,9 +127,27 @@ def enrich_all(
         tally = enrich_titles(session, enrichers, ctx, settings, force=force, limit=limit)
 
     if not skip_imdb:
+        # Its own row: the bulk pass downloads tens of megabytes and rewrites
+        # thousands of ratings, and used to run entirely after the enrich row
+        # had been written - so its tally was never persisted and a failure in
+        # it left nothing behind at all.
         with session_factory() as session:
-            imdb = ImdbDatasetLoader(http).run(session)
-            tally.by_enricher["imdb"] = imdb.created + imdb.updated
+            run = open_run(session, phase=FetchPhase.ENRICH, source_key=IMDB_RUN_KEY)
+            try:
+                imdb = ImdbDatasetLoader(http).run(session)
+            except Exception as exc:
+                logger.exception("imdb dataset pass failed")
+                session.rollback()
+                close_run(
+                    session,
+                    run,
+                    status=FetchStatus.FAILED,
+                    stats={"errors": [f"fatal: {type(exc).__name__}: {exc}"]},
+                )
+            else:
+                tally.by_enricher["imdb"] = imdb.created + imdb.updated
+                close_run(session, run, status=FetchStatus.OK, stats=imdb.as_stats())
+
         # IMDb writes ratings directly, so aggregates need recomputing after it.
         with session_factory() as session:
             tally.aggregates_computed += recompute_all_aggregates(session, settings)
@@ -146,13 +170,34 @@ def fetch_images(
     limit: int | None = None,
 ) -> ImageResult:
     """Download artwork for titles that still lack it."""
+    started_at = utcnow()
     # Most artwork comes from TMDB's image CDN, which was being asked for one
     # poster a second - a static CDN, at the pace set for scraping somebody's
     # website. Anything hosted elsewhere keeps the polite default.
     http.rate_limiter.set_host_rate(IMAGE_HOST, settings.tmdb.rate_limit_rps)
     fetcher = ImageFetcher(http, Path(settings.images_dir))
     with session_factory() as session:
-        result = fetcher.fetch_missing(session, force=force, limit=limit)
+        # FetchPhase.IMAGES existed and had never once been written: poster
+        # downloads reported themselves only to a log line that scrolled away.
+        run = open_run(session, phase=FetchPhase.IMAGES, started_at=started_at)
+        try:
+            result = fetcher.fetch_missing(session, force=force, limit=limit)
+        except Exception as exc:
+            logger.exception("artwork download failed")
+            session.rollback()
+            close_run(
+                session,
+                run,
+                status=FetchStatus.FAILED,
+                stats={"errors": [f"fatal: {type(exc).__name__}: {exc}"]},
+            )
+            raise
+        close_run(
+            session,
+            run,
+            status=FetchStatus.FAILED if result.failed else FetchStatus.OK,
+            stats=result.as_stats(),
+        )
     logger.info(
         "images: %d downloaded, %d skipped, %d failed",
         result.downloaded,

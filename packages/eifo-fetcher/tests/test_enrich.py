@@ -29,9 +29,14 @@ from eifo_core.models import (
 )
 from eifo_core.settings import Settings
 from eifo_core.types import utcnow
-from eifo_fetcher.enrich import enrich_titles, recompute_all_aggregates, titles_due
+from eifo_fetcher.enrich import (
+    COMMIT_EVERY,
+    enrich_titles,
+    recompute_all_aggregates,
+    titles_due,
+)
 from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
-from eifo_fetcher.sources.base import FetchContext
+from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError
 
 
 class FakeEnricher(Enricher):
@@ -547,3 +552,86 @@ class TestAggregation:
         enrich_titles(session, [FakeEnricher(None)], self._ctx(http, settings), settings)
 
         assert session.scalars(select(AggregateScore)).all() == []
+
+
+class TestLockHolding:
+    """SQLite allows one writer, so enrichment must not hold the lock all run."""
+
+    def _ctx(self, http: Any, settings: Settings) -> FetchContext:
+        return FetchContext(source_key="enrich", http=http, settings=settings)
+
+    def test_commits_during_a_long_batch_rather_than_only_at_the_end(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """Every title here means network calls. One transaction for the batch
+        held the write lock for up to twenty-nine minutes against a thirty-second
+        busy timeout, so anything else touching the database waited, then failed."""
+        for index in range(COMMIT_EVERY * 2 + 5):
+            add_title(session, name_he=f"סרט {index}", tmdb_id=2000 + index)
+        commits = 0
+        original = session.commit
+
+        def counting_commit() -> None:
+            nonlocal commits
+            commits += 1
+            original()
+
+        session.commit = counting_commit  # type: ignore[method-assign]
+
+        enrich_titles(session, [FakeEnricher(None)], self._ctx(http, settings), settings)
+
+        # Opening the run, at least two batch boundaries, and closing it.
+        assert commits > 3
+
+    def test_work_already_done_survives_a_crash_mid_batch(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """A crash used to discard every rating the run had fetched."""
+        for index in range(COMMIT_EVERY + 2):
+            add_title(session, name_he=f"סרט {index}", tmdb_id=3000 + index)
+
+        seen = 0
+
+        class FailsLate(FakeEnricher):
+            def enrich(self, title: TitleView, ctx: FetchContext) -> EnrichResult | None:
+                nonlocal seen
+                seen += 1
+                if seen > COMMIT_EVERY:
+                    raise RuntimeError("provider fell over")
+                return None
+
+        enrich_titles(session, [FailsLate()], self._ctx(http, settings), settings)
+
+        # The titles from before the failure kept their attempt rows, so the
+        # next run starts where this one stopped rather than repeating it.
+        recorded = session.scalars(select(EnrichAttempt)).all()
+        assert len(recorded) >= COMMIT_EVERY
+
+    def test_a_failed_run_records_what_went_wrong(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """A run that says only that it failed leaves the obvious question unanswered."""
+        add_title(session)
+        exhausted = FakeEnricher(error=TooManyErrorsError("enrich", 25))
+
+        enrich_titles(session, [exhausted], self._ctx(http, settings), settings)
+
+        run = session.scalars(select(FetchRun).where(FetchRun.phase == FetchPhase.ENRICH)).one()
+        assert run.status is FetchStatus.FAILED
+        assert any("TooManyErrorsError" in entry for entry in run.stats["errors"])
+
+    def test_a_run_row_exists_while_the_phase_is_still_going(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """So a fetcher killed mid-enrich leaves a trace rather than nothing at all."""
+        add_title(session)
+        seen: list[FetchStatus] = []
+
+        class LooksAtTheRun(FakeEnricher):
+            def enrich(self, title: TitleView, ctx: FetchContext) -> EnrichResult | None:
+                seen.extend(session.scalars(select(FetchRun.status)).all())
+                return None
+
+        enrich_titles(session, [LooksAtTheRun()], self._ctx(http, settings), settings)
+
+        assert seen == [FetchStatus.RUNNING]

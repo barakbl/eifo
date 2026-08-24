@@ -27,6 +27,7 @@ from eifo_fetcher.heartbeat import ping
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.lock import AlreadyRunningError, single_flight
 from eifo_fetcher.runner import enrich_all, fetch_images, sync_all
+from eifo_fetcher.runs import close_abandoned_runs
 
 logger = logging.getLogger("eifo.fetch.daemon")
 
@@ -62,6 +63,10 @@ def _run_phase(settings: Settings, phase: str) -> bool:
         require_schema(engine, settings.db_url)
         ensure_search_triggers(engine)
         session_factory = make_session_factory(engine)
+        # We hold the fetcher lock, so anything still marked running belongs to
+        # a process that is gone. Said now rather than left to look live.
+        with session_factory() as session:
+            close_abandoned_runs(session)
         with HttpClient() as http:
             if phase == "sync":
                 sync_all(session_factory, settings, http=http)

@@ -9,8 +9,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from eifo_core.db import create_engine_from_settings
 from eifo_core.enums import FetchStatus, SourceKind, TitleKind
-from eifo_core.models import Source
+from eifo_core.models import Base, Source
 from eifo_core.settings import Settings, SourceConfig
 from eifo_fetcher.daemon import _parse_time, run_daemon, run_nightly, run_once
 from eifo_fetcher.http import HttpClient
@@ -150,8 +151,17 @@ class TestScheduleParsing:
 
 
 @pytest.fixture
-def phases(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Record which phases ran, without any of them doing anything."""
+def phases(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record which phases ran, without any of them doing anything.
+
+    The schema is real: a phase opens the database before it does any work of
+    its own, to reattach search triggers and close out runs left behind by a
+    fetcher that died.
+    """
+    engine = create_engine_from_settings(settings)
+    Base.metadata.create_all(engine)
+    engine.dispose()
+
     ran: list[str] = []
 
     def record(name: str) -> Callable[..., None]:
@@ -160,7 +170,6 @@ def phases(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
         return phase
 
-    monkeypatch.setattr("eifo_fetcher.daemon.require_schema", lambda *_a: None)
     for name in ("sync_all", "enrich_all", "fetch_images"):
         monkeypatch.setattr(f"eifo_fetcher.daemon.{name}", record(name))
     return ran

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -54,10 +55,17 @@ jobs:
           EIFO_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run eifo-fetch db current
 
   windows:
-    # The fetcher takes an OS file lock, and the two platforms do not spell that
-    # the same way. An Ubuntu-only pipeline said everything was fine while
-    # `import fcntl` made every eifo-fetch command unrunnable on Windows.
+    # Off by default: a full Windows run costs about fourteen minutes, which is
+    # most of the pipeline, to re-check something that changes only when
+    # platform-specific code does. Run it from the Actions tab ("Run workflow")
+    # after touching anything that talks to the filesystem or the OS directly.
+    #
+    # It earned its keep on its first run - an `import fcntl` that made every
+    # eifo-fetch command unrunnable, and image paths stored with backslashes
+    # that would have 404ed every poster in the catalog - so it is disabled
+    # rather than deleted.
     name: Tests on Windows
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

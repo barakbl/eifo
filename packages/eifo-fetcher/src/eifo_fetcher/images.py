@@ -61,8 +61,14 @@ def backdrop_dir(images_dir: Path, title_id: int) -> Path:
 
 
 def relative_path(images_dir: Path, path: Path) -> str:
-    """Store paths relative to the images root so the root can move."""
-    return str(path.relative_to(images_dir))
+    """Store paths relative to the images root so the root can move.
+
+    Always with forward slashes, whatever the platform separates directories
+    with: this is written to ``titles.poster_path`` and served straight back as
+    the tail of an image URL. Storing what Windows calls a path would put
+    backslashes in that URL, and every poster in the catalog would 404.
+    """
+    return path.relative_to(images_dir).as_posix()
 
 
 def save_variants(

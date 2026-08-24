@@ -19,6 +19,7 @@ from eifo_fetcher.images import (
     BACKDROP_VARIANTS,
     POSTER_VARIANTS,
     ImageFetcher,
+    relative_path,
     save_variants,
 )
 
@@ -240,3 +241,17 @@ class TestPendingSelection:
         assert result.downloaded == 1
         with session_factory() as session:
             assert len(session.scalars(select(Title)).all()) == 2
+
+
+class TestTheStoredPathIsAUrl:
+    """poster_path is served as the tail of an image URL, not opened as a file."""
+
+    def test_it_uses_forward_slashes_whatever_the_platform_separates_with(
+        self, tmp_path: Path
+    ) -> None:
+        """Backslashes here would 404 every poster in the catalog on Windows."""
+        images = tmp_path / "images"
+        stored = relative_path(images, images / "posters" / "42" / "w500.jpg")
+
+        assert stored == "posters/42/w500.jpg"
+        assert "\\" not in stored

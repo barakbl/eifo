@@ -21,7 +21,7 @@ from eifo_core.enums import (
     SourceKind,
     TitleKind,
 )
-from eifo_core.fts import TRIGGERS, missing_triggers
+from eifo_core.fts import TITLES, missing_triggers
 from eifo_core.migrate import alembic_config, upgrade
 from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
 from eifo_core.settings import Settings, get_settings
@@ -97,7 +97,7 @@ class TestCommandsRewireSearchBeforeWriting:
         engine = create_engine(f"sqlite:///{migrated}")
         try:
             with engine.begin() as connection:
-                for name in TRIGGERS:
+                for name in TITLES.triggers:
                     connection.execute(text(f"DROP TRIGGER {name}"))
 
             assert main(["images"]) == EXIT_OK

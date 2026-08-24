@@ -210,6 +210,44 @@ class PersonCredit(BaseModel):
     title: TitleCard
 
 
+class TitleSuggestion(BaseModel):
+    """A title, reduced to what a dropdown row shows."""
+
+    id: int
+    type: TitleKind
+    name_he: str | None = None
+    name_en: str | None = None
+    year: int | None = None
+    poster_url: str | None = None
+
+
+class PersonSuggestion(BaseModel):
+    """A person, reduced to what a dropdown row shows.
+
+    ``credit_count`` is not decoration: a hundred-odd names in the catalog
+    belong to more than one person, and how much a catalogue credits somebody is
+    the only thing on hand to tell them apart with.
+    """
+
+    id: int
+    name_he: str | None = None
+    name_en: str | None = None
+    credit_count: int = 0
+
+
+class Suggestions(BaseModel):
+    """What to offer somebody mid-word.
+
+    ``query`` comes back so a client can drop an answer to a question it has
+    stopped asking - keystrokes outrun round trips, and an out-of-order reply
+    would otherwise replace a newer one.
+    """
+
+    query: str
+    titles: list[TitleSuggestion] = Field(default_factory=list)
+    people: list[PersonSuggestion] = Field(default_factory=list)
+
+
 class PersonDetail(BaseModel):
     """A person and everything the catalog credits them with.
 

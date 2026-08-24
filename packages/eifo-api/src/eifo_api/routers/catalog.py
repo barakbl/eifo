@@ -14,11 +14,12 @@ from enum import StrEnum
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from eifo_api.converters import (
     hydrate_titles,
+    image_url,
     to_card,
     to_detail,
     to_genre,
@@ -26,9 +27,20 @@ from eifo_api.converters import (
     to_source,
 )
 from eifo_api.deps import SessionDep
-from eifo_api.schemas import GenreOut, Page, PersonDetail, SourceOut, TitleCard, TitleDetail
-from eifo_api.search import apply_text_search
+from eifo_api.schemas import (
+    GenreOut,
+    Page,
+    PersonDetail,
+    PersonSuggestion,
+    SourceOut,
+    Suggestions,
+    TitleCard,
+    TitleDetail,
+    TitleSuggestion,
+)
+from eifo_api.search import apply_text_search, name_match
 from eifo_core.enums import FetchPhase, FetchStatus, TitleKind
+from eifo_core.fts import PEOPLE, TITLES
 from eifo_core.models import (
     AggregateScore,
     Availability,
@@ -182,6 +194,101 @@ def list_sources(session: SessionDep) -> list[SourceOut]:
             last_synced_at=synced.get(source.key),
         )
         for source in session.scalars(select(Source).order_by(Source.name)).all()
+    ]
+
+
+#: How many suggestions of each kind, when the caller does not say. Titles get
+#: the larger share: most searches are for one, and a person is the answer to a
+#: rarer question.
+SUGGEST_TITLES = 7
+SUGGEST_PEOPLE = 3
+
+
+@router.get("/suggest", response_model=Suggestions, summary="Search-as-you-type")
+def suggest(
+    session: SessionDep,
+    q: Annotated[str, Query(min_length=1, max_length=100)],
+    limit: Annotated[int, Query(ge=1, le=20)] = SUGGEST_TITLES + SUGGEST_PEOPLE,
+) -> Suggestions:
+    """Titles and people whose names start with what has been typed.
+
+    People are here because there was no other way to reach them: thirty
+    thousand of them, every one findable only by already being on a title they
+    worked on. "What else has she been in" was answerable; "find her" was not.
+    """
+    titles = max(1, round(limit * SUGGEST_TITLES / (SUGGEST_TITLES + SUGGEST_PEOPLE)))
+    return Suggestions(
+        query=q,
+        titles=_suggest_titles(session, q, limit=titles),
+        people=_suggest_people(session, q, limit=max(1, limit - titles)),
+    )
+
+
+def _suggest_titles(session: Session, query: str, *, limit: int) -> list[TitleSuggestion]:
+    match = name_match(TITLES.columns[:2], query)
+    if match is None:
+        return []
+
+    ranked = text(
+        f"SELECT rowid FROM {TITLES.name} WHERE {TITLES.name} MATCH :fts "
+        f"ORDER BY bm25({TITLES.name}, 10.0, 10.0, 1.0, 1.0) LIMIT :limit"
+    ).bindparams(fts=match, limit=limit)
+    ids = [row[0] for row in session.execute(ranked).all()]
+    if not ids:
+        return []
+
+    # One narrow read: a dropdown row needs no availability, genres or scores.
+    found = {
+        title.id: title for title in session.scalars(select(Title).where(Title.id.in_(ids))).all()
+    }
+    return [
+        TitleSuggestion(
+            id=title.id,
+            type=title.type,
+            name_he=title.name_he,
+            name_en=title.name_en,
+            year=title.year,
+            poster_url=image_url(title.poster_path),
+        )
+        for title_id in ids
+        if (title := found.get(title_id)) is not None
+    ]
+
+
+def _suggest_people(session: Session, query: str, *, limit: int) -> list[PersonSuggestion]:
+    match = name_match(PEOPLE.columns, query)
+    if match is None:
+        return []
+
+    # Ranked by how much the catalog credits them, not by bm25 alone: a hundred
+    # names belong to more than one person, and the one somebody means is
+    # overwhelmingly the one with the work.
+    ranked = text(
+        f"SELECT p.id, COUNT(c.id) AS credits FROM {PEOPLE.name} f "
+        f"JOIN people p ON p.id = f.rowid "
+        "LEFT JOIN credits c ON c.person_id = p.id "
+        f"WHERE {PEOPLE.name} MATCH :fts "
+        "GROUP BY p.id ORDER BY credits DESC, p.id LIMIT :limit"
+    ).bindparams(fts=match, limit=limit)
+    rows = session.execute(ranked).all()
+    if not rows:
+        return []
+
+    people = {
+        person.id: person
+        for person in session.scalars(
+            select(Person).where(Person.id.in_([row[0] for row in rows]))
+        ).all()
+    }
+    return [
+        PersonSuggestion(
+            id=person.id,
+            name_he=person.name_he,
+            name_en=person.name_en,
+            credit_count=count,
+        )
+        for person_id, count in rows
+        if (person := people.get(person_id)) is not None
     ]
 
 

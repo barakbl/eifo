@@ -652,3 +652,84 @@ class TestTitleMetadata:
 
         assert body["origin_countries"] == []
         assert body["original_language"] is None
+
+
+class TestSuggest:
+    """Search-as-you-type. People are here because nothing else could reach them."""
+
+    def _people(self, session_factory: sessionmaker[Session], catalog: Seeded) -> None:
+        with session_factory() as session:
+            famous = Person(name_en="Gal Gadot")
+            unknown = Person(name_en="Gal Gadot")  # a real hazard: names repeat
+            session.add_all([famous, unknown, Person(name_he="לירז צ'רכי")])
+            session.flush()
+            for role in (CreditRole.CAST, CreditRole.DIRECTOR):
+                session.add(
+                    Credit(
+                        title_id=catalog.fauda,
+                        person_id=famous.id,
+                        role=role,
+                        source="tmdb",
+                    )
+                )
+            session.commit()
+
+    def test_a_title_is_offered_from_its_first_letters(
+        self, client: TestClient, catalog: Seeded
+    ) -> None:
+        body = client.get("/api/v1/titles", params={"q": "fau"}).json()
+        suggested = client.get("/api/v1/suggest", params={"q": "fau"}).json()
+
+        assert body["total"] >= 1
+        assert "Fauda" in [item["name_en"] for item in suggested["titles"]]
+
+    def test_a_hebrew_prefix_finds_the_same_title(
+        self, client: TestClient, catalog: Seeded
+    ) -> None:
+        """One index, two languages: the whole point of the bilingual catalog."""
+        body = client.get("/api/v1/suggest", params={"q": "פאוד"}).json()
+
+        assert "Fauda" in [item["name_en"] for item in body["titles"]]
+
+    def test_people_can_be_found_at_all(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        self._people(session_factory, catalog)
+
+        body = client.get("/api/v1/suggest", params={"q": "gal"}).json()
+
+        assert body["people"][0]["name_en"] == "Gal Gadot"
+
+    def test_the_one_with_the_work_comes_first(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """A hundred names in the catalog belong to more than one person."""
+        self._people(session_factory, catalog)
+
+        people = client.get("/api/v1/suggest", params={"q": "gadot"}).json()["people"]
+
+        assert people[0]["credit_count"] == 2
+        assert people[-1]["credit_count"] == 0
+
+    def test_the_query_comes_back_with_the_answer(
+        self, client: TestClient, catalog: Seeded
+    ) -> None:
+        """Keystrokes outrun round trips; a client has to be able to drop a stale reply."""
+        body = client.get("/api/v1/suggest", params={"q": "fau"}).json()
+
+        assert body["query"] == "fau"
+
+    def test_an_overview_word_is_not_a_name(self, client: TestClient, catalog: Seeded) -> None:
+        """Suggesting every film whose synopsis mentions a word is noise."""
+        body = client.get("/api/v1/suggest", params={"q": "undercover"}).json()
+
+        assert body["titles"] == []
+
+    def test_nothing_matching_is_not_an_error(self, client: TestClient) -> None:
+        response = client.get("/api/v1/suggest", params={"q": "zzzzqqq"})
+
+        assert response.status_code == 200
+        assert response.json()["titles"] == []
+
+    def test_an_empty_query_is_rejected(self, client: TestClient) -> None:
+        assert client.get("/api/v1/suggest", params={"q": ""}).status_code == 422

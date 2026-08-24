@@ -14,21 +14,14 @@ from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine
 
+from eifo_core.fts import INDEXES
+
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
 #: The full-text index and the shadow tables SQLite builds around it. They are
 #: created by a migration rather than declared as models, so autogenerate would
 #: otherwise propose dropping them on every run.
-FTS_TABLES = frozenset(
-    {
-        "titles_fts",
-        "titles_fts_data",
-        "titles_fts_idx",
-        "titles_fts_docsize",
-        "titles_fts_config",
-        "titles_fts_content",
-    }
-)
+FTS_TABLES = frozenset().union(*(index.shadow_tables for index in INDEXES))
 
 
 def include_object(

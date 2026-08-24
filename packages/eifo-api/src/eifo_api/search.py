@@ -53,3 +53,16 @@ def apply_text_search(statement: Select[tuple[int]], query: str) -> Select[tuple
         fts=match
     )
     return statement.where(Title.id.in_(matching_ids))
+
+
+def name_match(columns: tuple[str, ...], query: str) -> str | None:
+    """A MATCH expression restricted to an index's name columns.
+
+    Search-as-you-type over a whole document offers rubbish: somebody two
+    letters into an actor's name does not want the films that mention them in
+    passing.
+    """
+    match = fts_query(query)
+    if match is None:
+        return None
+    return f"{{{' '.join(columns)}}} : {match}"

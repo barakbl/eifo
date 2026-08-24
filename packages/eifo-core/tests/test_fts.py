@@ -18,13 +18,18 @@ import pytest
 from sqlalchemy import Engine, create_engine, text
 
 from eifo_core.fts import (
-    INDEX,
-    TRIGGERS,
+    PEOPLE,
+    TITLES,
     ensure_search_triggers,
     missing_triggers,
     restore_triggers,
 )
 from eifo_core.migrate import downgrade, upgrade
+
+INDEX = TITLES.name
+TRIGGERS = TITLES.triggers
+#: Every trigger the schema should carry, across both indexes.
+ALL_TRIGGERS = {name for index in (TITLES, PEOPLE) for name in index.triggers}
 
 TITLE = "Waltz with Bashir"
 RENAMED = "The Band's Visit"
@@ -95,8 +100,8 @@ def _trigger_names(engine: Engine) -> set[str]:
 
 class TestMigratedSchema:
     def test_migrations_leave_every_trigger_attached(self, engine: Engine) -> None:
-        """The CI guard: a migration that recreates titles fails here."""
-        assert _trigger_names(engine) == set(TRIGGERS)
+        """The CI guard: a migration that recreates an indexed table fails here."""
+        assert _trigger_names(engine) == ALL_TRIGGERS
 
         with engine.connect() as connection:
             assert missing_triggers(connection) == ()
@@ -136,7 +141,7 @@ class TestUnwiredIndex:
         _execute(engine, f"DROP TRIGGER {INDEX}_update")
 
         assert ensure_search_triggers(engine) == (f"{INDEX}_update",)
-        assert _trigger_names(engine) == set(TRIGGERS)
+        assert _trigger_names(engine) == ALL_TRIGGERS
 
     def test_a_restored_index_follows_later_writes(self, engine: Engine) -> None:
         _unwire(engine)
@@ -189,7 +194,7 @@ class TestNothingToRepair:
             assert ensure_search_triggers(engine) == ()
 
         assert "leaving its triggers alone" in caplog.text
-        assert _trigger_names(engine) == set()
+        assert _trigger_names(engine).isdisjoint(TRIGGERS)
 
     def test_a_non_sqlite_database_has_no_index_to_wire_up(self) -> None:
         """PostgreSQL has no FTS5 table; the services still call this on the way up."""
@@ -211,7 +216,7 @@ class TestRepairMigration:
 
         upgrade(db_url)
 
-        assert _trigger_names(engine) == set(TRIGGERS)
+        assert _trigger_names(engine) == ALL_TRIGGERS
         assert _search(engine, "bashir") == {title_id}
 
     def test_a_database_that_never_lost_them_is_untouched(
@@ -222,5 +227,44 @@ class TestRepairMigration:
 
         upgrade(db_url)
 
-        assert _trigger_names(engine) == set(TRIGGERS)
+        assert _trigger_names(engine) == ALL_TRIGGERS
         assert _search(engine, "bashir") == {title_id}
+
+
+class TestBothIndexesAreProtected:
+    """The second index must not quietly acquire the fault the first had."""
+
+    def test_the_people_index_is_built_and_wired(self, engine: Engine) -> None:
+        assert _trigger_names(engine) >= set(PEOPLE.triggers)
+
+    def test_a_person_written_without_triggers_is_repaired_too(self, engine: Engine) -> None:
+        for name in PEOPLE.triggers:
+            _execute(engine, f"DROP TRIGGER {name}")
+        _execute(
+            engine,
+            "INSERT INTO people (name_en, created_at, updated_at) "
+            "VALUES ('Gal Gadot', '2026-08-25 00:00:00', '2026-08-25 00:00:00')",
+        )
+
+        restored = ensure_search_triggers(engine)
+
+        assert set(restored) == set(PEOPLE.triggers)
+        with engine.connect() as connection:
+            found = connection.execute(
+                text(f"SELECT count(*) FROM {PEOPLE.name} WHERE {PEOPLE.name} MATCH '\"gadot\"'")
+            ).scalar()
+        assert found == 1
+
+    def test_a_name_is_findable_from_its_first_letters(self, engine: Engine) -> None:
+        """A name is what somebody types a few letters of and waits."""
+        _execute(
+            engine,
+            "INSERT INTO people (name_en, created_at, updated_at) "
+            "VALUES ('Gal Gadot', '2026-08-25 00:00:00', '2026-08-25 00:00:00')",
+        )
+
+        with engine.connect() as connection:
+            found = connection.execute(
+                text(f"SELECT count(*) FROM {PEOPLE.name} WHERE {PEOPLE.name} MATCH '\"gal g\"*'")
+            ).scalar()
+        assert found == 1

@@ -9,11 +9,18 @@ from pathlib import Path
 
 import pytest
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_core.db import create_engine_from_settings, make_session_factory
-from eifo_core.enums import FetchPhase, FetchStatus, OfferType, SourceKind, TitleKind
+from eifo_core.enums import (
+    FetchPhase,
+    FetchStatus,
+    MatchDecision,
+    OfferType,
+    SourceKind,
+    TitleKind,
+)
 from eifo_core.fts import TRIGGERS, missing_triggers
 from eifo_core.migrate import alembic_config, upgrade
 from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
@@ -260,7 +267,12 @@ class TestReview:
             assert resolved.resolved_title_id == title_id
             assert resolved.resolved_at is not None
 
-    def test_skip_closes_without_attaching(self, factory: sessionmaker[Session]) -> None:
+    def test_skip_gives_the_item_a_title_of_its_own(self, factory: sessionmaker[Session]) -> None:
+        """Not the suggested match, but a real title - and one that exists now.
+
+        It used to exist only after the source next synced, which is why every
+        ruling anybody had made was still waiting.
+        """
         with factory() as session:
             review_id = self._add_review(session).id
 
@@ -270,7 +282,22 @@ class TestReview:
             skipped = session.get(MatchReview, review_id)
             assert skipped is not None
             assert skipped.resolved_at is not None
-            assert skipped.resolved_title_id is None
+            assert skipped.decision is MatchDecision.CREATED
+            assert skipped.resolved_title_id is not None
+
+    def test_dismiss_creates_nothing(self, factory: sessionmaker[Session]) -> None:
+        """The answer a sing-along needs, and the one that did not exist before."""
+        with factory() as session:
+            review_id = self._add_review(session).id
+
+        assert main(["review", "dismiss", str(review_id)]) == EXIT_OK
+
+        with factory() as session:
+            dismissed = session.get(MatchReview, review_id)
+            assert dismissed is not None
+            assert dismissed.decision is MatchDecision.DISMISSED
+            assert dismissed.resolved_title_id is None
+            assert session.scalars(select(Title)).all() == []
 
     def test_an_unknown_review_is_fatal(self, migrated: Path) -> None:
         assert main(["review", "skip", "999"]) == EXIT_FATAL

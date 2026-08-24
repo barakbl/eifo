@@ -25,7 +25,7 @@ from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.fts import ensure_search_triggers
 from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
 from eifo_core.settings import MissingSettingsError, Settings, get_settings
-from eifo_core.types import utcnow
+from eifo_fetcher import review
 from eifo_fetcher.dedupe import (
     apply_merges,
     dangling_references,
@@ -103,12 +103,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     review = subcommands.add_parser("review", help="work through unresolved matches")
     review_actions = review.add_subparsers(dest="review_command", required=True)
-    review_actions.add_parser("list", help="show unresolved items")
+    listing = review_actions.add_parser("list", help="show unresolved items")
+    listing.add_argument("--source", default=None, help="limit to one source")
+    listing.add_argument("--limit", type=int, default=50, help="how many to show")
     resolve = review_actions.add_parser("resolve", help="attach an item to a title")
     resolve.add_argument("review_id", type=int)
     resolve.add_argument("--title-id", type=int, required=True)
-    skip = review_actions.add_parser("skip", help="dismiss an item without resolving it")
+    skip = review_actions.add_parser("skip", help="not that title - give it one of its own")
     skip.add_argument("review_id", type=int)
+    junk = review_actions.add_parser("dismiss", help="not a title at all - never offer it again")
+    junk.add_argument("review_id", type=int)
+    auto = review_actions.add_parser(
+        "auto", help="clear the part of the queue that is not in doubt"
+    )
+    auto.add_argument(
+        "--apply", action="store_true", help="act on it; without this the plan is only counted"
+    )
 
     daemon = subcommands.add_parser("daemon", help="run phases on the configured schedule")
     daemon.add_argument(
@@ -280,27 +290,30 @@ def _cmd_sources(_args: argparse.Namespace, settings: Settings) -> int:
 def _cmd_review(args: argparse.Namespace, settings: Settings) -> int:
     with _database(settings) as session_factory, session_factory() as session:
         if args.review_command == "list":
-            pending = session.scalars(
-                select(MatchReview).where(MatchReview.resolved_at.is_(None)).limit(100)
-            ).all()
-            if not pending:
+            waiting = review.pending(session, source_key=args.source)
+            if not waiting:
                 print("nothing awaiting review")
                 return EXIT_OK
             rows = [
                 (
-                    str(review.id),
-                    review.source_key,
-                    str(review.raw_payload.get("name", ""))[:40],
-                    str(review.raw_payload.get("year") or "-"),
-                    _closest_label(review),
+                    str(item.id),
+                    item.source_key,
+                    str(item.raw_payload.get("name", ""))[:40],
+                    str(item.raw_payload.get("year") or "-"),
+                    _closest_label(item),
                 )
-                for review in pending
+                for item in waiting[: args.limit]
             ]
             _print_table(("id", "source", "name", "year", "closest match"), rows)
+            if len(waiting) > args.limit:
+                print(f"\n{len(waiting)} waiting; showing {args.limit}")
             return EXIT_OK
 
-        review = session.get(MatchReview, args.review_id)
-        if review is None:
+        if args.review_command == "auto":
+            return _review_auto(session, apply=args.apply)
+
+        item = session.get(MatchReview, args.review_id)
+        if item is None:
             logger.error("no review with id %s", args.review_id)
             return EXIT_FATAL
 
@@ -309,12 +322,33 @@ def _cmd_review(args: argparse.Namespace, settings: Settings) -> int:
             if title is None:
                 logger.error("no title with id %s", args.title_id)
                 return EXIT_FATAL
-            review.resolved_title_id = title.id
+            review.attach(session, item, title)
+            print(f"review {item.id} attached to title {title.id}, and it is in the catalog now")
+        elif args.review_command == "dismiss":
+            review.dismiss(session, item)
+            print(f"review {item.id} dismissed; it will not be offered again")
+        else:
+            created = review.create(session, item)
+            print(f"review {item.id} became title {created.id if created else '?'}")
 
-        review.resolved_at = utcnow()
         session.commit()
-        print(f"review {review.id} {args.review_command}d")
         return EXIT_OK
+
+
+def _review_auto(session: Session, *, apply: bool) -> int:
+    """Clear the part of the queue whose answer is not in doubt."""
+    tally = review.auto_resolve(session, apply=apply)
+    verb = "cleared" if apply else "would clear"
+    print(
+        f"{verb} {tally.expired + tally.dismissed + tally.created}: "
+        f"{tally.expired} no longer listed, {tally.dismissed} not titles, "
+        f"{tally.created} given titles of their own; {tally.left} left for a human"
+    )
+    if not apply:
+        print("\nnothing written; pass --apply to act on it")
+    for failure in tally.errors:
+        logger.error("%s", failure)
+    return EXIT_PARTIAL if tally.errors else EXIT_OK
 
 
 def _cmd_daemon(args: argparse.Namespace, settings: Settings) -> int:

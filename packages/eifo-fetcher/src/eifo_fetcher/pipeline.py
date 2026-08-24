@@ -22,7 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from eifo_core.enums import FetchPhase, FetchStatus, OfferType
-from eifo_core.models import Availability, FetchRun, Source, Title
+from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
 from eifo_core.types import utcnow
 from eifo_fetcher.match import MatchStats, TitleMatcher
 from eifo_fetcher.people import apply_credits
@@ -64,6 +64,7 @@ class SyncResult:
     availability_updated: int = 0
     titles_created: int = 0
     retired: int = 0
+    reviews_expired: int = 0
     errors: list[str] = field(default_factory=list)
     matched_by: dict[str, int] = field(default_factory=dict)
 
@@ -74,6 +75,7 @@ class SyncResult:
     def as_stats(self) -> dict[str, Any]:
         return {
             "items_seen": self.items_seen,
+            "reviews_expired": self.reviews_expired,
             "availability_created": self.availability_created,
             "availability_updated": self.availability_updated,
             "titles_created": self.titles_created,
@@ -149,6 +151,10 @@ def sync_source(
     # Only a run we believe swept: a failure would retire a live catalog.
     if result.status is FetchStatus.OK:
         result.retired = sweep_source(session, source, run_started_at=started_at)
+        # A park is rewritten every time a sync sees the item again, so one
+        # older than this run is an item the source has stopped listing.
+        # Nobody should be asked about a listing that is gone.
+        result.reviews_expired = expire_reviews(session, info.key, before=started_at)
 
     close_run(session, run, status=result.status, stats=result.as_stats())
     return result
@@ -322,6 +328,29 @@ def sweep_source(session: Session, source: Source, *, run_started_at: dt.datetim
 
     session.flush()
     return retired
+
+
+def expire_reviews(session: Session, source_key: str, *, before: dt.datetime) -> int:
+    """Drop parked items a source has stopped listing.
+
+    A park is deleted and rewritten every time a sync sees the item again, so
+    one older than this run is an item the source no longer carries. Asking
+    somebody about a listing that is gone wastes the only scarce thing in the
+    review queue, which is their attention. If it comes back, so does the park.
+    """
+    stale = session.scalars(
+        select(MatchReview).where(
+            MatchReview.source_key == source_key,
+            MatchReview.resolved_at.is_(None),
+            MatchReview.created_at < before,
+        )
+    ).all()
+    for review in stale:
+        session.delete(review)
+    removed = len(stale)
+    if removed:
+        logger.info("%s: %d parked item(s) are no longer listed", source_key, removed)
+    return removed
 
 
 def _looks_truncated(session: Session, source_key: str, items_seen: int) -> bool:

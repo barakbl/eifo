@@ -25,7 +25,7 @@ from rapidfuzz import fuzz
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from eifo_core.enums import TitleKind
+from eifo_core.enums import MatchDecision, TitleKind
 from eifo_core.models import MatchReview, Title, TmdbAlias
 from eifo_fetcher.sources.base import RawItem, plausible_year
 from eifo_fetcher.tmdb import TmdbClient, TmdbTitle
@@ -36,7 +36,13 @@ logger = logging.getLogger("eifo.fetch.match")
 SIMILARITY_THRESHOLD = 90.0
 #: Similarity close enough to be suspicious but too weak to accept: a human
 #: decides. Below this band an item is simply a title we have not seen.
-AMBIGUOUS_THRESHOLD = 75.0
+#:
+#: Was 75, which put almost everything it caught in front of somebody for the
+#: same answer: of the first 78 rulings made by hand, 77 said the suggestion was
+#: wrong. "אודטה" against "פאודה" scores 80 and they are unrelated. Parking is
+#: not free - a parked item is not in the catalog at all - so the band has to be
+#: narrow enough that being asked means something.
+AMBIGUOUS_THRESHOLD = 85.0
 #: A release year may disagree by this much across catalogs.
 YEAR_TOLERANCE = 1
 #: The bar for deciding that two TMDB ids name one work.
@@ -93,6 +99,8 @@ class MatchMethod(StrEnum):
     REVIEW = "review"
     #: Matched from a ruling somebody made in the review queue.
     RESOLVED = "resolved"
+    #: Somebody ruled this is not catalog content - a trailer, a promo, a recap.
+    DISMISSED = "dismissed"
 
 
 @dataclass(slots=True)
@@ -263,6 +271,10 @@ class TitleMatcher:
         self.stats.record(MatchMethod.CREATED)
         return MatchResult(title=title, method=MatchMethod.CREATED)
 
+    def create_title(self, item: RawItem) -> Title:
+        """Create a title for an item somebody has ruled we do not already hold."""
+        return self._create_title(item)
+
     def _prior_decision(self, item: RawItem) -> MatchResult | None:
         """Honour an earlier ``eifo-fetch review`` ruling on this same item.
 
@@ -290,8 +302,13 @@ class TitleMatcher:
         if review is None:
             return None
 
+        if review.decision is MatchDecision.DISMISSED:
+            # Not a title. Dropping it silently is the point: it is the only
+            # answer that keeps a trailer out of a catalog of films.
+            return MatchResult(title=None, method=MatchMethod.DISMISSED)
+
         if review.resolved_title_id is None:
-            # Skipped: not the candidate we suggested. Let it stand on its own.
+            # Not the candidate we suggested. Let it stand on its own.
             return MatchResult(title=self._create_title(item), method=MatchMethod.CREATED)
 
         title = self._session.get(Title, review.resolved_title_id)
@@ -574,6 +591,11 @@ class TitleMatcher:
                     "name_alt": item.name_alt,
                     "year": item.year,
                     "kind": item.kind.value,
+                    # Carried so a ruling can record where to watch the title,
+                    # rather than only that the title exists.
+                    "offer_type": item.offer_type.value,
+                    "tmdb_id": item.tmdb_id,
+                    "imdb_id": item.imdb_id,
                     "deep_link_url": item.deep_link_url,
                     "poster_url": item.poster_url,
                     "extra": dict(item.extra),

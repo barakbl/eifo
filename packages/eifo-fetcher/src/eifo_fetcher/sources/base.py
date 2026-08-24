@@ -16,6 +16,7 @@ from typing import Any
 
 from eifo_core.enums import OfferType, SourceKind, TitleKind
 from eifo_core.settings import Settings, SourceConfig
+from eifo_core.types import utcnow
 from eifo_fetcher.http import HttpClient
 
 
@@ -28,6 +29,28 @@ class SourceInfo:
     kind: SourceKind
     website_url: str
     logo_path: str | None = None
+
+
+#: Near enough to cinema's first year. The Israeli Film Archive holds material
+#: from the 1930s, and nothing in a catalog predates the medium.
+EARLIEST_YEAR = 1880
+#: A title announced for next year is legitimate; a decade out is an accident.
+FUTURE_YEAR_ALLOWANCE = 2
+
+
+def plausible_year(value: int | None) -> int | None:
+    """A production year, or None when the source has handed us something else.
+
+    Catalogs emit 0 for "we do not know" and placeholders like 2999 for "not
+    scheduled yet", and both sort to the ends of a by-year list - where they are
+    the first thing anyone sorting by year sees. Dropping the year keeps the
+    title: it is the year that is wrong, not the listing.
+    """
+    if value is None:
+        return None
+    if EARLIEST_YEAR <= value <= utcnow().year + FUTURE_YEAR_ALLOWANCE:
+        return value
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +90,9 @@ class RawItem:
             raise ValueError("RawItem.name must not be blank")
         if not self.source_key.strip():
             raise ValueError("RawItem.source_key must not be blank")
+        # Every source passes through here, so this is the one place a
+        # placeholder year can be stopped rather than each parser's business.
+        object.__setattr__(self, "year", plausible_year(self.year))
         if (self.price_minor is None) != (self.price_currency is None):
             raise ValueError("RawItem price needs both an amount and a currency, or neither")
         if self.price_minor is not None and self.price_minor < 0:

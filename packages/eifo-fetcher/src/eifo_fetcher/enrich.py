@@ -31,7 +31,7 @@ from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleVie
 from eifo_fetcher.people import apply_credits
 from eifo_fetcher.runs import close_run, open_run
 from eifo_fetcher.scores import RatingInput, aggregate, normalise
-from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError
+from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError, plausible_year
 
 logger = logging.getLogger("eifo.fetch.enrich")
 
@@ -365,6 +365,8 @@ def _apply_patch(session: Session, title: Title, result: EnrichResult, *, source
         if field_name == "credits":
             changed |= _apply_credits(session, title, value, source=source)
             continue
+        if field_name == "year":
+            value = plausible_year(value)
         if field_name not in PATCHABLE_FIELDS or value in (None, ""):
             continue
         if getattr(title, field_name, None) in (None, ""):

@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from eifo_core.enums import TitleKind
 from eifo_core.models import MatchReview, Title
-from eifo_fetcher.sources.base import RawItem
+from eifo_fetcher.sources.base import RawItem, plausible_year
 from eifo_fetcher.tmdb import TmdbClient, TmdbTitle
 
 logger = logging.getLogger("eifo.fetch.match")
@@ -325,7 +325,7 @@ class TitleMatcher:
             tmdb_id=hit.tmdb_id,
             name_he=hebrew,
             name_en=english,
-            year=hit.year or item.year,
+            year=plausible_year(hit.year) or item.year,
             overview_he=hit.overview if hit.overview and is_hebrew(hit.overview) else None,
             overview_en=hit.overview if hit.overview and not is_hebrew(hit.overview) else None,
         )

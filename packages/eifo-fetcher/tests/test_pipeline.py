@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from eifo_core.enums import FetchStatus, OfferType, SourceKind, TitleKind
 from eifo_core.models import Availability, FetchRun, Source, Title
 from eifo_core.settings import Settings
+from eifo_core.types import utcnow
 from eifo_fetcher.pipeline import (
     COMMIT_EVERY,
     MISS_LIMIT,
@@ -24,6 +25,7 @@ from eifo_fetcher.sources.base import (
     SourceInfo,
     SourcePlugin,
     TooManyErrorsError,
+    plausible_year,
 )
 
 INFO = SourceInfo(
@@ -499,3 +501,42 @@ class TestLockHolding:
         assert result.status is FetchStatus.OK
         assert result.items_seen == count
         assert len(session.scalars(select(Availability)).all()) == count
+
+
+class TestPlausibleYears:
+    """Catalogs use the year field to mean "unknown" and "not scheduled" too."""
+
+    @pytest.mark.parametrize("value", [0, 1, 1879, 2999, 9999, -5])
+    def test_a_placeholder_is_not_a_year(self, value: int) -> None:
+        assert plausible_year(value) is None
+
+    @pytest.mark.parametrize("value", [1880, 1927, 2015, 2026])
+    def test_a_real_year_is_kept(self, value: int) -> None:
+        assert plausible_year(value) == value
+
+    def test_a_title_announced_for_next_year_is_kept(self) -> None:
+        """Announced-but-unreleased is ordinary; a decade out is a parsing accident."""
+        assert plausible_year(utcnow().year + 1) == utcnow().year + 1
+
+    def test_a_year_far_in_the_future_is_not(self) -> None:
+        assert plausible_year(utcnow().year + 20) is None
+
+    def test_no_year_stays_no_year(self) -> None:
+        assert plausible_year(None) is None
+
+    def test_every_source_passes_through_the_same_gate(self) -> None:
+        """One place rather than each parser's own business."""
+        assert item("מגלים את אמריקע", year=2999).year is None
+        assert item("ארץ נהדרת", year=0).year is None
+        assert item("פאודה", year=2015).year == 2015
+
+    def test_a_junk_year_does_not_cost_the_title(
+        self, session: Session, settings: Settings, sync_ctx: FetchContext
+    ) -> None:
+        """It is the year that is wrong, not the listing."""
+        result = run_sync(session, settings, sync_ctx, [item("מגלים את אמריקע", year=2999)])
+
+        assert result.items_seen == 1
+        stored = session.scalars(select(Title)).one()
+        assert stored.year is None
+        assert stored.name_he == "מגלים את אמריקע"

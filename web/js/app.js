@@ -4,9 +4,10 @@ import { getMe, getMeta, listSources, logout, setCsrfToken } from "./api.js";
 import { accountMenu } from "./account.js";
 import { DEFAULT_LANGUAGE, directionOf, isSupported, translator } from "./i18n.js";
 import { createItemStore } from "./items.js";
-import { createRouter } from "./router.js";
+import { createRouter, parseHash } from "./router.js";
 import { createStore, debounce } from "./store.js";
 import { createSuggest } from "./suggest.js";
+import { QUERY_EVENT } from "./views/home.js";
 import { el, replace, stateBlock } from "./ui.js";
 import { createHomeView } from "./views/home.js";
 import { createMyListView } from "./views/mylist.js";
@@ -94,6 +95,12 @@ function currentTheme() {
   return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
+/** The search text the current URL is asking for. */
+function queryInHash() {
+  return new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("q") ?? "";
+}
+
+
 function buildHeader({ router }) {
   const { t } = app.get();
 
@@ -104,6 +111,10 @@ function buildHeader({ router }) {
     autocomplete: "off",
     placeholder: t("search.placeholder"),
     "aria-label": t("search.label"),
+    // A shared or reloaded link carries its search in the URL, and the box
+    // showed nothing - so the only way to narrow somebody else's search was to
+    // work out what it had been and type it again.
+    value: queryInHash(),
   });
 
   // One request per keystroke would be slow for the viewer and rude to the
@@ -112,8 +123,26 @@ function buildHeader({ router }) {
     const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
     if (value) params.set("q", value);
     else params.delete("q");
+
+    if (parseHash(window.location.hash).name === "home") {
+      // Already looking at the catalog: change the query in place. Navigating
+      // would add a history entry per debounced keystroke - typing "fauda"
+      // left two or three of them in the back button - and rebuild the whole
+      // view to change one filter.
+      router.replaceSearch(params.toString());
+      window.dispatchEvent(new CustomEvent(QUERY_EVENT, { detail: { q: value } }));
+      return;
+    }
+    // Coming from a title or a person: going to the catalog is a real
+    // navigation, and one entry in the back button is the right number.
     router.navigate("home", [], params.toString());
   }, SEARCH_DEBOUNCE_MS);
+
+  // Somebody who used the back button, or followed a link, has a query the box
+  // knows nothing about - unless they are the one typing.
+  window.addEventListener("hashchange", () => {
+    if (document.activeElement !== input) input.value = queryInHash();
+  });
 
   input.addEventListener("input", (event) => onInput(event.currentTarget.value));
 

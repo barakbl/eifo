@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from sqlalchemy import Select, text
+from sqlalchemy import ColumnElement, Select, select, text
 
 from eifo_core.models import Title
 
@@ -41,7 +41,10 @@ def fts_query(query: str) -> str | None:
 
 
 def apply_text_search(statement: Select[tuple[int]], query: str) -> Select[tuple[int]]:
-    """Restrict a title query to FTS matches, newest-relevance first.
+    """Restrict a title query to FTS matches.
+
+    Ordering is the caller's business - see :func:`relevance_of` for the rank
+    this match produces.
 
     Falls back to an unfiltered statement when the query has no usable terms.
     """
@@ -66,3 +69,26 @@ def name_match(columns: tuple[str, ...], query: str) -> str | None:
     if match is None:
         return None
     return f"{{{' '.join(columns)}}} : {match}"
+
+
+def relevance_of(query: str) -> ColumnElement[float] | None:
+    """How well each title matches, as something a query can order by.
+
+    SQLite's ``bm25`` returns a negative number and the better match is the
+    more negative one, so ascending is best-first. Names are weighted ten times
+    an overview: somebody searching a title's name means the title, not every
+    film whose synopsis happens to mention it.
+
+    None when the query has no usable terms, which is the caller's cue that
+    there is nothing to rank by.
+    """
+    match = fts_query(query)
+    if match is None:
+        return None
+    return (
+        select(text("bm25(titles_fts, 10.0, 10.0, 1.0, 1.0)"))
+        .select_from(text("titles_fts"))
+        .where(text("titles_fts MATCH :rank_fts AND titles_fts.rowid = titles.id"))
+        .params(rank_fts=match)
+        .scalar_subquery()
+    )

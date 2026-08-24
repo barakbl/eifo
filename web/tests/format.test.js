@@ -130,9 +130,13 @@ describe("offerState", () => {
 
 describe("filter round-tripping", () => {
   it("omits defaults so a plain URL stays clean", () => {
-    const params = filtersToParams({ q: "", sources: [], available: "current", sort: "score" });
+    assert.equal(filtersToParams(DEFAULT_FILTERS).toString(), "");
+  });
 
-    assert.equal(params.toString(), "");
+  it("records a chosen sort, because the default is now the catalog's choice", () => {
+    const params = filtersToParams({ ...DEFAULT_FILTERS, sort: "score" });
+
+    assert.equal(params.get("sort"), "score");
   });
 
   it("survives a round trip", () => {

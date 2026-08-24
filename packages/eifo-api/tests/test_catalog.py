@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from seed import Seeded
 from sqlalchemy.orm import Session, sessionmaker
 
-from eifo_core.enums import CreditRole, OfferType, SourceKind
+from eifo_core.enums import CreditRole, OfferType, SourceKind, TitleKind
 from eifo_core.models import Availability, Credit, Person, Source, Title
 
 
@@ -733,3 +733,51 @@ class TestSuggest:
 
     def test_an_empty_query_is_rejected(self, client: TestClient) -> None:
         assert client.get("/api/v1/suggest", params={"q": ""}).status_code == 422
+
+
+class TestRelevance:
+    """A search asks a question; the closest match is the answer to it."""
+
+    def test_searching_orders_by_match_rather_than_score(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """A well-rated title that merely mentions the word used to come first."""
+        with session_factory() as session:
+            session.add(
+                Title(
+                    type=TitleKind.SERIES,
+                    name_en="Something Else",
+                    overview_en="A fauda of noise and confusion.",
+                )
+            )
+            session.commit()
+
+        first = ids(client.get("/api/v1/titles", params={"q": "fauda", "available": "any"}).json())
+
+        assert first[0] == catalog.fauda
+
+    def test_an_explicit_sort_still_wins(self, client: TestClient, catalog: Seeded) -> None:
+        """Choosing an order is choosing it; only silence means "you decide"."""
+        body = client.get(
+            "/api/v1/titles", params={"q": "a", "sort": "year", "available": "any"}
+        ).json()
+        by_year = client.get("/api/v1/titles", params={"sort": "year", "available": "any"}).json()
+
+        assert ids(body) == [i for i in ids(by_year) if i in ids(body)]
+
+    def test_relevance_without_anything_to_match_falls_back(
+        self, client: TestClient, catalog: Seeded
+    ) -> None:
+        """Nothing typed means nothing to rank against, so it means best rated."""
+        asked = client.get("/api/v1/titles", params={"sort": "relevance", "available": "any"})
+        scored = client.get("/api/v1/titles", params={"sort": "score", "available": "any"})
+
+        assert asked.status_code == 200
+        assert ids(asked.json()) == ids(scored.json())
+
+    def test_browsing_still_leads_with_the_best_rated(
+        self, client: TestClient, catalog: Seeded
+    ) -> None:
+        body = client.get("/api/v1/titles", params={"available": "any"}).json()
+
+        assert ids(body)[0] == catalog.foxtrot

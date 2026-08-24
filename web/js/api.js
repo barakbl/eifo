@@ -90,6 +90,7 @@ export function titlesQuery(filters = {}, { page = 1, pageSize = 24 } = {}) {
   if (filters.type) params.set("type", filters.type);
   if (filters.available) params.set("available", filters.available);
   if (filters.sort) params.set("sort", filters.sort);
+  if (filters.order) params.set("order", filters.order);
   if (filters.yearMin) params.set("year_min", String(filters.yearMin));
   if (filters.yearMax) params.set("year_max", String(filters.yearMax));
   if (filters.genres?.length) params.set("genres", filters.genres.join(","));

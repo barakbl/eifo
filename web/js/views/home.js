@@ -30,6 +30,19 @@ const DECADES = [
   { key: "older", min: 1880, max: 1979 },
 ];
 const SORTS = ["score", "score_israeli", "year", "name", "recently_added"];
+/**
+ * Which way round each sort reads when nobody says, mirroring the API.
+ *
+ * Kept here so the arrow is right before anybody touches it - a control that
+ * shows the wrong direction until you use it is worse than no control.
+ */
+const NATURAL_ORDER = {
+  score: "desc",
+  score_israeli: "desc",
+  year: "desc",
+  name: "asc",
+  recently_added: "desc",
+};
 const AVAILABILITY = ["current", "any", "gone"];
 
 // The service selection is remembered here - the same place theme and language
@@ -224,6 +237,7 @@ export function createHomeView({ mount, app, router }) {
 function buildFilterBar({ state, sources, genres, language, user, t, onChange }) {
   const combo = serviceCombo({ state, sources, user, t, onChange });
   const more = moreFilters({ state, genres, language, t, onChange });
+  const direction = sortDirection({ state, t, onChange });
 
   const selects = [
     select({
@@ -242,8 +256,11 @@ function buildFilterBar({ state, sources, genres, language, user, t, onChange })
       values: SORTS,
       current: state.filters.sort,
       label: (value) => t(`filters.sort.${value}`),
-      onChange: (value) => onChange({ sort: value }),
+      // A new field starts the way it reads best; the arrow is for arguing
+      // with that, not something to re-argue on every change.
+      onChange: (value) => onChange({ sort: value, order: "" }),
     }),
+    direction.node,
   ];
 
   const node = el(
@@ -257,8 +274,40 @@ function buildFilterBar({ state, sources, genres, language, user, t, onChange })
     sync: () => {
       combo.sync();
       more.sync();
+      direction.sync();
     },
   };
+}
+
+/**
+ * The arrow beside the sort: read it the other way round.
+ *
+ * Its own control rather than five more options in the select, which would
+ * double the list to say one thing about each entry. Empty means the field's
+ * own direction, so a URL only carries it when somebody disagreed.
+ */
+function sortDirection({ state, t, onChange }) {
+  const current = () => state.filters.order || NATURAL_ORDER[state.filters.sort] || "desc";
+
+  const node = el("button", {
+    class: "control control--order",
+    type: "button",
+    onClick: () => {
+      const flipped = current() === "desc" ? "asc" : "desc";
+      onChange({ order: flipped === NATURAL_ORDER[state.filters.sort] ? "" : flipped });
+    },
+  });
+
+  function sync() {
+    const descending = current() === "desc";
+    node.textContent = descending ? "↓" : "↑";
+    node.setAttribute("aria-label", t(descending ? "filters.order.desc" : "filters.order.asc"));
+    node.setAttribute("aria-pressed", String(Boolean(state.filters.order)));
+    node.title = node.getAttribute("aria-label");
+  }
+
+  sync();
+  return { node, sync };
 }
 
 /**

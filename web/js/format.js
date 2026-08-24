@@ -196,6 +196,7 @@ export const DEFAULT_FILTERS = Object.freeze({
   type: "",
   available: "current",
   sort: "score",
+  order: "",
   yearMin: "",
   yearMax: "",
   genres: [],
@@ -212,6 +213,7 @@ export function filtersToParams(filters) {
     params.set("available", filters.available);
   }
   if (filters.sort && filters.sort !== "score") params.set("sort", filters.sort);
+  if (filters.order) params.set("order", filters.order);
   if (filters.yearMin) params.set("year_min", String(filters.yearMin));
   if (filters.yearMax) params.set("year_max", String(filters.yearMax));
   if (filters.genres?.length) params.set("genres", filters.genres.join(","));
@@ -230,6 +232,7 @@ export function paramsToFilters(search) {
     type: params.get("type") ?? "",
     available: params.get("available") ?? "current",
     sort: params.get("sort") ?? "score",
+    order: params.get("order") ?? "",
     yearMin: params.get("year_min") ?? "",
     yearMax: params.get("year_max") ?? "",
     genres: list("genres"),

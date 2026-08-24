@@ -382,6 +382,20 @@ img {
   font-style: italic;
 }
 
+/* Reverse the sort. Square so it reads as a button, not a truncated select. */
+.control--order {
+  inline-size: 2.25rem;
+  padding-inline: 0;
+  text-align: center;
+  cursor: pointer;
+  font-variant-numeric: normal;
+}
+
+.control--order[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* The second question, not the first: year, genre and score, folded away. */
 .combo__panel--wide {
   min-inline-size: 20rem;

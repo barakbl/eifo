@@ -635,3 +635,42 @@ class TestLockHolding:
         enrich_titles(session, [LooksAtTheRun()], self._ctx(http, settings), settings)
 
         assert seen == [FetchStatus.RUNNING]
+
+
+class TestExternalIdCollisions:
+    """Both id columns are unique, so a second writer used to take the run down."""
+
+    def _ctx(self, http: Any, settings: Settings) -> FetchContext:
+        return FetchContext(source_key="enrich", http=http, settings=settings)
+
+    def test_an_id_another_title_owns_is_not_written(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        owner = add_title(session, name_he="חטופות", tmdb_id=479040)
+        other = add_title(session, name_he="חטופות", tmdb_id=None)
+        enricher = FakeEnricher(EnrichResult(metadata_patch={"tmdb_id": 479040}))
+
+        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+
+        assert other.tmdb_id is None
+        assert owner.tmdb_id == 479040
+
+    def test_the_run_carries_on(self, session: Session, settings: Settings, http: Any) -> None:
+        """It used to raise on the next flush and lose the rest of the batch."""
+        add_title(session, name_he="חטופות", tmdb_id=479040)
+        add_title(session, name_he="אחר", tmdb_id=None)
+        enricher = FakeEnricher(EnrichResult(metadata_patch={"tmdb_id": 479040}))
+
+        tally = enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+
+        assert tally.titles_seen == 2
+
+    def test_a_free_id_is_still_written(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        title = add_title(session, tmdb_id=None)
+        enricher = FakeEnricher(EnrichResult(metadata_patch={"tmdb_id": 12345}))
+
+        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+
+        assert title.tmdb_id == 12345

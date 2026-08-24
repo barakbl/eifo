@@ -9,9 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from eifo_core.enums import TitleKind
-from eifo_core.models import MatchReview, Title
+from eifo_core.models import MatchReview, Title, TmdbAlias
 from eifo_core.types import utcnow
 from eifo_fetcher.match import (
+    REVIEW_YEAR_TOLERANCE,
     MatchMethod,
     TitleMatcher,
     is_hebrew,
@@ -77,6 +78,22 @@ class TestNormalise:
     )
     def test_folds_away_meaningless_differences(self, left: str, right: str) -> None:
         assert normalise(left) == normalise(right)
+
+    def test_a_vowel_sign_is_a_letter_not_a_decoration(self) -> None:
+        """In Malayalam, Devanagari and Tamil the vowel signs are combining marks.
+
+        Stripping every combining character folded "ജോജി" (Joji) and "ജോ & ജോ"
+        (Jo & Jo) to the same two consonants - two different films at a
+        similarity of 100, saved from being merged only by their external ids.
+        """
+        assert normalise("ജോജി") != normalise("ജോ & ജോ")
+        assert similarity("ജോജി", "ജോ & ജോ") < 90
+
+    def test_latin_diacritics_are_still_folded(self) -> None:
+        assert normalise("Amélie") == normalise("Amelie")
+
+    def test_hebrew_pointing_is_still_folded(self) -> None:
+        assert normalise("הַגּוֹבֶה") == normalise("הגובה")
 
     def test_strips_the_hebrew_definite_article(self) -> None:
         assert normalise("הקומדי סטור") == normalise("קומדי סטור")
@@ -214,12 +231,19 @@ class TestLocalFuzzy:
         assert result.title is existing
 
     def test_does_not_match_across_kinds(self, session: Session) -> None:
+        """A film is never silently folded into a series, or the other way round.
+
+        It is asked about instead: one catalog filing a one-off documentary as a
+        film while another files it as a series is the single largest family of
+        duplicates in the deployed catalog, and neither answer is safe to guess.
+        """
         session.add(Title(type=TitleKind.MOVIE, name_he="פאודה", year=2015))
         session.flush()
 
         result = TitleMatcher(session).match(item(kind=TitleKind.SERIES, name="פאודה"))
 
-        assert result.method is MatchMethod.CREATED
+        assert result.title is None
+        assert result.method is MatchMethod.REVIEW
 
     def test_does_not_match_a_different_year(self, session: Session) -> None:
         session.add(Title(type=TitleKind.SERIES, name_he="פאודה", year=1999))
@@ -442,3 +466,142 @@ class TestStats:
         matcher.match(item(name="ראשון", year=2001))
 
         assert matcher.stats.as_dict() == {"created": 2, "fuzzy": 1}
+
+
+class TestTmdbDuplicatesItsOwnRecords:
+    """TMDB carries the same work twice, and offers both ids every night."""
+
+    def test_a_second_record_of_a_title_we_hold_is_not_a_new_title(self, session: Session) -> None:
+        """The Pacific arrived twice from one source, twenty-four seconds apart."""
+        held = Title(type=TitleKind.SERIES, name_en="The Pacific", year=2010, tmdb_id=16997)
+        session.add(held)
+        session.flush()
+
+        result = TitleMatcher(session).match(item(name="The Pacific", year=2010, tmdb_id=327352))
+
+        assert result.title is held
+        assert result.method is MatchMethod.ALIAS
+        assert session.scalars(select(Title)).all() == [held]
+
+    def test_the_losing_id_is_remembered(self, session: Session) -> None:
+        """Or the merge undoes itself: the feed offers that id again tomorrow."""
+        held = Title(type=TitleKind.SERIES, name_en="The Pacific", year=2010, tmdb_id=16997)
+        session.add(held)
+        session.flush()
+        TitleMatcher(session).match(item(name="The Pacific", year=2010, tmdb_id=327352))
+
+        alias = session.get(TmdbAlias, 327352)
+        assert alias is not None and alias.title_id == held.id
+
+    def test_the_alias_resolves_on_the_next_sync(self, session: Session) -> None:
+        held = Title(type=TitleKind.SERIES, name_en="The Pacific", year=2010, tmdb_id=16997)
+        session.add(held)
+        session.flush()
+        matcher = TitleMatcher(session)
+        matcher.match(item(name="The Pacific", year=2010, tmdb_id=327352))
+
+        again = matcher.match(item(name="The Pacific", year=2010, tmdb_id=327352))
+
+        assert again.title is held
+        assert again.method is MatchMethod.ALIAS
+        assert len(session.scalars(select(Title)).all()) == 1
+
+    def test_a_year_apart_is_still_the_same_record(self, session: Session) -> None:
+        """Hunters was 2020 under one id and 2021 under the other."""
+        held = Title(type=TitleKind.SERIES, name_en="Hunters", year=2020, tmdb_id=79622)
+        session.add(held)
+        session.flush()
+
+        result = TitleMatcher(session).match(item(name="Hunters", year=2021, tmdb_id=126679))
+
+        assert result.method is MatchMethod.ALIAS
+
+    def test_a_merely_similar_name_is_left_as_its_own_title(self, session: Session) -> None:
+        """An item carrying its own id is asserting an identity, and TMDB is usually right."""
+        session.add(Title(type=TitleKind.SERIES, name_en="Love Island Ari", year=2024, tmdb_id=1))
+        session.flush()
+
+        result = TitleMatcher(session).match(item(name="Love Island Adel", year=2024, tmdb_id=2))
+
+        assert result.method is MatchMethod.TMDB
+        assert len(session.scalars(select(Title)).all()) == 2
+
+
+class TestATitleWeAlreadyHoldWithoutAnId:
+    """A local source creates a Hebrew title; a later one resolves it via TMDB."""
+
+    def _held(self, session: Session) -> Title:
+        held = Title(type=TitleKind.SERIES, name_he="יניב", year=2023)
+        session.add(held)
+        session.flush()
+        return held
+
+    def test_the_tmdb_hit_is_folded_into_it(self, session: Session) -> None:
+        held = self._held(session)
+        tmdb = FakeTmdb([tmdb_title(tmdb_id=331371, name="יניב", original_name="Yaniv", year=2023)])
+
+        result = TitleMatcher(session, tmdb=tmdb).match(
+            item(source_key="reshet13", name="יניב", year=2023)
+        )
+
+        assert result.title is held
+        assert len(session.scalars(select(Title)).all()) == 1
+
+    def test_it_gains_the_anchor_enrichment_needs(self, session: Session) -> None:
+        """The id-less Hebrew listings are exactly the ones nothing could enrich."""
+        held = self._held(session)
+        tmdb = FakeTmdb([tmdb_title(tmdb_id=331371, name="יניב", original_name="Yaniv", year=2023)])
+
+        TitleMatcher(session, tmdb=tmdb).match(item(source_key="reshet13", name="יניב", year=2023))
+
+        assert held.tmdb_id == 331371
+
+    def test_a_title_that_already_has_an_id_is_not_overwritten(self, session: Session) -> None:
+        held = self._held(session)
+        held.tmdb_id = 999
+        session.flush()
+        tmdb = FakeTmdb([tmdb_title(tmdb_id=331371, name="יניב", original_name="Yaniv", year=2023)])
+
+        TitleMatcher(session, tmdb=tmdb).match(item(source_key="reshet13", name="יניב", year=2023))
+
+        assert held.tmdb_id == 999
+
+
+class TestYearsCatalogsDisagreeAbout:
+    def test_tmdb_is_searched_again_without_the_year(self, session: Session) -> None:
+        """Its year filter is exact, and a series is dated by whichever season a catalog carries."""
+        tmdb = FakeTmdb([tmdb_title(tmdb_id=51157, name="חטופים", year=2010)])
+
+        result = TitleMatcher(session, tmdb=tmdb).match(item(name="חטופים", year=2010))
+
+        assert result.method is MatchMethod.TMDB
+        assert tmdb.queries == ["חטופים"]
+
+    def test_a_wide_year_gap_is_asked_about_rather_than_duplicated(self, session: Session) -> None:
+        """חטופים is 2010 in one catalog and 2012 in another - the same show."""
+        session.add(Title(type=TitleKind.SERIES, name_he="חטופים", year=2010))
+        session.flush()
+
+        result = TitleMatcher(session).match(item(name="חטופים", year=2012))
+
+        assert result.title is None
+        assert result.method is MatchMethod.REVIEW
+
+    def test_a_gap_beyond_asking_about_is_simply_a_new_title(self, session: Session) -> None:
+        session.add(Title(type=TitleKind.SERIES, name_he="חטופים", year=2010))
+        session.flush()
+
+        result = TitleMatcher(session).match(
+            item(name="חטופים", year=2010 + REVIEW_YEAR_TOLERANCE + 5)
+        )
+
+        assert result.method is MatchMethod.CREATED
+
+    def test_a_year_gap_is_never_enough_to_match_on(self, session: Session) -> None:
+        """Widening the matching rule would make the year useless against remakes."""
+        session.add(Title(type=TitleKind.SERIES, name_he="חטופים", year=2010))
+        session.flush()
+
+        result = TitleMatcher(session).match(item(name="חטופים", year=2012))
+
+        assert result.method is not MatchMethod.FUZZY

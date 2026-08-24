@@ -48,6 +48,9 @@ COMMIT_EVERY = 25
 #: no network - so a larger batch still keeps each lock short.
 AGGREGATE_COMMIT_EVERY = 200
 
+#: Patchable fields the schema keeps unique, so a second writer collides.
+_UNIQUE_FIELDS = frozenset({"tmdb_id", "imdb_id"})
+
 #: Metadata fields an enricher may fill. Anything else in a patch is ignored,
 #: so a provider cannot quietly write to columns it has no business setting.
 PATCHABLE_FIELDS = frozenset(
@@ -369,11 +372,38 @@ def _apply_patch(session: Session, title: Title, result: EnrichResult, *, source
             value = plausible_year(value)
         if field_name not in PATCHABLE_FIELDS or value in (None, ""):
             continue
+        if field_name in _UNIQUE_FIELDS and _already_taken(session, field_name, value, title):
+            continue
         if getattr(title, field_name, None) in (None, ""):
             setattr(title, field_name, value)
             changed = True
 
     return changed
+
+
+def _already_taken(session: Session, field_name: str, value: Any, title: Title) -> bool:
+    """Whether another title already holds this external id.
+
+    Both id columns are unique, so writing one another title owns raises on the
+    next flush and takes the whole run's remaining work with it. It also means
+    something worth knowing: two titles the enricher believes are the same work.
+    Recording that is the dedupe tool's job, so this only declines to write and
+    says so.
+    """
+    column = getattr(Title, field_name)
+    owner = session.scalar(select(Title.id).where(column == value, Title.id != title.id))
+    if owner is None:
+        return False
+
+    logger.warning(
+        "title %s and title %s both look like %s=%r; leaving it on %s",
+        title.id,
+        owner,
+        field_name,
+        value,
+        owner,
+    )
+    return True
 
 
 def _apply_credits(session: Session, title: Title, entries: Any, *, source: str) -> bool:

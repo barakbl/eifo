@@ -141,6 +141,10 @@ class Title(TimestampMixin, Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    tmdb_aliases: Mapped[list[TmdbAlias]] = relationship(
+        back_populates="title",
+        cascade="all, delete-orphan",
+    )
 
     @property
     def display_name(self) -> str:
@@ -377,6 +381,37 @@ class AggregateScore(Base):
 
     def __repr__(self) -> str:
         return f"<AggregateScore title={self.title_id} score={self.score}>"
+
+
+class TmdbAlias(Base):
+    """A TMDB id that turned out to be a second record of a title already held.
+
+    TMDB carries the same work twice more often than one would like - a
+    miniseries entered again under a different id, an anime split between its
+    seasons - and the availability feed offers both ids every night. Merging the
+    two titles is therefore not enough on its own: the next sync would see an id
+    no title owns and faithfully recreate what was just merged.
+
+    So the losing id is kept and pointed at the survivor. It is a fact about
+    TMDB's catalog rather than about ours, which is why it lives beside the
+    titles rather than inside one.
+    """
+
+    __tablename__ = "tmdb_aliases"
+
+    #: The id that is not the canonical one. Primary key: an id can only ever
+    #: be an alias for one title.
+    tmdb_id: Mapped[int] = mapped_column(primary_key=True)
+    title_id: Mapped[int] = mapped_column(
+        ForeignKey("titles.id", ondelete="CASCADE"),
+        index=True,
+    )
+    created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+
+    title: Mapped[Title] = relationship(back_populates="tmdb_aliases")
+
+    def __repr__(self) -> str:
+        return f"<TmdbAlias tmdb={self.tmdb_id} -> title={self.title_id}>"
 
 
 class EnrichAttempt(Base):

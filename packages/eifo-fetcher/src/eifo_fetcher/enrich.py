@@ -28,6 +28,7 @@ from eifo_core.models import (
 from eifo_core.settings import Settings
 from eifo_core.types import utcnow
 from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
+from eifo_fetcher.match import is_hebrew, latin_script
 from eifo_fetcher.people import apply_credits
 from eifo_fetcher.runs import close_run, open_run
 from eifo_fetcher.scores import RatingInput, aggregate, normalise
@@ -199,6 +200,23 @@ def _is_available(session: Session, title_id: int) -> bool:
     return found is not None
 
 
+def mislabelled_names(session: Session, *, limit: int | None = None) -> list[Title]:
+    """Titles whose English name is not written in Latin script.
+
+    These are the ones an en-US request can still fix: a title with no TMDB id
+    has nobody to ask. Filtered in Python rather than SQL because "is this
+    Latin" is a question about scripts, not about bytes, and a maintenance
+    command can afford to read the column.
+    """
+    stored = session.scalars(
+        select(Title)
+        .where(Title.name_en.is_not(None), Title.tmdb_id.is_not(None))
+        .order_by(Title.id)
+    ).all()
+    broken = [title for title in stored if title.name_en and not latin_script(title.name_en)]
+    return broken[:limit] if limit is not None else broken
+
+
 def _outcome_of(title: Title, *, written: int, errored: bool) -> EnrichOutcome:
     """Read the outcome off what one title's pass through the enrichers produced.
 
@@ -223,8 +241,14 @@ def enrich_titles(
     *,
     force: bool = False,
     limit: int | None = None,
+    titles: list[Title] | None = None,
 ) -> EnrichResultTally:
-    """Run every enricher over the titles that are due, then recompute scores."""
+    """Run every enricher over the titles that are due, then recompute scores.
+
+    Args:
+        titles: enrich exactly these, instead of whatever is due. For repairs
+            that know which titles they are about, and for the tests.
+    """
     started_at = utcnow()
     tally = EnrichResultTally()
     status = FetchStatus.OK
@@ -232,7 +256,12 @@ def enrich_titles(
     fatal: str | None = None
 
     try:
-        for index, title in enumerate(titles_due(session, settings, force=force, limit=limit), 1):
+        due = (
+            titles
+            if titles is not None
+            else titles_due(session, settings, force=force, limit=limit)
+        )
+        for index, title in enumerate(due, 1):
             tally.titles_seen += 1
             view = _view_of(title)
             written = 0
@@ -358,7 +387,7 @@ def _store_ratings(
 
 
 def _apply_patch(session: Session, title: Title, result: EnrichResult, *, source: str) -> bool:
-    """Fill empty fields only; never overwrite what is already known."""
+    """Fill empty fields, and correct a name stored in the wrong script."""
     changed = False
 
     for field_name, value in result.metadata_patch.items():
@@ -374,11 +403,33 @@ def _apply_patch(session: Session, title: Title, result: EnrichResult, *, source
             continue
         if field_name in _UNIQUE_FIELDS and _already_taken(session, field_name, value, title):
             continue
-        if getattr(title, field_name, None) in (None, ""):
+        if _may_write(title, field_name, value):
             setattr(title, field_name, value)
             changed = True
 
     return changed
+
+
+def _may_write(title: Title, field_name: str, value: Any) -> bool:
+    """Whether a patch may set this field.
+
+    Fill empty fields only, with one exception: a name in the wrong script is
+    not a name we have, it is one we mislabelled, and it stays mislabelled for
+    ever if only emptiness can be overwritten. Every enrichment pass fetched the
+    right English title for "千と千尋の神隠し" and threw it away because the
+    column already held something.
+
+    The replacement has to be in the right script itself, so this can only ever
+    improve a name and never trade one wrong answer for another.
+    """
+    current = getattr(title, field_name, None)
+    if current in (None, ""):
+        return True
+    if field_name == "name_en":
+        return not latin_script(str(current)) and latin_script(str(value))
+    if field_name == "name_he":
+        return not is_hebrew(str(current)) and is_hebrew(str(value))
+    return False
 
 
 def _already_taken(session: Session, field_name: str, value: Any, title: Title) -> bool:

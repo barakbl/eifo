@@ -16,6 +16,7 @@ from eifo_fetcher.match import (
     MatchMethod,
     TitleMatcher,
     is_hebrew,
+    latin_script,
     names_of,
     normalise,
     similarity,
@@ -605,3 +606,57 @@ class TestYearsCatalogsDisagreeAbout:
         result = TitleMatcher(session).match(item(name="חטופים", year=2012))
 
         assert result.method is not MatchMethod.FUZZY
+
+
+class TestWhichColumnANameBelongsIn:
+    """There is a Hebrew column and an English one, and nothing else."""
+
+    # The dotless i is the point of that last one: Latin, and nowhere near ASCII.
+    @pytest.mark.parametrize(
+        "name",
+        ["Fauda", "Amélie", "Cien años de soledad", "Canım Annem"],  # noqa: RUF001
+    )
+    def test_latin_names_are_english(self, name: str) -> None:
+        """Accented Latin is an English-column name in every sense that matters here."""
+        assert latin_script(name) is True
+
+    @pytest.mark.parametrize(
+        "name",
+        ["千と千尋の神隠し", "פאודה", "दिलवाले दुल्हनिया ले जायेंगे", "லியோ", "어비스", "Улицы"],
+    )
+    def test_other_scripts_are_not(self, name: str) -> None:
+        assert latin_script(name) is False
+
+    @pytest.mark.parametrize("name", ["2046", "", "!!!"])
+    def test_a_name_with_no_letters_is_not_english_either(self, name: str) -> None:
+        assert latin_script(name) is False
+
+    def test_a_japanese_name_is_not_filed_as_english(self, session: Session) -> None:
+        """Calling anything non-Hebrew English is how Spirited Away became unfindable."""
+        matcher = TitleMatcher(session)
+        matcher.match(item(name="千と千尋の神隠し", name_alt="Spirited Away", year=2001))
+
+        stored = session.scalars(select(Title)).one()
+        assert stored.name_en == "Spirited Away"
+        assert stored.name_he is None
+
+    def test_a_title_with_only_a_third_script_name_still_gets_stored(
+        self, session: Session
+    ) -> None:
+        """A row must carry a name; the enricher replaces it with a real English one."""
+        TitleMatcher(session).match(item(name="千と千尋の神隠し", year=2001))
+
+        stored = session.scalars(select(Title)).one()
+        assert stored.name_en == "千と千尋の神隠し"
+
+    def test_an_israeli_film_does_not_get_hebrew_in_both_columns(self, session: Session) -> None:
+        """TMDB answers a Hebrew request in Hebrew and calls the original title English."""
+        tmdb = FakeTmdb(
+            [tmdb_title(tmdb_id=359314, name="ארץ פצועה", original_name="ארץ פצועה", year=2016)]
+        )
+
+        TitleMatcher(session, tmdb=tmdb).match(item(name="ארץ פצועה", year=2016))
+
+        stored = session.scalars(select(Title)).one()
+        assert stored.name_he == "ארץ פצועה"
+        assert stored.name_en is None

@@ -32,6 +32,7 @@ from eifo_core.types import utcnow
 from eifo_fetcher.enrich import (
     COMMIT_EVERY,
     enrich_titles,
+    mislabelled_names,
     recompute_all_aggregates,
     titles_due,
 )
@@ -674,3 +675,73 @@ class TestExternalIdCollisions:
         enrich_titles(session, [enricher], self._ctx(http, settings), settings)
 
         assert title.tmdb_id == 12345
+
+
+class TestCorrectingAMislabelledName:
+    """A name in the wrong script is not a name we have; it is one we mislabelled."""
+
+    def _ctx(self, http: Any, settings: Settings) -> FetchContext:
+        return FetchContext(source_key="enrich", http=http, settings=settings)
+
+    def test_a_wrong_script_english_name_is_replaced(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """Every pass fetched "Spirited Away" and threw it away: the column was not empty."""
+        title = add_title(session, name_he=None, name_en="千と千尋の神隠し", tmdb_id=129)
+        enricher = FakeEnricher(EnrichResult(metadata_patch={"name_en": "Spirited Away"}))
+
+        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+
+        assert title.name_en == "Spirited Away"
+
+    def test_a_real_english_name_is_still_never_overwritten(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        title = add_title(session, name_en="Fauda")
+        enricher = FakeEnricher(EnrichResult(metadata_patch={"name_en": "Something Else"}))
+
+        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+
+        assert title.name_en == "Fauda"
+
+    def test_one_wrong_answer_is_not_traded_for_another(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """The replacement has to be in the right script itself."""
+        title = add_title(session, name_en="千と千尋の神隠し", tmdb_id=129)
+        enricher = FakeEnricher(EnrichResult(metadata_patch={"name_en": "スピリット"}))
+
+        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+
+        assert title.name_en == "千と千尋の神隠し"
+
+    def test_hebrew_names_get_the_same_treatment(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        title = add_title(session, name_he="Fauda", name_en="Fauda")
+        enricher = FakeEnricher(EnrichResult(metadata_patch={"name_he": "פאודה"}))
+
+        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+
+        assert title.name_he == "פאודה"
+
+
+class TestFindingTheMislabelled:
+    def test_only_names_written_in_another_script(self, session: Session) -> None:
+        japanese = add_title(session, name_en="千と千尋の神隠し", tmdb_id=129)
+        add_title(session, name_en="Fauda", tmdb_id=2)
+        add_title(session, name_en="Amélie", tmdb_id=3)
+
+        assert [title.id for title in mislabelled_names(session)] == [japanese.id]
+
+    def test_a_title_with_nobody_to_ask_is_left_out(self, session: Session) -> None:
+        """An en-US request needs a TMDB id; without one there is no repair to make."""
+        add_title(session, name_en="千と千尋の神隠し", tmdb_id=None)
+
+        assert mislabelled_names(session) == []
+
+    def test_the_batch_can_be_bounded(self, session: Session) -> None:
+        for index in range(4):
+            add_title(session, name_en=f"千と千尋{index}", tmdb_id=100 + index)
+
+        assert len(mislabelled_names(session, limit=2)) == 2

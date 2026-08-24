@@ -16,7 +16,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.settings import Settings
 from eifo_core.types import utcnow
-from eifo_fetcher.enrich import EnrichResultTally, enrich_titles, recompute_all_aggregates
+from eifo_fetcher.enrich import (
+    EnrichResultTally,
+    enrich_titles,
+    mislabelled_names,
+    recompute_all_aggregates,
+)
 from eifo_fetcher.enrichers import discover_enrichers
 from eifo_fetcher.enrichers.imdb import ImdbDatasetLoader
 from eifo_fetcher.http import HttpClient
@@ -30,6 +35,9 @@ from eifo_fetcher.tmdb import IMAGE_HOST, TmdbClient
 #: Source key the IMDb bulk pass records itself under. It is one join over a
 #: dataset rather than a catalog, so it is not a source, but it needs a name.
 IMDB_RUN_KEY = "imdb"
+
+#: The enricher that knows what a title is called in English.
+TMDB_ENRICHER_KEY = "tmdb"
 
 logger = logging.getLogger("eifo.fetch.runner")
 
@@ -157,6 +165,44 @@ def enrich_all(
         tally.titles_seen,
         tally.ratings_written,
         tally.aggregates_computed,
+    )
+    return tally
+
+
+def repair_names(
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    *,
+    http: HttpClient,
+    limit: int | None = None,
+) -> EnrichResultTally:
+    """Re-ask TMDB for the English name of every title stored under another script.
+
+    The nightly pass corrects these on its own now that a wrong-script name can
+    be overwritten, but only as each title comes round. This asks about all of
+    them at once, which is the difference between a fortnight and a few minutes.
+
+    Only the TMDB enricher runs: it is the one that knows English titles, and
+    scraping Rotten Tomatoes for three thousand titles to fix their names would
+    be neither quick nor polite.
+    """
+    enrichers = [e for e in discover_enrichers(settings) if e.key == TMDB_ENRICHER_KEY]
+    if not enrichers:
+        logger.warning("the TMDB enricher is switched off; nothing can be repaired")
+        return EnrichResultTally()
+
+    with session_factory() as session:
+        targets = mislabelled_names(session, limit=limit)
+        if not targets:
+            logger.info("every English name is already in Latin script")
+            return EnrichResultTally()
+
+        logger.info("re-asking TMDB about %d mislabelled names", len(targets))
+        ctx = FetchContext(source_key="repair-names", http=http, settings=settings)
+        tally = enrich_titles(session, enrichers, ctx, settings, titles=targets)
+
+    logger.info(
+        "repair-names: %d titles seen, %d corrected", tally.titles_seen, tally.metadata_updated
     )
     return tally
 

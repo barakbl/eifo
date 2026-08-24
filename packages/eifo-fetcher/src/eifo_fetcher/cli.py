@@ -22,6 +22,7 @@ from eifo_core import __version__ as core_version
 from eifo_core import migrate
 from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
 from eifo_core.enums import FetchPhase, FetchStatus
+from eifo_core.fts import ensure_search_triggers
 from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
 from eifo_core.settings import MissingSettingsError, Settings, get_settings
 from eifo_core.types import utcnow
@@ -258,10 +259,17 @@ def _cmd_daemon(args: argparse.Namespace, settings: Settings) -> int:
 
 @contextmanager
 def _database(settings: Settings) -> Iterator[sessionmaker[Session]]:
-    """A session factory for one command, refusing an unmigrated database."""
+    """A session factory for one command, refusing an unmigrated database.
+
+    This is the process that writes titles, so it is the one that must not write
+    into a search index nothing is updating: a rebuild of ``titles`` drops the
+    FTS triggers silently, and every title written after that would be invisible
+    to search with no sign anything was wrong.
+    """
     engine = create_engine_from_settings(settings)
     try:
         require_schema(engine, settings.db_url)
+        ensure_search_triggers(engine)
         yield make_session_factory(engine)
     finally:
         engine.dispose()

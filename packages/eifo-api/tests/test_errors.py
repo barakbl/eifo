@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 from eifo_api.app import create_app
 from eifo_api.errors import PROBLEM_MEDIA_TYPE
 from eifo_core.db import DatabaseNotReadyError
-from eifo_core.migrate import current_revision, head_revision
+from eifo_core.fts import TRIGGERS, missing_triggers
+from eifo_core.migrate import current_revision, head_revision, upgrade
 from eifo_core.settings import Settings
 
 
@@ -61,6 +64,48 @@ def test_an_unmigrated_database_is_migrated_on_start(tmp_path: object) -> None:
     engine = create_engine(db_url)
     try:
         assert current_revision(engine) == head_revision()
+    finally:
+        engine.dispose()
+
+
+def test_a_search_index_nothing_updates_is_rewired_on_start(tmp_path: object) -> None:
+    """A rebuild of titles drops the FTS triggers; serving stale search is not an option."""
+    db_url = f"sqlite:///{tmp_path}/unwired.db"
+    upgrade(db_url)
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as connection:
+            for name in TRIGGERS:
+                connection.execute(text(f"DROP TRIGGER {name}"))
+
+        with TestClient(create_app(Settings(_env_file=None, db_url=db_url))) as client:
+            assert client.get("/api/v1/meta").status_code == 200
+
+        with engine.connect() as connection:
+            assert missing_triggers(connection) == ()
+    finally:
+        engine.dispose()
+
+
+def test_a_start_told_not_to_migrate_reports_an_unwired_index(
+    tmp_path: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """auto_migrate off means this process does not touch the schema - so it says so instead."""
+    db_url = f"sqlite:///{tmp_path}/untouched.db"
+    upgrade(db_url)
+    engine = create_engine(db_url)
+    try:
+        with engine.begin() as connection:
+            for name in TRIGGERS:
+                connection.execute(text(f"DROP TRIGGER {name}"))
+
+        app = create_app(Settings(_env_file=None, db_url=db_url, auto_migrate=False))
+        with caplog.at_level(logging.WARNING, logger="eifo.api"), TestClient(app):
+            pass
+
+        assert "search index is not being updated" in caplog.text
+        with engine.connect() as connection:
+            assert len(missing_triggers(connection)) == len(TRIGGERS)
     finally:
         engine.dispose()
 

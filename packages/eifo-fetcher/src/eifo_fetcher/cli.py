@@ -138,6 +138,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _use_utf8_for_output() -> None:
+    """Print the catalog in the alphabet the catalog is written in.
+
+    Python encodes text for a stream in whatever the environment claims to be
+    using, which on Windows is a code page with no Hebrew in it. Every title in
+    here is Hebrew, so ``eifo-fetch review list`` redirected to a file - which
+    is what a scheduled task is - died on the first title it printed, and every
+    log line naming one was dropped by the logging machinery instead. The
+    output of this program is UTF-8 on every platform. POSIX terminals already
+    are, so this says out loud what was being assumed there.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
+
+
 def _configure_logging(verbose: bool) -> None:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
@@ -453,6 +470,7 @@ _COMMANDS = {
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the CLI. Returns a process exit code rather than raising."""
+    _use_utf8_for_output()
     args = build_parser().parse_args(argv)
     _configure_logging(args.verbose)
 

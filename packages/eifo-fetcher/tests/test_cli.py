@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
 import logging
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from eifo_core.fts import TITLES, missing_triggers
 from eifo_core.migrate import alembic_config, upgrade
 from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
 from eifo_core.settings import Settings, get_settings
+from eifo_fetcher import cli
 from eifo_fetcher.cli import EXIT_FATAL, EXIT_OK, EXIT_PARTIAL, build_parser, main
 from eifo_fetcher.lock import single_flight
 
@@ -351,3 +354,63 @@ class TestParser:
             build_parser().parse_args(["--version"])
 
         assert exc_info.value.code == 0
+
+
+def _is_utf8(stream: io.TextIOWrapper) -> bool:
+    """Python spells the same encoding several ways; only one of them matters."""
+    return stream.encoding.lower().replace("-", "") == "utf8"
+
+
+class TestOutputCarriesHebrew:
+    """The catalog is in Hebrew, so the streams it is printed to must hold it.
+
+    Nothing here is about Windows in particular. It is about what this program
+    assumed of the machine it was printing to - that its default encoding could
+    spell a title - which is true of a POSIX terminal and false of a Windows one.
+    A capture fixture is UTF-8 whatever the platform, so the tests that read the
+    output of `review list` could never have caught it; these use a stream that
+    cannot spell Hebrew, which is the thing that goes wrong.
+    """
+
+    def _legacy_stream(self) -> io.TextIOWrapper:
+        """A stdout like the one Windows hands a redirected process."""
+        return io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+
+    def test_a_title_survives_a_stream_that_cannot_spell_it(
+        self, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        with factory() as session:
+            session.add(
+                MatchReview(source_key="mako", raw_payload={"name": "סרוגים 2", "year": 2008})
+            )
+            session.commit()
+
+        stream = self._legacy_stream()
+        monkeypatch.setattr(sys, "stdout", stream)
+
+        assert main(["review", "list"]) == EXIT_OK
+
+        stream.flush()
+        assert "סרוגים 2" in stream.buffer.getvalue().decode("utf-8")
+
+    def test_both_streams_are_left_speaking_utf8(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Not only stdout: log lines name titles too, and they go to stderr."""
+        out, err = self._legacy_stream(), self._legacy_stream()
+        monkeypatch.setattr(sys, "stdout", out)
+        monkeypatch.setattr(sys, "stderr", err)
+
+        cli._use_utf8_for_output()
+
+        assert _is_utf8(out) and _is_utf8(err)
+
+    def test_a_stream_that_is_not_there_does_not_stop_the_other(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`pythonw` hands a program no stdout at all, which is not a failure."""
+        err = self._legacy_stream()
+        monkeypatch.setattr(sys, "stdout", None)
+        monkeypatch.setattr(sys, "stderr", err)
+
+        cli._use_utf8_for_output()
+
+        assert _is_utf8(err)

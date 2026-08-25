@@ -38,7 +38,7 @@ from eifo_api.schemas import (
     TitleDetail,
     TitleSuggestion,
 )
-from eifo_api.search import apply_text_search, name_match
+from eifo_api.search import apply_text_search, name_match, relevance_of
 from eifo_core.enums import FetchPhase, FetchStatus, TitleKind
 from eifo_core.fts import PEOPLE, TITLES
 from eifo_core.models import (
@@ -68,6 +68,9 @@ class AvailabilityFilter(StrEnum):
 
 
 class Sort(StrEnum):
+    #: How well a title matches the text searched for. Only means anything
+    #: alongside ``q``; without one there is nothing to rank against.
+    RELEVANCE = "relevance"
     SCORE = "score"
     SCORE_ISRAELI = "score_israeli"
     YEAR = "year"
@@ -84,6 +87,8 @@ class SortOrder(StrEnum):
 #: scored or dated, A to Z for a name - and leaving ``order`` unset keeps every
 #: URL written before it existed answering exactly as it did.
 NATURAL_ORDER = {
+    # Ascending, because bm25 counts down: the better match is more negative.
+    Sort.RELEVANCE: SortOrder.ASC,
     Sort.SCORE: SortOrder.DESC,
     Sort.SCORE_ISRAELI: SortOrder.DESC,
     Sort.YEAR: SortOrder.DESC,
@@ -103,7 +108,10 @@ def list_titles(
     year_min: Annotated[int | None, Query(ge=1880, le=2200)] = None,
     year_max: Annotated[int | None, Query(ge=1880, le=2200)] = None,
     score_min: Annotated[int | None, Query(ge=0, le=100)] = None,
-    sort: Annotated[Sort, Query()] = Sort.SCORE,
+    sort: Annotated[
+        Sort | None,
+        Query(description="Ordering; best match when searching, best rated otherwise"),
+    ] = None,
     order: Annotated[
         SortOrder | None,
         Query(description="Sort direction; the field's own default when unset"),
@@ -125,7 +133,11 @@ def list_titles(
     )
 
     total = session.scalar(select(func.count()).select_from(filtered.subquery())) or 0
-    ordered = _apply_sort(filtered, sort, order).limit(page_size).offset((page - 1) * page_size)
+    ordered = (
+        _apply_sort(filtered, sort or _default_sort(q), order, query=q)
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    )
     title_ids = list(session.scalars(ordered).all())
 
     return Page(
@@ -357,10 +369,23 @@ def _availability_ids(source_keys: list[str], available: AvailabilityFilter) -> 
     return statement
 
 
+def _default_sort(query: str | None) -> Sort:
+    """What to order by when nobody said.
+
+    Searching asks a question, and the best answer to it is the closest match -
+    which is what the index computed and what the catalog then threw away,
+    re-sorting by score so that an exactly-named title with no rating landed
+    below fuzzier matches that happened to have one.
+    """
+    return Sort.RELEVANCE if query else Sort.SCORE
+
+
 def _apply_sort(
     statement: Select[tuple[int]],
     sort: Sort,
     order: SortOrder | None = None,
+    *,
+    query: str | None = None,
 ) -> Select[tuple[int]]:
     """Order the id query, in whichever direction was asked for.
 
@@ -374,7 +399,13 @@ def _apply_sort(
     # Deliberately loose: a mapped column, a coalesce and a scalar subquery are
     # all orderable and share no useful static type.
     column: Any
-    if sort is Sort.SCORE or sort is Sort.SCORE_ISRAELI:
+    if sort is Sort.RELEVANCE:
+        ranked = relevance_of(query) if query else None
+        if ranked is None:
+            # Nothing to rank against; the ordinary default is the honest answer.
+            return _apply_sort(statement, Sort.SCORE, order)
+        column = ranked
+    elif sort is Sort.SCORE or sort is Sort.SCORE_ISRAELI:
         column = AggregateScore.score if sort is Sort.SCORE else AggregateScore.score_israeli
         statement = statement.outerjoin(AggregateScore, AggregateScore.title_id == Title.id)
     elif sort is Sort.YEAR:

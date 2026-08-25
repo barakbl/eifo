@@ -195,7 +195,7 @@ export const DEFAULT_FILTERS = Object.freeze({
   sources: [],
   type: "",
   available: "current",
-  sort: "score",
+  sort: "",
   order: "",
   yearMin: "",
   yearMax: "",
@@ -212,7 +212,7 @@ export function filtersToParams(filters) {
   if (filters.available && filters.available !== "current") {
     params.set("available", filters.available);
   }
-  if (filters.sort && filters.sort !== "score") params.set("sort", filters.sort);
+  if (filters.sort) params.set("sort", filters.sort);
   if (filters.order) params.set("order", filters.order);
   if (filters.yearMin) params.set("year_min", String(filters.yearMin));
   if (filters.yearMax) params.set("year_max", String(filters.yearMax));
@@ -231,7 +231,7 @@ export function paramsToFilters(search) {
     sources: list("sources"),
     type: params.get("type") ?? "",
     available: params.get("available") ?? "current",
-    sort: params.get("sort") ?? "score",
+    sort: params.get("sort") ?? "",
     order: params.get("order") ?? "",
     yearMin: params.get("year_min") ?? "",
     yearMax: params.get("year_max") ?? "",

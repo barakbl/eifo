@@ -11,6 +11,16 @@ import { el, replace, skeletonCards, stateBlock, titleCard } from "../ui.js";
 
 const PAGE_SIZE = 24;
 
+/**
+ * How the header tells this view the search text changed.
+ *
+ * Typing used to navigate, which meant tearing the whole view down and
+ * building it again on every debounced keystroke: a skeleton flash, any open
+ * filter dropdown snapping shut, and the scroll position back to the top.
+ * Changing the query is not changing the page.
+ */
+export const QUERY_EVENT = "eifo:query";
+
 const TYPES = ["", "movie", "series"];
 /** Minimum-score steps. Coarse on purpose: nobody filters by 63. */
 const SCORES = ["", "60", "70", "80"];
@@ -29,7 +39,16 @@ const DECADES = [
   { key: "1980s", min: 1980, max: 1989 },
   { key: "older", min: 1880, max: 1979 },
 ];
-const SORTS = ["score", "score_israeli", "year", "name", "recently_added"];
+/**
+ * The empty one is "let the catalog decide", and it is the default.
+ *
+ * Searching asks a question, and the best answer is the closest match - which
+ * the index computes and the catalog used to throw away, re-sorting by score so
+ * that searching "batman" answered with a well-rated show that merely mentions
+ * him. With nothing typed there is nothing to match against, so it means the
+ * best-rated instead. Sending no sort at all is how the server is told to pick.
+ */
+const SORTS = ["", "score", "score_israeli", "year", "name", "recently_added"];
 /**
  * Which way round each sort reads when nobody says, mirroring the API.
  *
@@ -37,6 +56,7 @@ const SORTS = ["score", "score_israeli", "year", "name", "recently_added"];
  * shows the wrong direction until you use it is worse than no control.
  */
 const NATURAL_ORDER = {
+  "": "desc",
   score: "desc",
   score_israeli: "desc",
   year: "desc",
@@ -220,6 +240,13 @@ export function createHomeView({ mount, app, router }) {
       );
     }
 
+    // The header owns the search box; this is the same apply() the filter bar
+    // calls, reached from outside.
+    const onHeaderQuery = (event) => {
+      if (event.detail.q !== state.filters.q) apply({ q: event.detail.q });
+    };
+    window.addEventListener(QUERY_EVENT, onHeaderQuery);
+
     observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting) && !state.done && !state.error) {
         state.page += 1;
@@ -230,7 +257,10 @@ export function createHomeView({ mount, app, router }) {
 
     await load({ reset: true });
 
-    return () => observer?.disconnect();
+    return () => {
+      window.removeEventListener(QUERY_EVENT, onHeaderQuery);
+      observer?.disconnect();
+    };
   };
 }
 
@@ -299,6 +329,10 @@ function sortDirection({ state, t, onChange }) {
   });
 
   function sync() {
+    // Nothing to reverse: "best match" has one direction, and which way round
+    // it runs is the server's business rather than a question to put to anyone.
+    node.hidden = !state.filters.sort;
+
     const descending = current() === "desc";
     node.textContent = descending ? "↓" : "↑";
     node.setAttribute("aria-label", t(descending ? "filters.order.desc" : "filters.order.asc"));

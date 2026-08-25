@@ -1,0 +1,11 @@
+# Line endings are LF everywhere, in the repository and in the working tree.
+#
+# Git for Windows still ships with core.autocrlf=true, so without this a
+# Windows checkout gets CRLF - and the first file that contributor touches
+# comes back with CRLF in the diff, which `ruff format --check` then fails on
+# a Linux runner for a reason that has nothing to do with their change.
+* text=auto eol=lf
+
+# Screenshots: never touched, whatever git makes of the bytes.
+*.jpg binary
+*.png binary

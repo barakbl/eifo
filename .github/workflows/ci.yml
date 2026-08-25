@@ -81,8 +81,27 @@ jobs:
       - name: Tests
         run: uv run pytest
 
-      - name: The CLI can at least start
+      # What follows is deliberately not pytest. The `import fcntl` that made
+      # every eifo-fetch command unrunnable was invisible to a test suite that
+      # imports the module rather than starts the program, and each of these
+      # runs a real process end to end. PowerShell only fails a step on its
+      # last command's exit code, so they are steps rather than lines.
+      - name: The CLI starts
         run: uv run eifo-fetch --version
+
+      - name: It can create a database and read the revision back
+        run: |
+          uv run eifo-fetch db upgrade
+          uv run eifo-fetch db current
+
+      - name: It can take the fetcher lock
+        # msvcrt.locking is the half of lock.py no other platform executes a
+        # line of, and a lock that never locks looks exactly like one that does
+        # until two fetchers run at once.
+        run: uv run eifo-fetch dedupe
+
+      - name: It can print a table
+        run: uv run eifo-fetch sources list
 
   privacy:
     # Its own job so a privacy regression is named on the pull request rather

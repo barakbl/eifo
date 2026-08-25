@@ -18,8 +18,15 @@ from dataclasses import dataclass
 from typing import Any
 
 from eifo_core.enums import OfferType, SourceKind, TitleKind
-from eifo_fetcher.sources.base import FetchContext, RawItem, SourceInfo, SourcePlugin
-from eifo_fetcher.tmdb import TmdbClient, TmdbTitle, image_url
+from eifo_core.types import utcnow
+from eifo_fetcher.sources.base import (
+    FUTURE_YEAR_ALLOWANCE,
+    FetchContext,
+    RawItem,
+    SourceInfo,
+    SourcePlugin,
+)
+from eifo_fetcher.tmdb import MAX_PAGE, TmdbClient, TmdbTitle, image_url
 
 #: Where a viewer is sent for a specific title.
 #:
@@ -51,6 +58,18 @@ class ProviderSource:
     verified_offer_types: tuple[OfferType, ...] = ()
     #: See :attr:`~eifo_fetcher.sources.base.SourceInfo.default_enabled`.
     default_enabled: bool = True
+    #: Read this catalog one release year at a time rather than in one listing.
+    #:
+    #: TMDB stops paging at 500 pages, which is 10,000 titles - a limit on the
+    #: query, not on the provider. A listing bigger than that cannot be finished
+    #: however many pages are asked for, and the store is 17,799 films: a single
+    #: listing reaches the popular half and no more. Asked a year at a time the
+    #: biggest slice is about a thousand, so every one of them is reachable.
+    walk_by_year: bool = False
+    #: Pages per listing when the config file says nothing. A sliced catalog
+    #: needs enough to finish its biggest year, not enough to bound an endless
+    #: one, so it sets its own.
+    default_max_pages: int | None = None
 
 
 #: Services TMDB actually reports for region IL, verified against the live API
@@ -98,6 +117,10 @@ PROVIDER_SOURCES: tuple[ProviderSource, ...] = (
         # in this region, and _resolve_provider_id says so and moves on.
         provider_names=("Apple TV Store",),
         verified_offer_types=(OfferType.RENT, OfferType.BUY),
+        walk_by_year=True,
+        # Enough to finish the biggest year, which is a little over a thousand
+        # films; the cap is per slice, and no slice comes near this.
+        default_max_pages=MAX_PAGE,
         # Opt-in: a full sync costs a request per film on top of the listing,
         # and nobody upgrading should discover that by watching their nightly
         # run get longer. One toggle in the Manage tab turns it on.
@@ -157,7 +180,7 @@ class TmdbProvidersPlugin(SourcePlugin):
             ctx.record_error(f"{ctx.source_key} is not a TMDB provider source")
             return
 
-        max_pages = _max_pages(ctx)
+        max_pages = _max_pages(ctx, source)
 
         for kind in (TitleKind.MOVIE, TitleKind.SERIES):
             provider_id = self._resolve_provider_id(tmdb, source, kind, ctx)
@@ -256,19 +279,45 @@ class TmdbProvidersPlugin(SourcePlugin):
         max_pages: int,
         ctx: FetchContext,
     ) -> Iterator[RawItem]:
-        seen = 0
-        for hit in tmdb.discover_by_provider(kind, provider_id, max_pages=max_pages):
-            seen += 1
-            ctx.record_success()
-            yield from self._offers_for(tmdb, source, kind, provider_id, hit, ctx)
+        seen: set[int] = set()
+        truncated = False
 
-        if seen >= max_pages * 20:
-            ctx.logger.warning(
-                "%s %s hit the %d-page cap; catalog may be truncated",
-                source.key,
-                kind.value,
-                max_pages,
-            )
+        for slice_filters in _slices(source):
+            reported = 0
+
+            def note_total(total: int, _slice: dict[str, Any] = slice_filters) -> None:
+                nonlocal reported
+                reported = total
+
+            for hit in tmdb.discover_by_provider(
+                kind,
+                provider_id,
+                max_pages=max_pages,
+                filters=slice_filters,
+                on_total=note_total,
+            ):
+                # A film belongs to one release year, but a slice boundary is
+                # not worth trusting with a request per title.
+                if hit.tmdb_id in seen:
+                    continue
+                seen.add(hit.tmdb_id)
+                ctx.record_success()
+                yield from self._offers_for(tmdb, source, kind, provider_id, hit, ctx)
+
+            if reported > max_pages * 20:
+                truncated = True
+                ctx.logger.warning(
+                    "%s %s: %s reports %d titles, more than %d pages can reach",
+                    source.key,
+                    kind.value,
+                    _describe(slice_filters),
+                    reported,
+                    max_pages,
+                )
+
+        ctx.logger.info("%s %s: read %d titles", source.key, kind.value, len(seen))
+        if truncated:
+            ctx.logger.warning("%s %s: catalog may be truncated", source.key, kind.value)
 
 
 def watch_url(kind: TitleKind, tmdb_id: int, region: str) -> str:
@@ -316,6 +365,48 @@ def _carries(offered: dict[str, Any], offer_type: OfferType, provider_id: int) -
     )
 
 
-def _max_pages(ctx: FetchContext) -> int:
+#: Below this the store holds a few hundred films in total, so one query for
+#: all of them costs a request instead of seventy that mostly answer nothing.
+CATALOG_START_YEAR = 1950
+
+
+def _slices(source: ProviderSource) -> Iterator[dict[str, Any]]:
+    """The listings to read, which is one unless the catalog is too big for one.
+
+    Sliced by release year because that is the partition TMDB offers that
+    actually divides a film catalog evenly enough: every film has at most one
+    release year, so the slices do not overlap, and the biggest is about a
+    thousand films against a limit of ten thousand.
+
+    A film TMDB holds no release date for falls in no slice and is not read.
+    There were 29 of them in the Apple TV Store when this was written, out of
+    17,799, and no discover filter selects them.
+    """
+    if not source.walk_by_year:
+        yield {}
+        return
+
+    yield {"primary_release_date.lte": f"{CATALOG_START_YEAR - 1}-12-31"}
+    for year in range(CATALOG_START_YEAR, utcnow().year + FUTURE_YEAR_ALLOWANCE + 1):
+        yield {"primary_release_year": year}
+
+
+def _describe(slice_filters: dict[str, Any]) -> str:
+    """A slice, for a log line."""
+    if not slice_filters:
+        return "the whole catalog"
+    year = slice_filters.get("primary_release_year")
+    return str(year) if year else f"up to {CATALOG_START_YEAR - 1}"
+
+
+def _max_pages(ctx: FetchContext, source: ProviderSource) -> int:
+    """Pages per listing: the config file, else whatever the source asks for.
+
+    The cap bounds one listing, and for a sliced catalog that is one release
+    year rather than a whole storefront - so a source that slices sets its own
+    default rather than inheriting a number chosen to bound a different shape.
+    """
     configured = ctx.config.max_pages
-    return configured if configured is not None else DEFAULT_MAX_PAGES
+    if configured is not None:
+        return configured
+    return source.default_max_pages or DEFAULT_MAX_PAGES

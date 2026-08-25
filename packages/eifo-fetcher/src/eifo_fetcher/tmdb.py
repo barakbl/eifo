@@ -8,7 +8,7 @@ against. One free API key covers both.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -104,11 +104,21 @@ class TmdbClient:
         *,
         language: str = HEBREW_LANGUAGE,
         max_pages: int = MAX_PAGE,
+        filters: Mapping[str, Any] | None = None,
+        on_total: Callable[[int], None] | None = None,
     ) -> Iterator[TmdbTitle]:
         """Every title a provider offers in the region, page by page.
 
         Stops at ``max_pages`` or TMDB's own hard limit, whichever comes first;
         the caller logs when a cap truncates a catalog.
+
+        Args:
+            filters: extra discover parameters, which is how a catalog bigger
+                than TMDB will page through gets read at all. The 500-page limit
+                is per query, not per provider, so a caller that cannot reach
+                the end of one listing asks several narrower ones instead.
+            on_total: called with ``total_results`` for the query, before any
+                item is yielded, so a caller can say when a cap truncated it.
         """
         page = 1
         total_pages = 1
@@ -119,7 +129,10 @@ class TmdbClient:
                 watch_region=self.region,
                 with_watch_providers=provider_id,
                 page=page,
+                **(filters or {}),
             )
+            if page == 1 and on_total is not None:
+                on_total(int(payload.get("total_results") or 0))
             total_pages = int(payload.get("total_pages") or 1)
             results = payload.get("results") or []
             if not results:

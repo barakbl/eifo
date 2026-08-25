@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import httpx
@@ -363,6 +365,28 @@ class TestTheRateItIsAskedAt:
         assert self._spacing(limited, API_HOST) == pytest.approx(1 / 7.0)
 
 
+@contextmanager
+def caplog_at_warning() -> Iterator[list[str]]:
+    """The fetcher's own warnings, for a run that must not fail silently."""
+    records: list[str] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            # getMessage already interpolates the args.
+            records.append(record.getMessage())
+
+    handler = _Collect(level=logging.WARNING)
+    logger = logging.getLogger("eifo")
+    previous = logger.level
+    logger.setLevel(logging.WARNING)
+    logger.addHandler(handler)
+    try:
+        yield records
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+
+
 class TestAStorefrontIsNotASubscription:
     """Apple TV Store: the same film is rented, sold, or both, and a discover
     listing says which of those it is - nothing.
@@ -499,3 +523,108 @@ class TestAStorefrontIsNotASubscription:
 
         assert [item.offer_type for item in items] == [OfferType.STREAM]
         assert per_title.call_count == 0
+
+
+class TestACatalogBiggerThanOneListing:
+    """TMDB stops paging at 500 pages - 10,000 titles - and that is a limit on
+    the query, not on the provider.
+
+    The Apple TV Store is 17,799 films, so one listing reaches the popular half
+    and stops. Asked a release year at a time the biggest slice is about a
+    thousand, and every film is reachable. A first run against the real API read
+    1,000 films and called that the whole store; it was 5.6% of it.
+    """
+
+    def _settings(self) -> Settings:
+        return Settings(_env_file=None, tmdb_api_key="k", db_url="sqlite:///:memory:")
+
+    def _ctx(self, http: HttpClient, key: str = "apple_tv_store") -> FetchContext:
+        return FetchContext(source_key=key, http=http, settings=self._settings())
+
+    def _providers(self) -> None:
+        respx.get(f"{BASE_URL}/watch/providers/movie").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"provider_id": 2, "provider_name": "Apple TV Store"}]}
+            )
+        )
+        respx.get(f"{BASE_URL}/watch/providers/tv").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+
+    @respx.mock
+    def test_it_asks_for_one_release_year_at_a_time(self, http: HttpClient) -> None:
+        self._providers()
+        route = respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200, json={"total_pages": 1, "total_results": 0, "results": []}
+            )
+        )
+
+        list(TmdbProvidersPlugin().fetch(self._ctx(http)))
+
+        asked = [call.request.url.params for call in route.calls]
+        years = {p["primary_release_year"] for p in asked if "primary_release_year" in p}
+        assert len(years) > 60, "expected a slice per year, not one listing"
+        # And one bucket for everything before the years start, or the early
+        # films would be in no slice at all.
+        assert any("primary_release_date.lte" in p for p in asked)
+
+    @respx.mock
+    def test_a_subscription_still_asks_once(self, http: HttpClient) -> None:
+        """Slicing is for a catalog that cannot be finished, not for every one."""
+        respx.get(f"{BASE_URL}/watch/providers/movie").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"provider_id": 8, "provider_name": "Netflix"}]}
+            )
+        )
+        respx.get(f"{BASE_URL}/watch/providers/tv").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+        route = respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200, json={"total_pages": 1, "total_results": 0, "results": []}
+            )
+        )
+
+        list(TmdbProvidersPlugin().fetch(self._ctx(http, "netflix_il")))
+
+        assert route.call_count == 1
+        assert "primary_release_year" not in route.calls.last.request.url.params
+
+    @respx.mock
+    def test_a_film_in_two_slices_costs_one_verification(self, http: HttpClient) -> None:
+        """A per-title request is the expensive part; a boundary is not worth one."""
+        self._providers()
+        respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200,
+                json={"total_pages": 1, "total_results": 1, "results": [movie_result(5, "Twice")]},
+            )
+        )
+        verify = respx.get(f"{BASE_URL}/movie/5/watch/providers").mock(
+            return_value=httpx.Response(
+                200,
+                json={"results": {"IL": {"buy": [{"provider_id": 2}]}}},
+            )
+        )
+
+        items = list(TmdbProvidersPlugin().fetch(self._ctx(http)))
+
+        assert len(items) == 1
+        assert verify.call_count == 1
+
+    @respx.mock
+    def test_a_slice_too_big_for_its_pages_says_so(self, http: HttpClient) -> None:
+        """Silence here is a catalog quietly missing its tail."""
+        self._providers()
+        respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200, json={"total_pages": 900, "total_results": 18_000, "results": []}
+            )
+        )
+        ctx = self._ctx(http)
+
+        with caplog_at_warning() as records:
+            list(TmdbProvidersPlugin().fetch(ctx))
+
+        assert any("more than" in message for message in records)

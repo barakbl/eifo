@@ -23,10 +23,11 @@ from sqlalchemy.orm import Session
 
 from eifo_core.enums import FetchPhase, FetchStatus, OfferType
 from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
+from eifo_core.offers import Offer, WriteCache, record_offer
 from eifo_core.types import utcnow
 from eifo_fetcher.match import MatchStats, TitleMatcher
 from eifo_fetcher.people import apply_credits
-from eifo_fetcher.runs import close_run, open_run
+from eifo_fetcher.runs import capture_log, close_run, open_run
 from eifo_fetcher.sources.base import (
     FetchContext,
     RawItem,
@@ -114,49 +115,56 @@ def sync_source(
     matcher = TitleMatcher(session, tmdb=tmdb, stats=MatchStats())
 
     fatal: str | None = None
-    try:
-        stream = items if items is not None else plugin.fetch(ctx)
-        _ingest(session, stream, source, matcher, result, started_at)
-    except TooManyErrorsError as exc:
-        logger.error("%s", exc)
-        result.status = FetchStatus.FAILED
-        fatal = f"{type(exc).__name__}: {exc}"
-        session.rollback()
-    except Exception as exc:
-        logger.exception("source %r failed", info.key)
-        result.status = FetchStatus.FAILED
-        # Whatever ended the run goes into the row. Without this a failed sync
-        # records errors: [] - it says that it failed and nothing about why,
-        # which is the one question anyone reading it will have.
-        fatal = f"{type(exc).__name__}: {exc}"
-        # A failure mid-flush leaves the session needing a rollback; without one
-        # even recording the failure would raise, turning a bad source into a
-        # crashed run.
-        session.rollback()
+    # Everything this source says goes into its own row. "mako returned nothing"
+    # used to be answerable only by running it again and watching.
+    with capture_log() as captured:
+        try:
+            stream = items if items is not None else plugin.fetch(ctx)
+            _ingest(session, stream, source, matcher, result, started_at)
+        except TooManyErrorsError as exc:
+            logger.error("%s", exc)
+            result.status = FetchStatus.FAILED
+            fatal = f"{type(exc).__name__}: {exc}"
+            session.rollback()
+        except Exception as exc:
+            logger.exception("source %r failed", info.key)
+            result.status = FetchStatus.FAILED
+            # Whatever ended the run goes into the row. Without this a failed
+            # sync records errors: [] - it says that it failed and nothing
+            # about why, which is the one question anyone reading it will have.
+            fatal = f"{type(exc).__name__}: {exc}"
+            # A failure mid-flush leaves the session needing a rollback; without
+            # one even recording the failure would raise, turning a bad source
+            # into a crashed run.
+            session.rollback()
 
-    result.errors = list(ctx.errors)
-    if fatal is not None:
-        result.errors.append(f"fatal: {fatal}")
-    result.matched_by = matcher.stats.as_dict()
+        result.errors = list(ctx.errors)
+        if fatal is not None:
+            result.errors.append(f"fatal: {fatal}")
+        result.matched_by = matcher.stats.as_dict()
 
-    if result.status is FetchStatus.OK and _looks_truncated(session, info.key, result.items_seen):
-        result.status = FetchStatus.ABORTED_SUSPICIOUS
-        logger.error(
-            "%s returned %d items, far below its previous run; assuming a broken "
-            "parser and skipping the sweep",
-            info.key,
-            result.items_seen,
-        )
+        if result.status is FetchStatus.OK and _looks_truncated(
+            session, info.key, result.items_seen
+        ):
+            result.status = FetchStatus.ABORTED_SUSPICIOUS
+            logger.error(
+                "%s returned %d items, far below its previous run; assuming a broken "
+                "parser and skipping the sweep",
+                info.key,
+                result.items_seen,
+            )
 
-    # Only a run we believe swept: a failure would retire a live catalog.
-    if result.status is FetchStatus.OK:
-        result.retired = sweep_source(session, source, run_started_at=started_at)
-        # A park is rewritten every time a sync sees the item again, so one
-        # older than this run is an item the source has stopped listing.
-        # Nobody should be asked about a listing that is gone.
-        result.reviews_expired = expire_reviews(session, info.key, before=started_at)
+        # Only a run we believe swept: a failure would retire a live catalog.
+        if result.status is FetchStatus.OK:
+            result.retired = sweep_source(session, source, run_started_at=started_at)
+            # A park is rewritten every time a sync sees the item again, so one
+            # older than this run is an item the source has stopped listing.
+            # Nobody should be asked about a listing that is gone.
+            result.reviews_expired = expire_reviews(session, info.key, before=started_at)
 
-    close_run(session, run, status=result.status, stats=result.as_stats())
+    # Outside the capture: the log is what the run said, and this is the run
+    # being written down.
+    close_run(session, run, status=result.status, stats=result.as_stats(), log=captured.text())
     return result
 
 
@@ -248,60 +256,27 @@ def upsert_availability(
     source: Source,
     item: RawItem,
     seen_at: dt.datetime,
-    written: dict[tuple[int, int, OfferType], Availability] | None = None,
+    written: WriteCache | None = None,
 ) -> bool:
     """Record that a title is offered right now. Returns True if newly created.
 
-    Seeing an item again clears any strikes against it and revives a row that
-    had been retired, which is what makes re-runs idempotent.
-
-    Args:
-        written: rows already created in this run, keyed by the unique triple.
-            Pending inserts are invisible to a SELECT, so without this a source
-            that lists the same title twice would insert it twice.
+    A thin translation from a source listing to the offer it implies; the write
+    itself is :func:`eifo_core.offers.record_offer`, which the API also calls
+    when a reviewer attaches a parked listing to a title.
     """
-    key = (title.id, source.id, item.offer_type)
-
-    availability = written.get(key) if written is not None else None
-    if availability is None:
-        availability = session.scalar(
-            select(Availability).where(
-                Availability.title_id == title.id,
-                Availability.source_id == source.id,
-                Availability.offer_type == item.offer_type,
-            )
-        )
-
-    if availability is None:
-        availability = Availability(
-            title_id=title.id,
-            source_id=source.id,
+    return record_offer(
+        session,
+        title=title,
+        source=source,
+        offer=Offer(
             offer_type=item.offer_type,
             deep_link_url=item.deep_link_url,
             price_minor=item.price_minor,
             price_currency=item.price_currency,
-            first_seen=seen_at,
-            last_seen=seen_at,
-            is_current=True,
-            miss_count=0,
-        )
-        session.add(availability)
-        if written is not None:
-            written[key] = availability
-        return True
-
-    availability.last_seen = seen_at
-    availability.miss_count = 0
-    availability.is_current = True
-    availability.gone_since = None
-    if item.deep_link_url:
-        availability.deep_link_url = item.deep_link_url
-    if item.price_minor is not None:
-        # A price that moved is news; a source that stopped quoting one keeps
-        # the last figure rather than silently showing an offer as free.
-        availability.price_minor = item.price_minor
-        availability.price_currency = item.price_currency
-    return False
+        ),
+        seen_at=seen_at,
+        written=written,
+    )
 
 
 def sweep_source(session: Session, source: Source, *, run_started_at: dt.datetime) -> int:

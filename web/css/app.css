@@ -1611,3 +1611,415 @@ img {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* -- manage tab ----------------------------------------------------------- */
+
+.muted {
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+.panel {
+  margin-block-start: var(--space-6);
+}
+
+.panel__title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-bold);
+  margin-block-end: var(--space-3);
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--space-3);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* A number that wants looking at, not a failure: an amber edge rather than a
+ * red panel, because most of the time it is a queue that needs an evening. */
+.stat--warn {
+  border-color: var(--score-mid);
+}
+
+.stat__value {
+  font-family: var(--font-data);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+}
+
+/* Dates and ratios, which are answers rather than headline figures. */
+.stat--text .stat__value {
+  font-size: var(--text-md);
+  line-height: 1.4;
+}
+
+.stat__label {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.sources {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.source {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(6rem, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.source__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.source__name {
+  font-weight: var(--weight-medium);
+}
+
+.source__key,
+.source__count,
+.source__synced,
+.run__when,
+.run__took {
+  font-family: var(--font-data);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.source__coverage {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.source__bar {
+  block-size: 0.4rem;
+  inline-size: 100%;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    to var(--bar-end, right),
+    var(--accent) var(--fill, 0%),
+    var(--surface-sunken) var(--fill, 0%)
+  );
+}
+
+[dir="rtl"] .source__bar {
+  --bar-end: left;
+}
+
+.source__switch {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.source__note {
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+}
+
+.switch {
+  inline-size: 2.4rem;
+  block-size: 1.3rem;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* -- runs ----------------------------------------------------------------- */
+
+.runs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-block-start: var(--space-4);
+}
+
+.run {
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid var(--line-strong);
+  border-radius: var(--radius);
+}
+
+.run--ok {
+  border-inline-start-color: var(--score-high);
+}
+
+.run--failed,
+.run--crashed,
+.run--aborted_suspicious {
+  border-inline-start-color: var(--danger);
+}
+
+.run__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.run__phase {
+  font-weight: var(--weight-bold);
+}
+
+.run__source {
+  font-family: var(--font-data);
+  font-size: var(--text-sm);
+}
+
+.run__stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-block-start: var(--space-2);
+}
+
+.run__stats li {
+  display: flex;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+}
+
+.run__stat-key {
+  color: var(--fg-faint);
+}
+
+.run__stat-value {
+  font-family: var(--font-data);
+  color: var(--fg);
+}
+
+.badge--ok {
+  background: var(--score-high);
+  color: var(--ink);
+}
+
+.badge--failed,
+.badge--crashed,
+.badge--aborted_suspicious {
+  background: var(--danger);
+  color: var(--accent-ink);
+}
+
+.badge--warn {
+  background: var(--score-mid);
+  color: var(--ink);
+}
+
+/* A log is timestamps, logger names and source keys - Latin structure with the
+ * occasional Hebrew title inside it. Forced ltr so the page's direction does
+ * not reorder lines around their own contents. */
+.log {
+  max-block-size: 24rem;
+  overflow: auto;
+  margin-block-start: var(--space-3);
+  padding: var(--space-3);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-data);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* -- review queue --------------------------------------------------------- */
+
+.queue__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-block-end: var(--space-3);
+}
+
+.queue__count {
+  font-weight: var(--weight-bold);
+}
+
+.chips--quiet {
+  margin-block-start: var(--space-2);
+}
+
+/* `hidden` is a UA-stylesheet `display: none`, which an explicit display beats -
+ * so without this the bar showed as an empty strip with nothing selected. */
+.bulk[hidden] {
+  display: none;
+}
+
+.bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-block: var(--space-4);
+  padding: var(--space-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-block-start: var(--space-4);
+}
+
+.queue__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.queue__item:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* A ruled-on card collapses rather than vanishing: the row keeping its place
+ * for a moment is what tells somebody working at speed that the tap landed on
+ * the one they meant. */
+.queue__item--done {
+  display: block;
+  padding: var(--space-3) var(--space-4);
+  opacity: 0.5;
+}
+
+.queue__pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: var(--space-4);
+  min-inline-size: 0;
+}
+
+.queue__col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.queue__col--empty {
+  justify-content: center;
+}
+
+.queue__label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-faint);
+}
+
+.queue__poster {
+  inline-size: 3.5rem;
+  block-size: 5.25rem;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+
+.queue__name {
+  font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.queue__alt,
+.queue__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.queue__source {
+  font-family: var(--font-data);
+}
+
+.queue__score {
+  font-family: var(--font-data);
+  color: var(--fg);
+}
+
+.queue__link {
+  font-size: var(--text-xs);
+  color: var(--accent);
+}
+
+.queue__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.button--same {
+  background: var(--score-high);
+  color: var(--ink);
+}
+
+.button--different {
+  background: var(--surface-raised);
+  color: var(--fg);
+  border: 1px solid var(--line-strong);
+}
+
+.button--junk {
+  background: transparent;
+  color: var(--fg-muted);
+  border: 1px solid var(--line);
+}
+
+.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.queue__done {
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+
+.queue__error {
+  font-size: var(--text-sm);
+  color: var(--danger);
+}
+
+@media (max-width: 40rem) {
+  .source,
+  .queue__item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .queue__actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}

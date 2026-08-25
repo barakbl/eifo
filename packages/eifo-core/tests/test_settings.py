@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
@@ -160,3 +162,83 @@ class TestScheduleConfig:
         settings = Settings(_env_file=None, schedule={"nightly": "01:00", "sync": "02:15"})
 
         assert settings.schedule.nightly == "01:00"
+
+
+class TestAdministrators:
+    """Nobody is one until an instance says so, by address, in configuration.
+
+    Configuration rather than a flag on a row, because the first administrator
+    has to come from somewhere and "whoever signed in first" is how a public
+    instance hands itself to a stranger.
+    """
+
+    def test_an_instance_that_never_wanted_one_has_none(self) -> None:
+        settings = Settings(_env_file=None)
+
+        assert settings.admin_emails == []
+        assert settings.is_admin("anybody@example.com") is False
+
+    def test_a_listed_address_is_one(self) -> None:
+        settings = Settings(_env_file=None, admin_emails=["ops@example.com"])
+
+        assert settings.is_admin("ops@example.com") is True
+        assert settings.is_admin("someone.else@example.com") is False
+
+    def test_case_does_not_decide_it(self) -> None:
+        """Providers are inconsistent, and nobody typing one thinks about it."""
+        settings = Settings(_env_file=None, admin_emails=["Ops@Example.com"])
+
+        assert settings.is_admin("ops@example.COM") is True
+
+    def test_an_account_with_no_address_is_nobody(self) -> None:
+        """X does not always supply one, and an absent address matches nothing."""
+        settings = Settings(_env_file=None, admin_emails=["ops@example.com"])
+
+        assert settings.is_admin(None) is False
+        assert settings.is_admin("") is False
+        assert settings.is_admin("   ") is False
+
+    def test_a_comma_separated_line_is_what_a_dotenv_file_holds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pydantic reads a list as JSON, which is a strange thing to ask of .env."""
+        monkeypatch.setenv("EIFO_ADMIN_EMAILS", "one@example.com, two@example.com")
+
+        settings = Settings(_env_file=None)
+
+        assert settings.admin_emails == ["one@example.com", "two@example.com"]
+        assert settings.is_admin("two@example.com") is True
+
+    def test_a_list_still_works(self) -> None:
+        assert Settings(_env_file=None, admin_emails=["a@b.test"]).admin_emails == ["a@b.test"]
+
+
+class TestTheExampleConfig:
+    """The file people copy to make their own.
+
+    A setting that exists and is written down nowhere is a setting nobody
+    finds - which is how the Manage tab shipped invisible to the person who
+    asked for it. These keep the example honest about what can be set.
+    """
+
+    def _example(self) -> dict[str, Any]:
+        path = Path(__file__).resolve().parents[3] / "config" / "eifo.example.toml"
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+
+    def test_it_is_valid_configuration(self) -> None:
+        """Not merely valid TOML: every key has to be one Settings accepts."""
+        Settings(_env_file=None, **self._example())
+
+    def test_it_names_the_settings_that_turn_a_surface_on(self) -> None:
+        """The ones nobody can guess, because nothing in the UI hints at them."""
+        example = self._example()
+
+        assert "admin_emails" in example
+        assert example["admin_emails"] == [], "the example must not grant anybody access"
+
+    def test_it_holds_no_secrets(self) -> None:
+        """They come from the environment; this file is committable."""
+        example = self._example()
+
+        for name in ("secret_key", "tmdb_api_key", "google_client_secret", "x_client_secret"):
+            assert name not in example

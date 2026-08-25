@@ -56,6 +56,10 @@ class Principal:
     user: User
     token_hash: str
     csrf_token: str
+    #: Settled once, when the request is authenticated, rather than asked again
+    #: by each handler - so there is one answer per request and one place that
+    #: decides it.
+    is_admin: bool = False
 
 
 def current_principal(
@@ -76,6 +80,7 @@ def current_principal(
         user=row.user,
         token_hash=row.token_hash,
         csrf_token=csrf_token_for(row.token_hash, signing_secret(settings)),
+        is_admin=settings.is_admin(row.user.email),
     )
 
 
@@ -85,6 +90,21 @@ def require_principal(
     """The signed-in user, or 401."""
     if principal is None:
         raise HTTPException(status_code=401, detail="Sign in to use this endpoint.")
+    return principal
+
+
+def require_admin(
+    principal: Annotated[Principal, Depends(require_principal)],
+) -> Principal:
+    """An administrator, or 404.
+
+    404 rather than 403: a signed-in stranger poking at ``/api/v1/admin`` learns
+    that the path does not exist for them, which is all they are owed. 403 would
+    confirm the surface is there and that the only thing missing is being the
+    right person.
+    """
+    if not principal.is_admin:
+        raise HTTPException(status_code=404, detail="Not found.")
     return principal
 
 
@@ -105,5 +125,6 @@ def verify_csrf(
 
 
 PrincipalDep = Annotated[Principal, Depends(require_principal)]
+AdminDep = Annotated[Principal, Depends(require_admin)]
 OptionalPrincipalDep = Annotated[Principal | None, Depends(current_principal)]
 CsrfDep = Annotated[None, Depends(verify_csrf)]

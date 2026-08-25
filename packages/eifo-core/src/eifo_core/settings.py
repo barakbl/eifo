@@ -11,11 +11,12 @@ import os
 from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
+    NoDecode,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
     TomlConfigSettingsSource,
@@ -162,6 +163,20 @@ class Settings(BaseSettings):
     x_client_id: SecretStr | None = None
     x_client_secret: SecretStr | None = None
 
+    #: Who may open the Manage tab and rule on the review queue, by the email
+    #: address their identity provider vouches for.
+    #:
+    #: A list rather than a flag on the user row, and configuration rather than
+    #: data: the first administrator has to come from somewhere, and "whoever
+    #: signed in first" is how a public instance hands itself to a stranger.
+    #: Nobody is an administrator until this is set, which is the right answer
+    #: for an instance that never wanted one.
+    #: ``NoDecode`` because pydantic-settings otherwise reads a list from the
+    #: environment as JSON, and fails by saying the value is not valid JSON -
+    #: which does not tell anybody what to type instead. The validator below
+    #: accepts the line a person would actually write.
+    admin_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
     sources: dict[str, SourceConfig] = Field(default_factory=dict)
     scores: ScoresConfig = Field(default_factory=ScoresConfig)
     tmdb: TmdbConfig = Field(default_factory=TmdbConfig)
@@ -186,6 +201,31 @@ class Settings(BaseSettings):
             TomlConfigSettingsSource(settings_cls, toml_file=config_file),
             file_secret_settings,
         )
+
+    @field_validator("admin_emails", mode="before")
+    @classmethod
+    def _accept_a_comma_separated_list(cls, value: Any) -> Any:
+        """``EIFO_ADMIN_EMAILS=a@example.com,b@example.com``.
+
+        Pydantic reads a list from the environment as JSON, which is a strange
+        thing to ask of a line in a ``.env`` file - and it fails by reporting
+        that the value is not valid JSON, which does not tell anybody what to
+        type instead.
+        """
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return value
+
+    def is_admin(self, email: str | None) -> bool:
+        """Whether an address is one of the configured administrators.
+
+        Case-insensitively: providers are inconsistent about how they present
+        an address, and nobody typing one into a config file thinks about it.
+        An account with no email - X does not always supply one - is nobody.
+        """
+        if not email:
+            return False
+        return email.strip().casefold() in {entry.casefold() for entry in self.admin_emails}
 
     def enabled_source_keys(self) -> list[str]:
         """Source keys currently switched on, in configuration order."""

@@ -8,9 +8,13 @@ ordinary pip package with no change to this codebase.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from importlib.metadata import entry_points
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from eifo_core.models import Source
 from eifo_core.settings import Settings
 from eifo_fetcher.sources.base import SourceInfo, SourcePlugin
 
@@ -83,19 +87,40 @@ def declared_sources(plugins: Iterable[SourcePlugin]) -> dict[str, SourceInfo]:
     return declared
 
 
+def source_overrides(session: Session) -> dict[str, bool]:
+    """Operator switches set from the Manage tab, by source key.
+
+    Only the rows that carry one: a NULL ``sources.enabled`` is not an answer,
+    it is the absence of one, and means the configuration file still decides.
+    """
+    rows = session.execute(
+        select(Source.key, Source.enabled).where(Source.enabled.is_not(None))
+    ).all()
+    return {key: bool(enabled) for key, enabled in rows}
+
+
 def enabled_sources(
     plugins: Iterable[SourcePlugin],
     settings: Settings,
+    *,
+    overrides: Mapping[str, bool] | None = None,
 ) -> dict[str, SourceInfo]:
-    """Declared sources that configuration switches on.
+    """Declared sources that are switched on.
 
     A source absent from the configuration file defaults to enabled, so adding a
     plugin is one file rather than a file plus a config edit.
+
+    Args:
+        overrides: an operator's answer per source key, from
+            :func:`source_overrides`, which wins over the file. Absent means the
+            file decides, which is what every source did before the Manage tab
+            existed and what every source still does until somebody uses it.
     """
+    switched = overrides or {}
     return {
         key: info
         for key, info in declared_sources(plugins).items()
-        if settings.source_config(key).enabled
+        if switched.get(key, settings.source_config(key).enabled)
     }
 
 

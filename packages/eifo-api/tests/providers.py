@@ -24,6 +24,9 @@ X_CLIENT_ID = "x-client"
 X_CLIENT_SECRET = "x-secret"
 
 GOOGLE_SUBJECT = "108100000000000000042"
+#: The address the mocked Google login vouches for, which is what decides
+#: whether the account is an administrator.
+GOOGLE_EMAIL = "viewer@example.com"
 X_SUBJECT = "1723456789"
 
 KEY_ID = "test-signing-key"
@@ -47,7 +50,7 @@ def id_token(**overrides: Any) -> str:
         "iss": "https://accounts.google.com",
         "aud": GOOGLE_CLIENT_ID,
         "sub": GOOGLE_SUBJECT,
-        "email": "viewer@example.com",
+        "email": GOOGLE_EMAIL,
         "email_verified": True,
         "name": "תמר לוי",
         "picture": "https://lh3.googleusercontent.com/a/avatar",

@@ -27,8 +27,13 @@ from eifo_fetcher.enrichers.imdb import ImdbDatasetLoader
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.images import ImageFetcher, ImageResult
 from eifo_fetcher.pipeline import SyncResult, deactivate_missing_sources, sync_source
-from eifo_fetcher.registry import discover_plugins, enabled_sources, plugins_for
-from eifo_fetcher.runs import close_run, open_run
+from eifo_fetcher.registry import (
+    discover_plugins,
+    enabled_sources,
+    plugins_for,
+    source_overrides,
+)
+from eifo_fetcher.runs import capture_log, close_run, open_run
 from eifo_fetcher.sources.base import FetchContext, SourcePlugin
 from eifo_fetcher.tmdb import IMAGE_HOST, TmdbClient
 
@@ -72,7 +77,11 @@ def sync_all(
 ) -> SyncReport:
     """Sync every enabled source, or just the ones named in ``only``."""
     plugins = plugins if plugins is not None else discover_plugins()
-    available = enabled_sources(plugins, settings)
+    # Read per run rather than held: the daemon is long-lived, and a source
+    # switched off at midnight should be off tonight without a restart.
+    with session_factory() as session:
+        overrides = source_overrides(session)
+    available = enabled_sources(plugins, settings, overrides=overrides)
 
     if only:
         unknown = sorted(set(only) - set(available))
@@ -141,20 +150,33 @@ def enrich_all(
         # it left nothing behind at all.
         with session_factory() as session:
             run = open_run(session, phase=FetchPhase.ENRICH, source_key=IMDB_RUN_KEY)
-            try:
-                imdb = ImdbDatasetLoader(http).run(session)
-            except Exception as exc:
-                logger.exception("imdb dataset pass failed")
-                session.rollback()
+            with capture_log() as captured:
+                try:
+                    imdb = ImdbDatasetLoader(http).run(session)
+                except Exception as exc:
+                    logger.exception("imdb dataset pass failed")
+                    session.rollback()
+                    failure: str | None = f"fatal: {type(exc).__name__}: {exc}"
+                else:
+                    failure = None
+                    tally.by_enricher["imdb"] = imdb.created + imdb.updated
+
+            if failure is not None:
                 close_run(
                     session,
                     run,
                     status=FetchStatus.FAILED,
-                    stats={"errors": [f"fatal: {type(exc).__name__}: {exc}"]},
+                    stats={"errors": [failure]},
+                    log=captured.text(),
                 )
             else:
-                tally.by_enricher["imdb"] = imdb.created + imdb.updated
-                close_run(session, run, status=FetchStatus.OK, stats=imdb.as_stats())
+                close_run(
+                    session,
+                    run,
+                    status=FetchStatus.OK,
+                    stats=imdb.as_stats(),
+                    log=captured.text(),
+                )
 
         # IMDb writes ratings directly, so aggregates need recomputing after it.
         with session_factory() as session:
@@ -226,23 +248,26 @@ def fetch_images(
         # FetchPhase.IMAGES existed and had never once been written: poster
         # downloads reported themselves only to a log line that scrolled away.
         run = open_run(session, phase=FetchPhase.IMAGES, started_at=started_at)
-        try:
-            result = fetcher.fetch_missing(session, force=force, limit=limit)
-        except Exception as exc:
-            logger.exception("artwork download failed")
-            session.rollback()
-            close_run(
-                session,
-                run,
-                status=FetchStatus.FAILED,
-                stats={"errors": [f"fatal: {type(exc).__name__}: {exc}"]},
-            )
-            raise
+        with capture_log() as captured:
+            try:
+                result = fetcher.fetch_missing(session, force=force, limit=limit)
+            except Exception as exc:
+                logger.exception("artwork download failed")
+                session.rollback()
+                close_run(
+                    session,
+                    run,
+                    status=FetchStatus.FAILED,
+                    stats={"errors": [f"fatal: {type(exc).__name__}: {exc}"]},
+                    log=captured.text(),
+                )
+                raise
         close_run(
             session,
             run,
             status=FetchStatus.FAILED if result.failed else FetchStatus.OK,
             stats=result.as_stats(),
+            log=captured.text(),
         )
     logger.info(
         "images: %d downloaded, %d skipped, %d failed",

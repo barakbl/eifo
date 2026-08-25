@@ -401,8 +401,17 @@ def _database(settings: Settings) -> Iterator[sessionmaker[Session]]:
 
 
 def _source_state(key: str, declared: Mapping[str, SourceInfo], source: Source | None) -> str:
+    """What this source is doing, and whether somebody said so by hand.
+
+    An operator switch set from the Manage tab is named as one: a source that
+    is off because the file says so and a source that is off because somebody
+    turned it off are the same silence otherwise, and only one of them is
+    answered by editing the file.
+    """
     if key not in declared:
         return "retired"
+    if source is not None and source.enabled is not None:
+        return "on (override)" if source.enabled else "off (override)"
     if source is None:
         return "never synced"
     return "active" if source.active else "retired"

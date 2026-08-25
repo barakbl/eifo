@@ -26,6 +26,12 @@ class SeedSource(Protocol):
     ) -> None: ...
 
 
+class MakeAdmin(Protocol):
+    """Signature of the ``make_admin`` fixture."""
+
+    def __call__(self, email: str = ...) -> None: ...
+
+
 class SignIn(Protocol):
     """Signature of the ``sign_in`` fixture; returns the session's CSRF token."""
 

@@ -30,7 +30,7 @@ from eifo_core.types import utcnow
 from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
 from eifo_fetcher.match import is_hebrew, latin_script
 from eifo_fetcher.people import apply_credits
-from eifo_fetcher.runs import close_run, open_run
+from eifo_fetcher.runs import capture_log, close_run, open_run
 from eifo_fetcher.scores import RatingInput, aggregate, normalise
 from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError, plausible_year
 
@@ -255,53 +255,55 @@ def enrich_titles(
     run = open_run(session, phase=FetchPhase.ENRICH, started_at=started_at)
     fatal: str | None = None
 
-    try:
-        due = (
-            titles
-            if titles is not None
-            else titles_due(session, settings, force=force, limit=limit)
-        )
-        for index, title in enumerate(due, 1):
-            tally.titles_seen += 1
-            view = _view_of(title)
-            written = 0
-            errored = False
-            for enricher in enrichers:
-                found = _run_one(session, enricher, title, view, ctx, tally)
-                if found is None:
-                    errored = True
-                else:
-                    written += found
-            _recompute(session, title, settings, tally)
-            # Before the flush, so a title that yielded nothing still says so:
-            # the queue has to learn from the attempts that found nothing, or
-            # it spends every run on the same titles.
-            _record_attempt(
-                session,
-                title,
-                settings,
-                outcome=_outcome_of(title, written=written, errored=errored),
+    with capture_log() as captured:
+        try:
+            due = (
+                titles
+                if titles is not None
+                else titles_due(session, settings, force=force, limit=limit)
             )
-            session.flush()
-            if index % COMMIT_EVERY == 0:
-                session.commit()
-    except TooManyErrorsError as exc:
-        logger.error("%s", exc)
-        status = FetchStatus.FAILED
-        fatal = f"{type(exc).__name__}: {exc}"
-        session.rollback()
-    except Exception as exc:
-        logger.exception("enrichment failed")
-        status = FetchStatus.FAILED
-        fatal = f"{type(exc).__name__}: {exc}"
-        # Without this the session is left needing one, and recording the
-        # failure would itself raise - losing the row that explains the run.
-        session.rollback()
+            for index, title in enumerate(due, 1):
+                tally.titles_seen += 1
+                view = _view_of(title)
+                written = 0
+                errored = False
+                for enricher in enrichers:
+                    found = _run_one(session, enricher, title, view, ctx, tally)
+                    if found is None:
+                        errored = True
+                    else:
+                        written += found
+                _recompute(session, title, settings, tally)
+                # Before the flush, so a title that yielded nothing still says so:
+                # the queue has to learn from the attempts that found nothing, or
+                # it spends every run on the same titles.
+                _record_attempt(
+                    session,
+                    title,
+                    settings,
+                    outcome=_outcome_of(title, written=written, errored=errored),
+                )
+                session.flush()
+                if index % COMMIT_EVERY == 0:
+                    session.commit()
+        except TooManyErrorsError as exc:
+            logger.error("%s", exc)
+            status = FetchStatus.FAILED
+            fatal = f"{type(exc).__name__}: {exc}"
+            session.rollback()
+        except Exception as exc:
+            logger.exception("enrichment failed")
+            status = FetchStatus.FAILED
+            fatal = f"{type(exc).__name__}: {exc}"
+            # Without this the session is left needing one, and recording the
+            # failure would itself raise - losing the row that explains the run.
+            session.rollback()
 
-    tally.errors = list(ctx.errors)
-    if fatal is not None:
-        tally.errors.append(f"fatal: {fatal}")
-    close_run(session, run, status=status, stats=tally.as_stats())
+        tally.errors = list(ctx.errors)
+        if fatal is not None:
+            tally.errors.append(f"fatal: {fatal}")
+
+    close_run(session, run, status=status, stats=tally.as_stats(), log=captured.text())
     return tally
 
 

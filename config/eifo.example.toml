@@ -17,6 +17,20 @@ stale_after_hours = 48
 # API then refuses to serve a database that has not been migrated.
 auto_migrate = true
 
+# Who may open the Manage tab and rule on the review queue, by the email
+# address their sign-in provider vouches for.
+#
+# Empty - the default - means nobody, which is the right answer for an
+# instance that never wanted an administrator: the tab does not appear and
+# every endpoint behind it answers 404 to everybody. There is no way to become
+# one from inside the product, on purpose. The first administrator has to come
+# from somewhere, and "whoever signed in first" is how a public instance hands
+# itself to a stranger.
+#
+# The address has to match the account you actually sign in with. Also settable
+# as EIFO_ADMIN_EMAILS=you@example.com,someone@example.com.
+admin_emails = []
+
 # ---------------------------------------------------------------------------
 # Sources - one table per tracked service. Flipping `enabled = false` retires a
 # source: the next sync marks it inactive and ALL of its data is kept, badged in

@@ -13,7 +13,7 @@ from eifo_api import __version__
 from eifo_api.caching import CatalogCacheMiddleware
 from eifo_api.errors import install_error_handlers
 from eifo_api.logging_privacy import install_log_filters
-from eifo_api.routers import auth, catalog, me, meta
+from eifo_api.routers import admin, auth, catalog, me, meta, reviews
 from eifo_api.static import mount_client, mount_images
 from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
 from eifo_core.fts import ensure_search_triggers, missing_triggers
@@ -86,6 +86,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(catalog.router, prefix=API_PREFIX)
     app.include_router(auth.router, prefix=API_PREFIX)
     app.include_router(me.router, prefix=API_PREFIX)
+    app.include_router(admin.router, prefix=API_PREFIX)
+    app.include_router(reviews.router, prefix=API_PREFIX)
 
     mount_images(app, Path(settings.images_dir))
     # Registered last: its catch-all route must not shadow the API.

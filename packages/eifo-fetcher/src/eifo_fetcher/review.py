@@ -23,16 +23,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from eifo_core.enums import MatchDecision, OfferType, TitleKind
-from eifo_core.models import MatchReview, Source, Title
-from eifo_core.types import utcnow
+from eifo_core import reviews as core_reviews
+from eifo_core.enums import OfferType, TitleKind
+from eifo_core.models import MatchReview, Title
 from eifo_fetcher.match import (
     AMBIGUOUS_THRESHOLD,
-    TitleMatcher,
     similarity,
     title_kind_from,
 )
-from eifo_fetcher.pipeline import upsert_availability
 from eifo_fetcher.sources.base import RawItem
 
 logger = logging.getLogger("eifo.fetch.review")
@@ -83,10 +81,7 @@ class ReviewTally:
 
 def pending(session: Session, *, source_key: str | None = None) -> list[MatchReview]:
     """Everything still waiting, oldest first."""
-    statement = select(MatchReview).where(MatchReview.resolved_at.is_(None))
-    if source_key:
-        statement = statement.where(MatchReview.source_key == source_key)
-    return list(session.scalars(statement.order_by(MatchReview.created_at, MatchReview.id)).all())
+    return core_reviews.pending(session, source_key=source_key)
 
 
 def item_from(review: MatchReview) -> RawItem:
@@ -113,55 +108,41 @@ def item_from(review: MatchReview) -> RawItem:
 
 
 # -- rulings ----------------------------------------------------------------
+#
+# Thin wrappers over eifo_core.reviews, which is where the writes live so that
+# the Manage tab's triage view makes exactly the ruling this CLI makes. What
+# they add is this command's tolerance for a review whose source has gone: the
+# title is still worth recording even when there is nowhere to say it plays.
 
 
 def attach(session: Session, review: MatchReview, title: Title) -> None:
-    """The suggestion was right: give the offer to that title, now.
-
-    Now, rather than whenever the source next runs. Waiting is why every ruling
-    anybody had made was still sitting there unapplied.
-    """
-    review.resolved_title_id = title.id
-    review.resolved_at = utcnow()
-    review.decision = MatchDecision.ATTACHED
-    _record_offer(session, review, title)
+    """The suggestion was right: give the offer to that title, now."""
+    try:
+        core_reviews.attach(session, review, title)
+    except core_reviews.UnknownSourceError:
+        _warn_source_gone(review)
 
 
 def create(session: Session, review: MatchReview) -> Title | None:
     """Not the suggestion, but a real title. Give it one of its own."""
-    matcher = TitleMatcher(session)
-    title = matcher.create_title(item_from(review))
-    review.resolved_title_id = title.id
-    review.resolved_at = utcnow()
-    review.decision = MatchDecision.CREATED
-    _record_offer(session, review, title)
-    return title
+    try:
+        return core_reviews.create(session, review)
+    except core_reviews.UnknownSourceError:
+        _warn_source_gone(review)
+        return session.get(Title, review.resolved_title_id)
 
 
 def dismiss(session: Session, review: MatchReview) -> None:
     """Not a title at all. Nothing to create, and never offer it again."""
-    review.resolved_title_id = None
-    review.resolved_at = utcnow()
-    review.decision = MatchDecision.DISMISSED
+    core_reviews.dismiss(session, review)
 
 
-def _record_offer(session: Session, review: MatchReview, title: Title) -> None:
-    """Write the availability the parked item was carrying."""
-    source = session.scalar(select(Source).where(Source.key == review.source_key))
-    if source is None:
-        logger.warning(
-            "review %s is for source %r, which is not in the catalog; "
-            "the title is recorded but not where to watch it",
-            review.id,
-            review.source_key,
-        )
-        return
-    upsert_availability(
-        session,
-        title=title,
-        source=source,
-        item=item_from(review),
-        seen_at=utcnow(),
+def _warn_source_gone(review: MatchReview) -> None:
+    logger.warning(
+        "review %s is for source %r, which is not in the catalog; "
+        "the title is recorded but not where to watch it",
+        review.id,
+        review.source_key,
     )
 
 

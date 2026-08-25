@@ -8,7 +8,10 @@ scheduled at all.
 from __future__ import annotations
 
 import datetime as dt
+import logging
+from collections.abc import Iterator
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -18,7 +21,14 @@ from eifo_core.settings import Settings
 from eifo_core.types import utcnow
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.runner import IMDB_RUN_KEY, enrich_all, fetch_images
-from eifo_fetcher.runs import close_abandoned_runs, close_run, open_run
+from eifo_fetcher.runs import (
+    FETCHER_LOGGER,
+    RunLogCapture,
+    capture_log,
+    close_abandoned_runs,
+    close_run,
+    open_run,
+)
 
 
 def _runs(session: Session) -> list[FetchRun]:
@@ -129,3 +139,113 @@ class TestPhasesThatUsedToRecordNothing:
         assert run.phase is FetchPhase.ENRICH
         assert run.status is FetchStatus.OK
         assert "rows_read" in run.stats
+
+
+@pytest.fixture
+def fetcher_logs_at_info() -> Iterator[None]:
+    """What ``eifo-fetch`` configures for itself; the capture takes what it finds."""
+    target = logging.getLogger(FETCHER_LOGGER)
+    previous = target.level
+    target.setLevel(logging.INFO)
+    yield
+    target.setLevel(previous)
+
+
+class TestWhatARunSaid:
+    """Until this existed, the only record of a failed night was on a stderr
+    nobody was watching - so "why did mako return nothing" was answerable only
+    by running it again and watching."""
+
+    def test_it_keeps_what_the_fetcher_logged(self, fetcher_logs_at_info: None) -> None:
+        with capture_log() as captured:
+            logging.getLogger("eifo.fetch.test").info("mako: 0 items")
+            logging.getLogger("eifo.fetch.test").error("parser found no cards")
+
+        text = captured.text()
+        assert text is not None
+        assert "mako: 0 items" in text
+        assert "parser found no cards" in text
+
+    def test_a_quietened_fetcher_records_as_little_as_it_says(self) -> None:
+        """The row is what the run said, not what it would have said at INFO."""
+        logging.getLogger(FETCHER_LOGGER).setLevel(logging.ERROR)
+        try:
+            with capture_log() as captured:
+                logging.getLogger("eifo.fetch.test").info("routine")
+                logging.getLogger("eifo.fetch.test").error("the part that matters")
+        finally:
+            logging.getLogger(FETCHER_LOGGER).setLevel(logging.NOTSET)
+
+        text = captured.text()
+        assert text is not None
+        assert "the part that matters" in text
+        assert "routine" not in text
+
+    def test_a_run_that_said_nothing_stores_nothing(self) -> None:
+        with capture_log() as captured:
+            pass
+
+        assert captured.text() is None
+
+    def test_somebody_elses_library_is_not_this_run(self, fetcher_logs_at_info: None) -> None:
+        """Attached to the eifo logger, so httpx and sqlalchemy stay out of it."""
+        with capture_log() as captured:
+            logging.getLogger("httpx").warning("connection reset")
+            logging.getLogger("eifo.fetch.test").info("ours")
+
+        text = captured.text()
+        assert text is not None and "ours" in text
+        assert "connection reset" not in text
+
+    def test_the_handler_does_not_outlive_the_run(self) -> None:
+        """One left attached would go on collecting into a row already written."""
+        target = logging.getLogger(FETCHER_LOGGER)
+        before = len(target.handlers)
+
+        with capture_log():
+            assert len(target.handlers) == before + 1
+
+        assert len(target.handlers) == before
+
+    def test_it_is_removed_even_when_the_run_explodes(self) -> None:
+        target = logging.getLogger(FETCHER_LOGGER)
+        before = len(target.handlers)
+
+        with pytest.raises(RuntimeError), capture_log():
+            raise RuntimeError("sync exploded")
+
+        assert len(target.handlers) == before
+
+    def test_a_long_run_keeps_its_tail_and_says_it_did(self) -> None:
+        """The end of a run is the part that explains it; the start scrolls away."""
+        handler = RunLogCapture(max_bytes=400)
+        logger = logging.getLogger("eifo.fetch.noisy")
+        logger.addHandler(handler)
+        try:
+            for index in range(200):
+                logger.warning("line %03d", index)
+        finally:
+            logger.removeHandler(handler)
+
+        text = handler.text()
+        assert text is not None
+        assert handler.truncated is True
+        assert "line 199" in text
+        assert "line 000" not in text
+        assert "earlier lines dropped" in text
+
+
+class TestClosingARunWithItsLog:
+    def test_the_log_lands_on_the_row(self, session: Session) -> None:
+        run = open_run(session, phase=FetchPhase.SYNC, source_key="mako")
+
+        close_run(session, run, status=FetchStatus.OK, stats={}, log="mako: 0 items")
+
+        assert session.get(FetchRun, run.id).log == "mako: 0 items"
+
+    def test_a_run_with_nothing_to_say_leaves_the_column_alone(self, session: Session) -> None:
+        run = open_run(session, phase=FetchPhase.SYNC, source_key="mako")
+
+        close_run(session, run, status=FetchStatus.OK, stats={}, log=None)
+
+        assert session.get(FetchRun, run.id).log is None

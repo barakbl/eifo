@@ -276,6 +276,11 @@ class Source(TimestampMixin, Base):
     logo_path: Mapped[str | None] = mapped_column(String(500))
     active: Mapped[bool] = mapped_column(default=True)
     deactivated_at: Mapped[dt.datetime | None]
+    #: An operator's override of the ``[sources]`` switch in the config file.
+    #: NULL - the default - means "whatever the file says", so turning a source
+    #: off from the Manage tab does not silently freeze every other source at
+    #: whatever the file happened to say the day somebody first used the toggle.
+    enabled: Mapped[bool | None] = mapped_column(default=None)
 
     availability: Mapped[list[Availability]] = relationship(
         back_populates="source",
@@ -584,6 +589,12 @@ class FetchRun(Base):
     finished_at: Mapped[dt.datetime | None]
     status: Mapped[FetchStatus] = mapped_column(_enum(FetchStatus, "fetch_status"))
     stats: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    #: What the run said while it ran. Until this existed the only record of a
+    #: failed night was on the stderr of a process nobody was watching, so the
+    #: answer to "why did mako return nothing" was "run it again and watch".
+    #: Truncated to the tail (``eifo_fetcher.runs.RunLogCapture``) - the end of
+    #: a run is the part that explains it.
+    log: Mapped[str | None] = mapped_column(Text)
 
     def __repr__(self) -> str:
         return f"<FetchRun {self.phase} {self.source_key} {self.status}>"

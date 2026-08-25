@@ -10,6 +10,7 @@ import { createSuggest } from "./suggest.js";
 import { QUERY_EVENT } from "./views/home.js";
 import { el, replace, stateBlock } from "./ui.js";
 import { createHomeView } from "./views/home.js";
+import { createManageView } from "./views/manage.js";
 import { createMyListView } from "./views/mylist.js";
 import { createPersonView } from "./views/person.js";
 import { createSettingsView } from "./views/settings.js";
@@ -271,6 +272,7 @@ async function start() {
       people: (route) => person(route),
       me: (route) => mylist(route),
       settings: (route) => settings(route),
+      manage: (route) => manage(route),
       notFound: () => {
         const { t } = app.get();
         replace(
@@ -295,6 +297,7 @@ async function start() {
   const mylist = createMyListView({ mount: main, app, router, items });
   const settings = createSettingsView({ mount: main, app, router, onSignedOut: () => signOut(router) });
   const person = createPersonView({ mount: main, app, router });
+  const manage = createManageView({ mount: main, app, router });
 
   const [sources, meta, user] = await Promise.all([
     listSources().catch(() => []),

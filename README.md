@@ -378,6 +378,51 @@ Restart. A sign-in button appears for each provider you configured, and for no o
 
 Every setting, with its default, is in `config/eifo.example.toml` and `.env.example`.
 
+### The Manage tab
+
+Nobody is an administrator until you say so, so this is off on a fresh install and the tab
+does not appear at all. Turning it on is one line, and the address has to match the account
+you actually sign in with:
+
+```bash
+EIFO_ADMIN_EMAILS=you@example.com          # comma-separated for more than one
+```
+
+Restart, then sign out and back in - whether you are an administrator is settled when your
+session is authenticated. The link is in the account menu, beside **My list** and
+**Settings**, and the tab lives at `#/manage`.
+
+There is deliberately no way to become one from inside the product. The first administrator
+has to come from somewhere, and "whoever signed in first" is how a public instance hands
+itself to a stranger. Every endpoint behind the tab answers 404 rather than 403 to everybody
+else: a signed-in stranger is not owed the knowledge that it is there.
+
+Three panels:
+
+| Panel | Answers |
+|---|---|
+| **Overview** | Is the catalog alright - titles, how many carry a score, how many still have no artwork, what is available right now. The review queue and the stale-source count turn amber when they mean work. |
+| **Sources** | Is *this* source alright - coverage, when it last synced, how much of its output is stuck in the review queue, and a switch. |
+| **Runs** | What happened last night - every fetcher run with what it counted, and the tail of what it said while it ran. |
+
+**The run log is the part worth knowing about.** Runs were always recorded - when they
+started, how they ended, what they counted - but the *reason* a night went wrong lived only
+on the stderr of a process nobody was watching. Now `eifo-fetch` keeps the tail of what each
+run said and stores it on the row, which is usually the whole answer to "why did mako return
+nothing this time".
+
+**The source switch is an override, not a copy of your config file.** Left alone it means
+"whatever `[sources]` says", so switching one source off does not quietly freeze the other
+twelve at whatever the file happened to say that day. It applies on the fetcher's next run;
+nothing needs restarting.
+
+**The review queue** is where listings the matcher could not place get ruled on. A parked
+listing is not in the catalog at all - no title, nothing to search for - so a queue that
+grows is content going missing. The tab puts the source's offer beside the title it might
+be, with three answers of one tap each and `1`/`2`/`3` plus `j`/`k` for working through a
+backlog at speed. A ruling takes effect immediately. The same three rulings are available
+from the CLI (`eifo-fetch review`), which is still the right tool over SSH.
+
 ## How it fits together
 
 ```

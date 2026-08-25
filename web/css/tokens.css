@@ -173,6 +173,9 @@
   --source-netflix_il: #f6353f;
   --source-prime_video_il: #12a7dd;
   --source-apple_tv_plus: #7c8cff;
+  /* The shop, not the subscription: the same family a shade deeper, so a card
+     reads as "Apple, but you are paying for this one". */
+  --source-apple_tv_store: #5a63c4;
   --source-hbo_max_il: #b45cf9;
   --source-mubi_il: #1fd18b;
   --source-crunchyroll_il: #f7791f;

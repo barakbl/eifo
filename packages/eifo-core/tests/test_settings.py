@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import SecretStr
@@ -209,3 +211,34 @@ class TestAdministrators:
 
     def test_a_list_still_works(self) -> None:
         assert Settings(_env_file=None, admin_emails=["a@b.test"]).admin_emails == ["a@b.test"]
+
+
+class TestTheExampleConfig:
+    """The file people copy to make their own.
+
+    A setting that exists and is written down nowhere is a setting nobody
+    finds - which is how the Manage tab shipped invisible to the person who
+    asked for it. These keep the example honest about what can be set.
+    """
+
+    def _example(self) -> dict[str, Any]:
+        path = Path(__file__).resolve().parents[3] / "config" / "eifo.example.toml"
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+
+    def test_it_is_valid_configuration(self) -> None:
+        """Not merely valid TOML: every key has to be one Settings accepts."""
+        Settings(_env_file=None, **self._example())
+
+    def test_it_names_the_settings_that_turn_a_surface_on(self) -> None:
+        """The ones nobody can guess, because nothing in the UI hints at them."""
+        example = self._example()
+
+        assert "admin_emails" in example
+        assert example["admin_emails"] == [], "the example must not grant anybody access"
+
+    def test_it_holds_no_secrets(self) -> None:
+        """They come from the environment; this file is committable."""
+        example = self._example()
+
+        for name in ("secret_key", "tmdb_api_key", "google_client_secret", "x_client_secret"):
+            assert name not in example

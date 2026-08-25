@@ -79,7 +79,17 @@ jobs:
         run: uv sync --locked
 
       - name: Tests
-        run: uv run pytest
+        # --basetemp, because every test in the suite gets a tmp_path whether it
+        # asks for one or not (the autouse fixture in conftest.py), and half of
+        # them build a SQLite database in it. Windows puts the default temp
+        # directory on C:, the OS disk; the workspace and the uv cache are on
+        # D:, the local SSD. That left the one thing done a thousand times per
+        # run pointed at the slow volume - the first third of the suite took
+        # 11m39s of a 13m47s run, against 9 seconds for the same tests on Linux.
+        #
+        # Its own subdirectory rather than RUNNER_TEMP itself: pytest deletes
+        # the basetemp at startup, and setup-uv keeps its cache next door.
+        run: uv run pytest --basetemp="${{ runner.temp }}\pytest"
 
       # What follows is deliberately not pytest. The `import fcntl` that made
       # every eifo-fetch command unrunnable was invisible to a test suite that

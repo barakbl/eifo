@@ -151,10 +151,25 @@ function statStrip(stats, { t, language }) {
     "ul",
     { class: "stats" },
     tiles.map((tile) =>
-      el("li", { class: `stat${tile.warn ? " stat--warn" : ""}` }, [
-        el("span", { class: "stat__value", text: String(tile.value) }),
-        el("span", { class: "stat__label", text: tile.label }),
-      ]),
+      // A tile holding a date or a ratio is not a headline number, and set at
+      // the same size it wraps to three lines and stretches every tile in the
+      // row to match it.
+      el(
+        "li",
+        {
+          class: [
+            "stat",
+            tile.warn ? "stat--warn" : "",
+            typeof tile.value === "number" ? "" : "stat--text",
+          ]
+            .filter(Boolean)
+            .join(" "),
+        },
+        [
+          el("span", { class: "stat__value", text: String(tile.value) }),
+          el("span", { class: "stat__label", text: tile.label }),
+        ],
+      ),
     ),
   );
 }
@@ -348,20 +363,65 @@ function runRow(run, { t, language }) {
   ]);
 }
 
-/** The run's own tally, as it recorded it - keys and all. */
+/**
+ * A run's own tally, flattened into label/value pairs.
+ *
+ * A tally is not flat. `by_enricher` and `matched_by` are maps - which
+ * enricher wrote what, how each title was matched - and both were rendering as
+ * `[object Object]`, which is the one thing a number panel must never say.
+ * They flatten one level, so "by enricher · tmdb" is its own figure.
+ *
+ * `errors` is a list, and was being dropped entirely. It becomes a count: the
+ * strings themselves belong in the log, which is a click away, and a stat line
+ * that swallows the word "errors" is worse than one that is merely terse.
+ *
+ * Empty maps and empty lists are left out. A clean run should read as a clean
+ * run, not as a row of zeroes.
+ *
+ * Exported for its own tests; nothing else calls it.
+ */
+export function statEntries(stats) {
+  const entries = [];
+
+  for (const [key, value] of Object.entries(stats ?? {})) {
+    const label = key.replace(/_/g, " ");
+
+    if (value === null || value === undefined) continue;
+
+    if (Array.isArray(value)) {
+      // Some tallies already record the count beside the list - the sync and
+      // enrich ones pair `errors` with `error_count`, singular. Saying
+      // "errors 2" next to "error count 2" is noise, so the singular form is
+      // checked as well as the plain one.
+      const counted = `${key}_count` in stats || `${key.replace(/s$/, "")}_count` in stats;
+      if (value.length && !counted) entries.push([label, String(value.length)]);
+      continue;
+    }
+
+    if (typeof value === "object") {
+      for (const [inner, count] of Object.entries(value)) {
+        entries.push([`${label} · ${inner}`, String(count)]);
+      }
+      continue;
+    }
+
+    entries.push([label, String(value)]);
+  }
+
+  return entries;
+}
+
 function statLine(stats) {
-  const entries = Object.entries(stats ?? {}).filter(
-    ([, value]) => value !== null && value !== undefined && !Array.isArray(value),
-  );
+  const entries = statEntries(stats);
   if (!entries.length) return null;
 
   return el(
     "ul",
     { class: "run__stats" },
-    entries.map(([key, value]) =>
+    entries.map(([label, value]) =>
       el("li", {}, [
-        el("span", { class: "run__stat-key", text: key.replace(/_/g, " ") }),
-        el("span", { class: "run__stat-value", text: String(value) }),
+        el("span", { class: "run__stat-key", text: label }),
+        el("span", { class: "run__stat-value", text: value }),
       ]),
     ),
   );

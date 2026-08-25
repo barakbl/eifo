@@ -481,6 +481,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "itsdangerous" },
+    { name = "joserfc" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -491,6 +492,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "itsdangerous", specifier = ">=2.2" },
+    { name = "joserfc", specifier = ">=1.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]
 

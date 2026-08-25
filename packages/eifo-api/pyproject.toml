@@ -10,6 +10,11 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "authlib>=1.4",
+    # Imported directly by eifo_api.oauth to verify the ID token. Authlib
+    # happens to depend on it too, which is why this was missing and nothing
+    # noticed - but a dependency we import is one we declare, or the day
+    # Authlib swaps it out the API stops importing.
+    "joserfc>=1.0",
     "itsdangerous>=2.2",
     "httpx>=0.28",
 ]

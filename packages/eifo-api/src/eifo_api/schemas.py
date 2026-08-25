@@ -414,6 +414,11 @@ class AdminStats(BaseModel):
     titles_with_score: int
     titles_missing_poster: int
     people_count: int
+    #: Distinct titles somebody could watch right now, which is what "available"
+    #: means to a reader. Not the same as the number of offers: a title on two
+    #: services, or rentable and buyable at one shop, is one title and several
+    #: offers.
+    titles_available: int
     current_offers: int
     pending_reviews: int
     sources_total: int

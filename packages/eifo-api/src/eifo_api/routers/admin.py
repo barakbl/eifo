@@ -162,6 +162,12 @@ def get_stats(_admin: AdminDep, session: SessionDep, settings: SettingsDep) -> A
         titles_with_score=_count(session, select(AggregateScore)),
         titles_missing_poster=_count(session, select(Title).where(Title.poster_path.is_(None))),
         people_count=_count(session, select(Person)),
+        titles_available=session.scalar(
+            select(func.count(func.distinct(Availability.title_id))).where(
+                Availability.is_current.is_(True)
+            )
+        )
+        or 0,
         current_offers=_count(
             session, select(Availability).where(Availability.is_current.is_(True))
         ),

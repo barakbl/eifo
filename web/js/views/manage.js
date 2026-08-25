@@ -124,6 +124,7 @@ function statStrip(stats, { t, language }) {
       value: stats.titles_missing_poster,
     },
     { label: t("manage.stat.people"), value: stats.people_count },
+    { label: t("manage.stat.available"), value: stats.titles_available },
     { label: t("manage.stat.offers"), value: stats.current_offers },
     {
       label: t("manage.stat.pending"),

@@ -19,7 +19,7 @@ from eifo_core.settings import Settings, SourceConfig
 from eifo_fetcher.enrichers.tmdb_meta import _client_from as _enricher_client_from
 from eifo_fetcher.http import HttpClient, RateLimiter
 from eifo_fetcher.runner import _tmdb_client, fetch_images
-from eifo_fetcher.sources.base import FetchContext
+from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError
 from eifo_fetcher.sources.tmdb_providers import (
     PROVIDER_SOURCES,
     TmdbProvidersPlugin,
@@ -628,3 +628,73 @@ class TestACatalogBiggerThanOneListing:
             list(TmdbProvidersPlugin().fetch(ctx))
 
         assert any("more than" in message for message in records)
+
+
+class TestAShopThatCannotBeAskedIsNotAnEmptyShop:
+    """A title that yields no offer is a title the sweep counts as missing, and
+    after two such nights its availability is retired.
+
+    So "we could not ask" must not look like "it is not sold". A run whose
+    lookups are all failing has to give up rather than report an empty shop -
+    otherwise a bad hour at TMDB retires a storefront two nights later.
+    """
+
+    def _settings(self) -> Settings:
+        return Settings(_env_file=None, tmdb_api_key="k", db_url="sqlite:///:memory:")
+
+    def _ctx(self, http: HttpClient) -> FetchContext:
+        return FetchContext(source_key="apple_tv_store", http=http, settings=self._settings())
+
+    def _providers(self) -> None:
+        respx.get(f"{BASE_URL}/watch/providers/movie").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"provider_id": 2, "provider_name": "Apple TV Store"}]}
+            )
+        )
+        respx.get(f"{BASE_URL}/watch/providers/tv").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+
+    @respx.mock
+    def test_lookups_that_all_fail_stop_the_run(self, http: HttpClient) -> None:
+        """Rather than quietly yielding nothing for every film in the shop."""
+        self._providers()
+        many = [movie_result(i, f"Film {i}") for i in range(1, 41)]
+        respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200, json={"total_pages": 1, "total_results": len(many), "results": many}
+            )
+        )
+        respx.get(url__regex=rf"{BASE_URL}/movie/\d+/watch/providers").mock(
+            return_value=httpx.Response(503)
+        )
+        ctx = self._ctx(http)
+
+        with pytest.raises(TooManyErrorsError):
+            list(TmdbProvidersPlugin().fetch(ctx))
+
+    @respx.mock
+    def test_one_bad_lookup_among_good_ones_does_not(self, http: HttpClient) -> None:
+        """A scattered failure is incidental; the streak resets on the next read."""
+        self._providers()
+        respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "total_pages": 1,
+                    "total_results": 2,
+                    "results": [movie_result(1, "Fine"), movie_result(2, "Broken")],
+                },
+            )
+        )
+        sold = {"results": {"IL": {"buy": [{"provider_id": 2}]}}}
+        respx.get(f"{BASE_URL}/movie/1/watch/providers").mock(
+            return_value=httpx.Response(200, json=sold)
+        )
+        respx.get(f"{BASE_URL}/movie/2/watch/providers").mock(return_value=httpx.Response(503))
+        ctx = self._ctx(http)
+
+        items = list(TmdbProvidersPlugin().fetch(ctx))
+
+        assert [item.tmdb_id for item in items] == [1]
+        assert ctx.error_count == 1

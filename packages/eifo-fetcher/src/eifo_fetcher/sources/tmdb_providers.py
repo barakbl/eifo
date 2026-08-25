@@ -235,15 +235,23 @@ class TmdbProvidersPlugin(SourcePlugin):
         than a missing one: it sends somebody to a shop that is not selling it.
         """
         if not source.verified_offer_types:
+            ctx.record_success()
             yield self._item(source, kind, hit, OfferType.STREAM, provider_id, tmdb.region)
             return
 
         try:
             offered = tmdb.title_watch_providers(kind, hit.tmdb_id)
         except Exception as exc:
+            # "We could not ask", which is not the same as "it is not sold" -
+            # and the difference matters because a title that yields no offer
+            # is a title the sweep counts as missing. Recording it as an error
+            # is what lets a run whose every lookup is failing give up, instead
+            # of reporting an empty shop and retiring the catalog two nights
+            # later. A scattered failure resets on the next title that reads.
             ctx.record_error(f"could not read offers for {hit.tmdb_id}", exc=exc)
             return
 
+        ctx.record_success()
         for offer_type in source.verified_offer_types:
             if _carries(offered, offer_type, provider_id):
                 yield self._item(source, kind, hit, offer_type, provider_id, tmdb.region)
@@ -301,7 +309,8 @@ class TmdbProvidersPlugin(SourcePlugin):
                 if hit.tmdb_id in seen:
                     continue
                 seen.add(hit.tmdb_id)
-                ctx.record_success()
+                # Success is recorded once the title is actually read, not on
+                # having been listed - see _offers_for.
                 yield from self._offers_for(tmdb, source, kind, provider_id, hit, ctx)
 
             if reported > max_pages * 20:

@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from eifo_core.enums import MatchDecision, TitleKind
 from eifo_core.models import MatchReview, Title, TmdbAlias
+from eifo_core.naming import is_hebrew, latin_script, split_by_script
 from eifo_fetcher.sources.base import RawItem, plausible_year
 from eifo_fetcher.tmdb import TmdbClient, TmdbTitle
 
@@ -64,7 +65,6 @@ ALIAS_SIMILARITY_THRESHOLD = 100.0
 #: rather than a reason to accept.
 REVIEW_YEAR_TOLERANCE = 8
 
-_HEBREW = re.compile(r"[֐-׿]")
 #: Marks that are decoration on a letter: Latin diacritics and Hebrew pointing.
 #:
 #: Deliberately not every combining character. In Devanagari, Malayalam and
@@ -128,29 +128,6 @@ class MatchStats:
         return dict(self.counts)
 
 
-def is_hebrew(text: str) -> bool:
-    """Whether a string contains Hebrew letters."""
-    return bool(_HEBREW.search(text))
-
-
-def latin_script(text: str) -> bool:
-    """Whether every letter in a string is Latin.
-
-    The counterpart to :func:`is_hebrew`, and the reason both exist: this
-    catalog has a column for Hebrew names and a column for English ones, and
-    nothing else. Anything written in a third script is neither, and calling it
-    English because it is not Hebrew is how "Spirited Away" came to be stored as
-    "千と千尋の神隠し" - unfindable by the name every English speaker knows it by.
-
-    Accented Latin passes: "Amélie" and "Cien años de soledad" are English-column
-    names in every sense that matters here.
-    """
-    letters = [char for char in text if char.isalpha()]
-    if not letters:
-        return False
-    return all(unicodedata.name(char, "").startswith("LATIN") for char in letters)
-
-
 def normalise(name: str) -> str:
     """Fold a title down to what two catalogs are likely to agree on.
 
@@ -205,16 +182,7 @@ def names_of(item: RawItem) -> tuple[str | None, str | None]:
     that must store something decide what to do with that; see
     :func:`fallback_name`.
     """
-    hebrew: str | None = None
-    english: str | None = None
-    for candidate in (item.name, item.name_alt):
-        if not candidate:
-            continue
-        if is_hebrew(candidate):
-            hebrew = hebrew or candidate
-        elif latin_script(candidate):
-            english = english or candidate
-    return hebrew, english
+    return split_by_script(item.name, item.name_alt)
 
 
 def fallback_name(item: RawItem) -> str:

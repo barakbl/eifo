@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from helpers import MakeAdmin, SeedSource, SignIn
 from seed import Seeded
@@ -18,8 +19,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_api.security import CSRF_HEADER
-from eifo_core.enums import FetchPhase, FetchStatus
+from eifo_core.enums import FetchPhase, FetchStatus, SourceKind
 from eifo_core.models import FetchRun, MatchReview, Source
+from eifo_core.settings import SourceConfig
 
 NOW = dt.datetime(2026, 8, 7, 12, 0, tzinfo=dt.UTC)
 
@@ -326,3 +328,75 @@ class TestNothingHereIsCached:
 
         assert response.status_code == 404
         assert response.headers["cache-control"] == "no-store"
+
+
+class TestTheTabAgreesWithTheFetcher:
+    """Three things decide whether a source is collected, and the screen has to
+    read them in the same order the run does.
+
+    It did not. A plugin that declares itself off - the Apple TV Store, which
+    costs a request per film - showed as on, because the config file said
+    nothing about it and "nothing" used to mean "on". The tab was describing a
+    sync that was never going to happen.
+    """
+
+    def _source(
+        self,
+        factory: sessionmaker[Session],
+        *,
+        key: str = "apple_tv_store",
+        default_enabled: bool = False,
+        enabled: bool | None = None,
+    ) -> None:
+        with factory() as session:
+            session.add(
+                Source(
+                    key=key,
+                    name="Apple TV Store",
+                    kind=SourceKind.RENT_BUY,
+                    website_url="https://tv.apple.com/il",
+                    default_enabled=default_enabled,
+                    enabled=enabled,
+                )
+            )
+            session.commit()
+
+    def _row(self, client: TestClient, key: str = "apple_tv_store") -> dict[str, object]:
+        rows = {row["key"]: row for row in client.get("/api/v1/admin/sources").json()}
+        return rows[key]
+
+    def test_a_plugin_that_declares_itself_off_reads_as_off(
+        self, client: TestClient, admin: dict[str, str], session_factory: sessionmaker[Session]
+    ) -> None:
+        self._source(session_factory)
+
+        assert self._row(client)["effective_enabled"] is False
+
+    def test_the_config_file_still_wins_over_the_declaration(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        app: FastAPI,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        self._source(session_factory)
+        app.state.settings.sources["apple_tv_store"] = SourceConfig(enabled=True)
+
+        assert self._row(client)["effective_enabled"] is True
+
+    def test_and_an_operator_switch_wins_over_both(
+        self, client: TestClient, admin: dict[str, str], session_factory: sessionmaker[Session]
+    ) -> None:
+        self._source(session_factory, default_enabled=False, enabled=True)
+
+        row = self._row(client)
+        assert row["enabled"] is True
+        assert row["effective_enabled"] is True
+
+    def test_an_ordinary_source_still_defaults_to_on(
+        self, client: TestClient, admin: dict[str, str], session_factory: sessionmaker[Session]
+    ) -> None:
+        """Which is why adding a plugin is one file rather than a config edit."""
+        self._source(session_factory, key="some_new_plugin", default_enabled=True)
+
+        assert self._row(client, "some_new_plugin")["effective_enabled"] is True

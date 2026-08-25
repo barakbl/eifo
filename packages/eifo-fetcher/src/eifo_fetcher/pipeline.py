@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -351,6 +351,58 @@ def _looks_truncated(session: Session, source_key: str, items_seen: int) -> bool
 
 def _title_count(session: Session) -> int:
     return session.scalar(select(func.count()).select_from(Title)) or 0
+
+
+def register_declared_sources(
+    session: Session,
+    declared: Mapping[str, SourceInfo],
+    *,
+    enabled: Iterable[str],
+) -> list[str]:
+    """Give every plugin a row, whether or not it is switched on.
+
+    Returns the keys newly written.
+
+    A source used to exist only once it had synced, which made the operator's
+    source list a list of sources that had already run. A service switched off -
+    or one added in an upgrade - was invisible on the one screen whose job is
+    showing services, so the toggle that would have switched it on was not there
+    to press. The database is the only thing the fetcher and the API share, so
+    what the fetcher knows about has to be written down for the API to see it.
+
+    A row created for a source that is not switched on starts inactive, which is
+    what it is: declared, known, not currently collected.
+    """
+    stored = {
+        source.key: source
+        for source in session.scalars(select(Source).where(Source.key.in_(list(declared)))).all()
+    }
+    switched_on = set(enabled)
+    written: list[str] = []
+
+    for key, info in declared.items():
+        existing = stored.get(key)
+        if existing is not None:
+            # A plugin that changes its own default has to be able to say so:
+            # the API reads this column and cannot ask the plugin directly.
+            existing.default_enabled = info.default_enabled
+            continue
+        session.add(
+            Source(
+                key=key,
+                name=info.name,
+                kind=info.kind,
+                website_url=info.website_url,
+                logo_path=info.logo_path,
+                default_enabled=info.default_enabled,
+                active=key in switched_on,
+                deactivated_at=None if key in switched_on else utcnow(),
+            )
+        )
+        written.append(key)
+
+    session.flush()
+    return written
 
 
 def deactivate_missing_sources(session: Session, active_keys: Iterable[str]) -> list[str]:

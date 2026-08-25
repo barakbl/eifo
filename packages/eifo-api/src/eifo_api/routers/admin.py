@@ -230,17 +230,28 @@ def _to_admin_source(
         website_url=source.website_url,
         active=source.active,
         enabled=source.enabled,
-        effective_enabled=(
-            source.enabled
-            if source.enabled is not None
-            else settings.source_config(source.key).enabled
-        ),
+        effective_enabled=_effective(source, settings),
         title_count=title_count,
         pending_reviews=pending_reviews,
         last_sync_at=last_at,
         last_sync_status=last_status,
         stale=source.active and _is_stale(last, stale_before),
     )
+
+
+def _effective(source: Source, settings: Settings) -> bool:
+    """Whether this source is actually being collected.
+
+    The same three answers the fetcher consults, in the same order: an
+    operator's switch, then the config file, then what the plugin declares.
+    The last one reaches here through the database because the API cannot ask
+    a plugin anything - and while it could not, the tab reported a source as on
+    for want of a line in a config file that was never going to mention it.
+    """
+    if source.enabled is not None:
+        return source.enabled
+    configured = settings.sources.get(source.key)
+    return configured.enabled if configured is not None else source.default_enabled
 
 
 def _is_stale(

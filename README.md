@@ -131,7 +131,7 @@ someone's subscription ([why](#data-attribution-and-fair-use)).
 | **Global streamers** | | | *Israeli catalogs* |
 | **Netflix** (IL) | ✅ Yes | `tmdb-providers` | Availability from JustWatch via the [TMDB API](#install) - **free key required**. The "watch" link goes to TMDB's per-title page, not the service's player; refreshed daily. |
 | **Prime Video** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |
-| **Apple TV+** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. The subscription only; the storefront beside it is a separate source below. |
+| **Apple TV** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. The subscription only - Apple's storefront is a separate source, below. |
 | **HBO Max** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |
 | **MUBI** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. Films only. |
 | **Crunchyroll** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |

@@ -146,7 +146,10 @@ export async function getMe(options) {
   try {
     const me = await request("/me", options);
     setCsrfToken(me.csrf_token);
-    return me.user;
+    // Folded onto the user because that is how the client thinks about it -
+    // "can I open Manage" is a fact about who is signed in. It only ever hides
+    // a link: every endpoint behind the tab checks for itself.
+    return { ...me.user, is_admin: Boolean(me.is_admin) };
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
       setCsrfToken("");
@@ -188,4 +191,93 @@ export function putMyItem(titleId, patch) {
 
 export function deleteMyItem(titleId) {
   return request(`/me/items/${encodeURIComponent(titleId)}`, { method: "DELETE" });
+}
+
+/* -- operator surfaces ----------------------------------------------------
+ *
+ * Every one of these 404s for a signed-in user who is not an administrator,
+ * which is deliberate: the client hides the tab, and the server does not agree
+ * that it exists. Both, so neither has to be the only one that is right.
+ */
+
+export function listAdminSources(options) {
+  return request("/admin/sources", options);
+}
+
+export function setSourceEnabled(key, enabled) {
+  return request(`/admin/sources/${encodeURIComponent(key)}`, {
+    method: "PATCH",
+    body: { enabled },
+  });
+}
+
+/** Build a runs query from the filter chips. */
+export function runsQuery(
+  { source = "", phase = "", status = "" } = {},
+  { page = 1, pageSize = 25 } = {},
+) {
+  const params = new URLSearchParams();
+  if (source) params.set("source", source);
+  if (phase) params.set("phase", phase);
+  if (status) params.set("status", status);
+  params.set("page", String(page));
+  params.set("page_size", String(pageSize));
+  return params.toString();
+}
+
+export function listRuns(filters, paging, options) {
+  return request(`/admin/runs?${runsQuery(filters, paging)}`, options);
+}
+
+export function getRun(id, options) {
+  return request(`/admin/runs/${encodeURIComponent(id)}`, options);
+}
+
+export function getAdminStats(options) {
+  return request("/admin/stats", options);
+}
+
+/* -- the review queue ----------------------------------------------------- */
+
+export function reviewsQuery(
+  { source = "", order = "age" } = {},
+  { page = 1, pageSize = 25 } = {},
+) {
+  const params = new URLSearchParams();
+  if (source) params.set("source", source);
+  if (order) params.set("order", order);
+  params.set("page", String(page));
+  params.set("page_size", String(pageSize));
+  return params.toString();
+}
+
+export function listReviews(filters, paging, options) {
+  return request(`/reviews?${reviewsQuery(filters, paging)}`, options);
+}
+
+export function countReviews(options) {
+  return request("/reviews/count", options);
+}
+
+export function attachReview(id, titleId) {
+  return request(`/reviews/${encodeURIComponent(id)}/attach`, {
+    method: "POST",
+    body: { title_id: titleId },
+  });
+}
+
+export function createFromReview(id) {
+  return request(`/reviews/${encodeURIComponent(id)}/create`, {
+    method: "POST",
+  });
+}
+
+export function dismissReview(id) {
+  return request(`/reviews/${encodeURIComponent(id)}/dismiss`, {
+    method: "POST",
+  });
+}
+
+export function ruleInBulk(ids, decision) {
+  return request("/reviews/bulk", { method: "POST", body: { ids, decision } });
 }

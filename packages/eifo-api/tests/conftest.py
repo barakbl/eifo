@@ -11,10 +11,11 @@ import pytest
 import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from helpers import PUBLIC_ORIGIN, SECRET_KEY, SeedSource, SignIn
+from helpers import PUBLIC_ORIGIN, SECRET_KEY, MakeAdmin, SeedSource, SignIn
 from providers import (
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
+    GOOGLE_EMAIL,
     X_CLIENT_ID,
     X_CLIENT_SECRET,
     mock_google,
@@ -116,6 +117,22 @@ def catalog(session_factory: sessionmaker[Session]) -> Seeded:
     """A seeded catalog covering the states the API must distinguish."""
     with session_factory() as session:
         return seed_catalog(session)
+
+
+@pytest.fixture
+def make_admin(app: FastAPI) -> MakeAdmin:
+    """Make the signed-in account an administrator of this instance.
+
+    By address, because that is how the setting works: an administrator is
+    named in configuration, never promoted from within the product. Mutating
+    the running app's settings is the same thing as an operator editing the
+    file and restarting, minus the restart.
+    """
+
+    def _promote(email: str = GOOGLE_EMAIL) -> None:
+        app.state.settings.admin_emails = [email]
+
+    return _promote
 
 
 @pytest.fixture

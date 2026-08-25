@@ -53,6 +53,11 @@ function signedInMenu({ user, t, onSignOut }) {
     el("div", { class: "account__panel" }, [
       el("a", { class: "account__item", href: "#/me", text: t("mylist.title") }),
       el("a", { class: "account__item", href: "#/settings", text: t("settings.title") }),
+      // Only for an administrator, and only as a shortcut: the page checks, and
+      // so does every endpoint it calls.
+      user.is_admin
+        ? el("a", { class: "account__item", href: "#/manage", text: t("manage.title") })
+        : null,
       el("button", {
         class: "account__item",
         type: "button",

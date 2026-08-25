@@ -35,7 +35,11 @@ DEFAULT_PAGE_SIZE = 24
 @router.get("/me", response_model=MeResponse, summary="The signed-in user")
 def read_me(principal: PrincipalDep) -> MeResponse:
     """Who you are, and the CSRF token to write with."""
-    return MeResponse(user=to_user(principal.user), csrf_token=principal.csrf_token)
+    return MeResponse(
+        user=to_user(principal.user),
+        csrf_token=principal.csrf_token,
+        is_admin=principal.is_admin,
+    )
 
 
 @router.patch("/me", response_model=UserOut, summary="Update your profile")

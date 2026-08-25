@@ -5,14 +5,17 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
+from sqlalchemy.orm import Session
 
 from eifo_core.enums import OfferType, SourceKind, TitleKind
+from eifo_core.models import Source
 from eifo_core.settings import Settings, SourceConfig
 from eifo_fetcher.registry import (
     declared_sources,
     discover_plugins,
     enabled_sources,
     plugins_for,
+    source_overrides,
 )
 from eifo_fetcher.sources.base import (
     FetchContext,
@@ -180,3 +183,77 @@ class TestRawItem:
         assert RawItem(source_key="s", kind=TitleKind.MOVIE, name="x").offer_type is (
             OfferType.STREAM
         )
+
+
+class TestAnOperatorsOverride:
+    """The Manage tab's switch, which the fetcher reads on its next run.
+
+    Nullable on purpose: NULL means "the config file decides". A boolean
+    defaulting to true would have frozen every source at whatever the file said
+    the moment somebody first used one toggle.
+    """
+
+    def test_without_one_the_config_file_still_decides(self) -> None:
+        settings = Settings(_env_file=None, sources={"mako": SourceConfig(enabled=False)})
+
+        enabled = enabled_sources([FakePlugin("mako", "kan")], settings, overrides={})
+
+        assert "mako" not in enabled
+        assert "kan" in enabled
+
+    def test_it_can_switch_a_source_off(self) -> None:
+        settings = Settings(_env_file=None)
+
+        enabled = enabled_sources([FakePlugin("mako", "kan")], settings, overrides={"kan": False})
+
+        assert "kan" not in enabled
+        assert "mako" in enabled
+
+    def test_it_can_switch_one_back_on_that_the_file_disabled(self) -> None:
+        settings = Settings(_env_file=None, sources={"mako": SourceConfig(enabled=False)})
+
+        enabled = enabled_sources([FakePlugin("mako", "kan")], settings, overrides={"mako": True})
+
+        assert "mako" in enabled
+
+    def test_no_overrides_at_all_behaves_as_it_always_did(self) -> None:
+        settings = Settings(_env_file=None, sources={"mako": SourceConfig(enabled=False)})
+
+        assert enabled_sources([FakePlugin("mako", "kan")], settings) == enabled_sources(
+            [FakePlugin("mako", "kan")], settings, overrides={}
+        )
+
+
+class TestReadingTheOverrides:
+    def test_only_the_rows_that_carry_an_answer(self, session: Session) -> None:
+        """A NULL is the absence of an answer, not an answer of "off"."""
+        session.add_all(
+            [
+                Source(
+                    key="mako",
+                    name="Mako",
+                    kind=SourceKind.FREE,
+                    website_url="https://mako.test",
+                    enabled=False,
+                ),
+                Source(
+                    key="kan",
+                    name="Kan",
+                    kind=SourceKind.FREE,
+                    website_url="https://kan.test",
+                    enabled=True,
+                ),
+                Source(
+                    key="netflix_il",
+                    name="Netflix",
+                    kind=SourceKind.SUBSCRIPTION,
+                    website_url="https://netflix.test",
+                ),
+            ]
+        )
+        session.commit()
+
+        assert source_overrides(session) == {"mako": False, "kan": True}
+
+    def test_nothing_set_is_an_empty_answer(self, session: Session) -> None:
+        assert source_overrides(session) == {}

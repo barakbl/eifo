@@ -26,7 +26,12 @@ NO_STORE = "no-store"
 CACHEABLE_PREFIXES = ("/api/v1/titles", "/api/v1/sources", "/api/v1/genres")
 
 #: Paths whose responses must never be written down anywhere.
-PRIVATE_PREFIXES = ("/api/v1/me", "/api/v1/auth")
+#:
+#: The operator surfaces are here for the same reason as the user ones, plus
+#: one of their own: a run log is the catalog's inside voice - source keys,
+#: failure messages, occasionally a URL - and none of it belongs in a shared
+#: cache because a page happened to render it.
+PRIVATE_PREFIXES = ("/api/v1/me", "/api/v1/auth", "/api/v1/admin", "/api/v1/reviews")
 
 
 def etag_for(body: bytes) -> str:

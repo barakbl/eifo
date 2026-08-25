@@ -6,6 +6,7 @@ Pydantic models are the API contract; ORM objects never leave a router.
 from __future__ import annotations
 
 import datetime as dt
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from eifo_core.enums import (
     AuthProvider,
     CreditRole,
+    FetchPhase,
     FetchStatus,
     ItemStatus,
     OfferType,
@@ -32,6 +34,18 @@ from eifo_core.models import (
 #: unambiguously in one: no case, no punctuation, nothing to homoglyph with.
 HANDLE_PATTERN = r"^[a-z0-9_]+$"
 HANDLE_MIN_LENGTH = 3
+
+#: Cap on one bulk ruling. Big enough for "dismiss every Sing Along on this
+#: page", small enough that a mistake is reviewable and one request is one
+#: transaction that finishes.
+BULK_RULING_MAX = 200
+
+
+class BulkDecision(StrEnum):
+    """The rulings that can sensibly be made about a set of listings at once."""
+
+    DISMISS = "dismiss"
+    CREATE = "create"
 
 
 class Page[T](BaseModel):
@@ -290,6 +304,10 @@ class MeResponse(BaseModel):
 
     user: UserOut
     csrf_token: str
+    #: Whether this account may open the Manage tab. The client asks so it can
+    #: leave the link out rather than offer one that 404s; the server never
+    #: trusts the answer coming back.
+    is_admin: bool = False
 
 
 class UserItemOut(BaseModel):
@@ -329,3 +347,145 @@ class ItemUpsert(BaseModel):
     status: ItemStatus | None = None
     rating: int | None = Field(default=None, ge=RATING_MIN, le=RATING_MAX)
     note: str | None = Field(default=None, max_length=NOTE_MAX_LENGTH)
+
+
+# -- operator surfaces ------------------------------------------------------
+
+
+class AdminSource(BaseModel):
+    """A tracked service as an operator needs to see it.
+
+    Everything on one row that answers "is this source alright": whether it is
+    switched on, how much of the catalog it accounts for, when it last worked,
+    and how much of its output is sitting in the review queue instead.
+    """
+
+    key: str
+    name: str
+    kind: SourceKind
+    website_url: str
+    active: bool
+    #: The operator's override, or None when the config file decides.
+    enabled: bool | None = None
+    #: What the source is actually doing right now, config and override folded
+    #: together - which is the thing an operator is asking about.
+    effective_enabled: bool
+    title_count: int = 0
+    pending_reviews: int = 0
+    last_sync_at: dt.datetime | None = None
+    last_sync_status: FetchStatus | None = None
+    stale: bool = False
+
+
+class SourceToggle(BaseModel):
+    """Switch a source on or off, or hand it back to the config file."""
+
+    #: Null returns the source to whatever ``[sources]`` says, which is not the
+    #: same as switching it on.
+    enabled: bool | None = None
+
+
+class RunOut(BaseModel):
+    """One fetcher run, without its log."""
+
+    id: int
+    source_key: str | None = None
+    phase: FetchPhase
+    status: FetchStatus
+    started_at: dt.datetime
+    finished_at: dt.datetime | None = None
+    duration_seconds: float | None = None
+    stats: dict[str, Any] = Field(default_factory=dict)
+    #: Whether there is a log to fetch, so the client offers the control only
+    #: when pressing it would show something.
+    has_log: bool = False
+
+
+class RunDetail(RunOut):
+    """One fetcher run, with whatever it said while it ran."""
+
+    log: str | None = None
+
+
+class AdminStats(BaseModel):
+    """The numbers an operator checks first."""
+
+    title_count: int
+    titles_with_score: int
+    titles_missing_poster: int
+    people_count: int
+    current_offers: int
+    pending_reviews: int
+    sources_total: int
+    sources_stale: int
+    #: When the newest finished run of any kind finished. None on an instance
+    #: that has never run the fetcher, which is its own kind of answer.
+    last_run_at: dt.datetime | None = None
+    #: Hours after which a source counts as stale, so the client bands the
+    #: freshness figures the same way the server does.
+    stale_after_hours: int
+
+
+class ReviewCandidate(BaseModel):
+    """The title the matcher thought a parked listing might be."""
+
+    title_id: int
+    name_he: str | None = None
+    name_en: str | None = None
+    year: int | None = None
+    similarity: float | None = None
+    poster_url: str | None = None
+
+
+class ReviewOut(BaseModel):
+    """One parked listing, with everything needed to rule on it.
+
+    Both sides of the question in one object: what the source is offering, and
+    what the matcher suspected it already had. A reviewer comparing them should
+    not have to fetch the second one.
+    """
+
+    id: int
+    source_key: str
+    source_name: str | None = None
+    created_at: dt.datetime
+    name: str
+    name_alt: str | None = None
+    year: int | None = None
+    kind: TitleKind
+    poster_url: str | None = None
+    deep_link_url: str | None = None
+    closest: ReviewCandidate | None = None
+
+
+class ReviewCounts(BaseModel):
+    """How much is waiting, in total and per source."""
+
+    total: int
+    by_source: dict[str, int] = Field(default_factory=dict)
+
+
+class ReviewRuling(BaseModel):
+    """What a reviewer decided about a parked listing."""
+
+    #: Required for ``attach``; ignored otherwise.
+    title_id: int | None = None
+
+
+class BulkRuling(BaseModel):
+    """The same ruling applied to several listings at once.
+
+    Only the two rulings that need no per-item judgement: "these are all junk"
+    and "these are all real titles nobody holds". Attaching is per-item by
+    definition - it names a different title each time.
+    """
+
+    ids: list[int] = Field(min_length=1, max_length=BULK_RULING_MAX)
+    decision: BulkDecision
+
+
+class BulkResult(BaseModel):
+    """What a bulk ruling did, and to what it could not be applied."""
+
+    applied: int
+    skipped: list[int] = Field(default_factory=list)

@@ -120,8 +120,19 @@ def enabled_sources(
     return {
         key: info
         for key, info in declared_sources(plugins).items()
-        if switched.get(key, settings.source_config(key).enabled)
+        if switched.get(key, _configured(settings, key, info))
     }
+
+
+def _configured(settings: Settings, key: str, info: SourceInfo) -> bool:
+    """What the configuration file says about a source, or what it declares.
+
+    Absence is not the same as ``enabled = false``: a source the file has never
+    heard of falls back to the plugin's own default, which is how a new plugin
+    starts working without an edit to every deployment's config.
+    """
+    configured = settings.sources.get(key)
+    return configured.enabled if configured is not None else info.default_enabled
 
 
 def plugins_for(

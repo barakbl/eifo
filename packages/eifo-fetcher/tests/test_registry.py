@@ -257,3 +257,67 @@ class TestReadingTheOverrides:
 
     def test_nothing_set_is_an_empty_answer(self, session: Session) -> None:
         assert source_overrides(session) == {}
+
+
+class TestWhatASourceDoesWhenTheFileSaysNothing:
+    """Absence is not the same as `enabled = false`.
+
+    A source the config file has never heard of falls back to what its plugin
+    declares, which is how a new plugin starts working without an edit to every
+    deployment. Almost every source declares itself on; one that costs a
+    request per title declares itself off, so upgrading does not quietly hand
+    somebody a much longer nightly run.
+    """
+
+    def _plugin(self) -> FakePlugin:
+        return FakePlugin("cheap", "expensive")
+
+    def _sources(self) -> dict[str, SourceInfo]:
+        return {
+            "cheap": info("cheap"),
+            "expensive": SourceInfo(
+                key="expensive",
+                name="Expensive",
+                kind=SourceKind.RENT_BUY,
+                website_url="https://expensive.example",
+                default_enabled=False,
+            ),
+        }
+
+    def test_a_source_that_declares_itself_off_stays_off(self) -> None:
+        plugin = _DeclaringPlugin(self._sources())
+
+        assert set(enabled_sources([plugin], Settings(_env_file=None))) == {"cheap"}
+
+    def test_the_file_still_wins_when_it_says_anything(self) -> None:
+        plugin = _DeclaringPlugin(self._sources())
+        settings = Settings(_env_file=None, sources={"expensive": SourceConfig(enabled=True)})
+
+        assert "expensive" in enabled_sources([plugin], settings)
+
+    def test_and_an_operator_switch_wins_over_both(self) -> None:
+        plugin = _DeclaringPlugin(self._sources())
+
+        enabled = enabled_sources([plugin], Settings(_env_file=None), overrides={"expensive": True})
+
+        assert "expensive" in enabled
+
+    def test_the_apple_store_is_the_one_that_declares_itself_off(self) -> None:
+        """Named rather than inferred: this is a promise about a nightly run."""
+        declared = declared_sources(discover_plugins())
+
+        assert declared["apple_tv_store"].default_enabled is False
+        assert declared["netflix_il"].default_enabled is True
+
+
+class _DeclaringPlugin(SourcePlugin):
+    """A plugin whose sources carry their own default_enabled."""
+
+    def __init__(self, sources: dict[str, SourceInfo]) -> None:
+        self._sources = sources
+
+    def sources(self) -> list[SourceInfo]:
+        return list(self._sources.values())
+
+    def fetch(self, ctx: FetchContext) -> Iterator[RawItem]:
+        return iter(())

@@ -11,7 +11,7 @@ import respx
 from pydantic import SecretStr
 
 from eifo_core.db import create_engine_from_settings, make_session_factory
-from eifo_core.enums import OfferType, TitleKind
+from eifo_core.enums import OfferType, SourceKind, TitleKind
 from eifo_core.models import Base
 from eifo_core.settings import Settings, SourceConfig
 from eifo_fetcher.enrichers.tmdb_meta import _client_from as _enricher_client_from
@@ -361,3 +361,141 @@ class TestTheRateItIsAskedAt:
         build(settings, limited)
 
         assert self._spacing(limited, API_HOST) == pytest.approx(1 / 7.0)
+
+
+class TestAStorefrontIsNotASubscription:
+    """Apple TV Store: the same film is rented, sold, or both, and a discover
+    listing says which of those it is - nothing.
+
+    The subscription beside it (`apple_tv_plus`, provider "Apple TV") carries
+    110 films in Israel; the store carries 17,799. Getting the offer type wrong
+    on a catalog that size is the difference between "watch it" and "buy it"
+    on every card in the product.
+    """
+
+    def _settings(self, **overrides: Any) -> Settings:
+        return Settings(_env_file=None, tmdb_api_key="k", db_url="sqlite:///:memory:", **overrides)
+
+    def _ctx(self, http: HttpClient, key: str = "apple_tv_store") -> FetchContext:
+        return FetchContext(source_key=key, http=http, settings=self._settings())
+
+    def _providers(self, movie_id: int = 2) -> None:
+        respx.get(f"{BASE_URL}/watch/providers/movie").mock(
+            return_value=httpx.Response(
+                200,
+                json={"results": [{"provider_id": movie_id, "provider_name": "Apple TV Store"}]},
+            )
+        )
+        # TMDB lists no series provider for the store in Israel.
+        respx.get(f"{BASE_URL}/watch/providers/tv").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+
+    def _discover(self, *results: dict[str, Any]) -> None:
+        respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(200, json={"total_pages": 1, "results": list(results)})
+        )
+
+    def _offers(self, tmdb_id: int, **buckets: list[dict[str, Any]]) -> None:
+        respx.get(f"{BASE_URL}/movie/{tmdb_id}/watch/providers").mock(
+            return_value=httpx.Response(200, json={"results": {"IL": buckets}})
+        )
+
+    def test_the_store_is_declared_as_a_rent_buy_source(self) -> None:
+        store = next(s for s in TmdbProvidersPlugin().sources() if s.key == "apple_tv_store")
+
+        assert store.kind is SourceKind.RENT_BUY
+        assert store.name == "Apple TV Store"
+
+    @respx.mock
+    def test_a_film_that_is_both_rented_and_sold_yields_both(self, http: HttpClient) -> None:
+        self._providers()
+        self._discover(movie_result(693134, "Dune: Part Two"))
+        self._offers(
+            693134,
+            rent=[{"provider_id": 2, "provider_name": "Apple TV Store"}],
+            buy=[{"provider_id": 2, "provider_name": "Apple TV Store"}],
+        )
+
+        items = list(TmdbProvidersPlugin().fetch(self._ctx(http)))
+
+        assert [item.offer_type for item in items] == [OfferType.RENT, OfferType.BUY]
+        assert {item.tmdb_id for item in items} == {693134}
+
+    @respx.mock
+    def test_a_film_only_sold_is_not_reported_as_rentable(self, http: HttpClient) -> None:
+        """The first Dune sells in Israel and does not rent. Saying otherwise
+        sends somebody to a shop that will not rent it to them."""
+        self._providers()
+        self._discover(movie_result(438631, "Dune"))
+        self._offers(438631, buy=[{"provider_id": 2, "provider_name": "Apple TV Store"}])
+
+        items = list(TmdbProvidersPlugin().fetch(self._ctx(http)))
+
+        assert [item.offer_type for item in items] == [OfferType.BUY]
+
+    @respx.mock
+    def test_another_shops_rental_is_not_this_shops_rental(self, http: HttpClient) -> None:
+        """The whole reason for the per-title request.
+
+        TMDB's discover filter reads as "on this provider AND rentable
+        somewhere", so a title rented by a different storefront would come back
+        as ours. Matching on the resolved provider id is what stops it.
+        """
+        self._providers()
+        self._discover(movie_result(77, "Somebody Else's Rental"))
+        self._offers(77, rent=[{"provider_id": 350, "provider_name": "Apple TV"}])
+
+        assert list(TmdbProvidersPlugin().fetch(self._ctx(http))) == []
+
+    @respx.mock
+    def test_a_film_offered_no_way_we_sell_yields_nothing(self, http: HttpClient) -> None:
+        self._providers()
+        self._discover(movie_result(78, "Streaming Only"))
+        self._offers(78, flatrate=[{"provider_id": 2, "provider_name": "Apple TV Store"}])
+
+        assert list(TmdbProvidersPlugin().fetch(self._ctx(http))) == []
+
+    @respx.mock
+    def test_a_title_offered_nowhere_in_the_region_yields_nothing(self, http: HttpClient) -> None:
+        self._providers()
+        self._discover(movie_result(79, "Not In Israel"))
+        respx.get(f"{BASE_URL}/movie/79/watch/providers").mock(
+            return_value=httpx.Response(200, json={"results": {"US": {"buy": []}}})
+        )
+
+        assert list(TmdbProvidersPlugin().fetch(self._ctx(http))) == []
+
+    @respx.mock
+    def test_an_unreadable_title_is_recorded_and_skipped_not_guessed(
+        self, http: HttpClient
+    ) -> None:
+        """An invented offer is worse than a missing one."""
+        self._providers()
+        self._discover(movie_result(80, "Unreadable"))
+        respx.get(f"{BASE_URL}/movie/80/watch/providers").mock(return_value=httpx.Response(500))
+        ctx = self._ctx(http)
+
+        assert list(TmdbProvidersPlugin().fetch(ctx)) == []
+        assert ctx.error_count == 1
+
+    @respx.mock
+    def test_a_subscription_still_costs_no_extra_request(self, http: HttpClient) -> None:
+        """Being on a subscription provider already means it streams there."""
+        respx.get(f"{BASE_URL}/watch/providers/movie").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"provider_id": 8, "provider_name": "Netflix"}]}
+            )
+        )
+        respx.get(f"{BASE_URL}/watch/providers/tv").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+        self._discover(movie_result(11, "Foxtrot"))
+        per_title = respx.get(f"{BASE_URL}/movie/11/watch/providers").mock(
+            return_value=httpx.Response(200, json={"results": {}})
+        )
+
+        items = list(TmdbProvidersPlugin().fetch(self._ctx(http, "netflix_il")))
+
+        assert [item.offer_type for item in items] == [OfferType.STREAM]
+        assert per_title.call_count == 0

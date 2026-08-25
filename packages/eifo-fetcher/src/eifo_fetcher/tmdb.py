@@ -146,6 +146,24 @@ class TmdbClient:
         results = payload.get("results") or []
         return [_parse_title(result, kind) for result in results if isinstance(result, dict)]
 
+    def title_watch_providers(self, kind: TitleKind, tmdb_id: int) -> dict[str, Any]:
+        """How one title is offered in the region, split by monetisation.
+
+        Returns TMDB's region block - ``flatrate``, ``rent``, ``buy``, ``free``,
+        ``ads``, each a list of providers - or an empty dict when the title is
+        offered nowhere in the region.
+
+        This exists because ``discover`` cannot answer the same question.
+        Combining ``with_watch_providers`` with ``with_watch_monetization_types``
+        reads as "on this provider AND rentable somewhere", not "rentable on
+        this provider": asking it for rentals on Apple TV, a subscription that
+        rents nothing, returns films whose rental is on the Apple TV Store. One
+        request per title is the price of an offer type that is actually true.
+        """
+        payload = self._get(f"/{_MEDIA_PATH[kind]}/{tmdb_id}/watch/providers")
+        region = (payload.get("results") or {}).get(self.region)
+        return region if isinstance(region, dict) else {}
+
     def external_ids(self, kind: TitleKind, tmdb_id: int) -> dict[str, Any]:
         """External identifiers for a title, notably ``imdb_id``."""
         return self._get(f"/{_MEDIA_PATH[kind]}/{tmdb_id}/external_ids")

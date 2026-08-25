@@ -131,12 +131,13 @@ someone's subscription ([why](#data-attribution-and-fair-use)).
 | **Global streamers** | | | *Israeli catalogs* |
 | **Netflix** (IL) | ✅ Yes | `tmdb-providers` | Availability from JustWatch via the [TMDB API](#install) - **free key required**. The "watch" link goes to TMDB's per-title page, not the service's player; refreshed daily. |
 | **Prime Video** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |
-| **Apple TV** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |
+| **Apple TV+** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. The subscription only; the storefront beside it is a separate source below. |
 | **HBO Max** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |
 | **MUBI** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. Films only. |
 | **Crunchyroll** (IL) | ✅ Yes | `tmdb-providers` | As Netflix - JustWatch via TMDB, free key. |
 | **Disney+** (IL) | ✅ Yes | `disney_plus` | Reads Disney's public per-region sitemaps - no key. (Absent from JustWatch's IL data, so it needs its own plugin.) |
 | **Rent, buy and archive** | | | *Paid per title, price shown; some titles free* |
+| **Apple TV Store** (IL) | ◐ Partial | `tmdb-providers` | Rent and buy, and by a long way the largest catalog JustWatch reports for Israel: 17,799 films against the subscription's 110. Whether a film is rented, sold or both is asked per title rather than assumed - a discover listing cannot tell them apart - so a full sync costs one request per film. **Partial for two reasons**: TMDB pages out at 10,000 results, so roughly 44% of the store is unreachable that way; and no price is stored yet, because nothing that reports these prices is reachable without breaking somebody's robots.txt. Films only. |
 | **Cinematheque VOD** (Tel Aviv) | ✅ Yes | `cinematheque_vod` | Israeli and international arthouse film, paid for per title. One request reads the whole current offering; each title's price comes from the ticketing system and is shown beside the link, which goes to the film's page (synopsis and trailer) rather than straight to a checkout. Prices differ per film, and the occasional free one is badged free rather than as a rental at zero. |
 | **Israel Film Archive** (Jerusalem) | ✅ Yes | `israel_film_archive` | The national archive streaming its own digitised collection: 941 films from 1920 onwards, **459 of them free to watch** and badged free; the rest rent at ₪15, priced from their own pages. Nothing on the site lists the collection, so this is the heaviest sync here - the sitemap, then one page per film, about 16 minutes at one request a second. |
 | **Broadcaster VODs** | | | *Free to watch* |

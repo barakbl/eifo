@@ -15,10 +15,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Any
 
 from eifo_core.enums import OfferType, SourceKind, TitleKind
 from eifo_fetcher.sources.base import FetchContext, RawItem, SourceInfo, SourcePlugin
-from eifo_fetcher.tmdb import TmdbClient, image_url
+from eifo_fetcher.tmdb import TmdbClient, TmdbTitle, image_url
 
 #: Where a viewer is sent for a specific title.
 #:
@@ -40,6 +41,16 @@ class ProviderSource:
     website_url: str
     #: Names TMDB may use for this provider, compared case-insensitively.
     provider_names: tuple[str, ...]
+    #: Offer types to confirm per title against TMDB's own per-title data.
+    #:
+    #: Empty - every subscription service - means "assume it streams", which is
+    #: what being on the provider already implies and costs no extra request.
+    #: A storefront is different: it rents some films, sells others, and does
+    #: both for most, and nothing in a discover listing says which. Naming the
+    #: types here buys one request per title and an offer that is true.
+    verified_offer_types: tuple[OfferType, ...] = ()
+    #: See :attr:`~eifo_fetcher.sources.base.SourceInfo.default_enabled`.
+    default_enabled: bool = True
 
 
 #: Services TMDB actually reports for region IL, verified against the live API
@@ -75,6 +86,22 @@ PROVIDER_SOURCES: tuple[ProviderSource, ...] = (
         # TMDB lists no "Apple TV+"; "Apple TV" is the subscription and
         # "Apple TV Store" is the separate rent-and-buy storefront.
         provider_names=("Apple TV",),
+    ),
+    ProviderSource(
+        key="apple_tv_store",
+        name="Apple TV Store",
+        kind=SourceKind.RENT_BUY,
+        website_url="https://tv.apple.com/il",
+        # The storefront beside the subscription above, and by a distance the
+        # largest catalog TMDB reports for Israel: 17,799 films against the
+        # subscription's 110. Films only - TMDB lists no series provider for it
+        # in this region, and _resolve_provider_id says so and moves on.
+        provider_names=("Apple TV Store",),
+        verified_offer_types=(OfferType.RENT, OfferType.BUY),
+        # Opt-in: a full sync costs a request per film on top of the listing,
+        # and nobody upgrading should discover that by watching their nightly
+        # run get longer. One toggle in the Manage tab turns it on.
+        default_enabled=False,
     ),
     ProviderSource(
         key="hbo_max_il",
@@ -117,6 +144,7 @@ class TmdbProvidersPlugin(SourcePlugin):
                 name=source.name,
                 kind=source.kind,
                 website_url=source.website_url,
+                default_enabled=source.default_enabled,
             )
             for source in PROVIDER_SOURCES
         ]
@@ -167,6 +195,58 @@ class TmdbProvidersPlugin(SourcePlugin):
         )
         return None
 
+    def _offers_for(
+        self,
+        tmdb: TmdbClient,
+        source: ProviderSource,
+        kind: TitleKind,
+        provider_id: int,
+        hit: TmdbTitle,
+        ctx: FetchContext,
+    ) -> Iterator[RawItem]:
+        """The offers this provider makes for one title.
+
+        One item for a subscription service. For a storefront, one per way it
+        actually sells the film - which is asked rather than assumed, and when
+        the asking fails nothing is yielded at all. An invented offer is worse
+        than a missing one: it sends somebody to a shop that is not selling it.
+        """
+        if not source.verified_offer_types:
+            yield self._item(source, kind, hit, OfferType.STREAM, provider_id, tmdb.region)
+            return
+
+        try:
+            offered = tmdb.title_watch_providers(kind, hit.tmdb_id)
+        except Exception as exc:
+            ctx.record_error(f"could not read offers for {hit.tmdb_id}", exc=exc)
+            return
+
+        for offer_type in source.verified_offer_types:
+            if _carries(offered, offer_type, provider_id):
+                yield self._item(source, kind, hit, offer_type, provider_id, tmdb.region)
+
+    def _item(
+        self,
+        source: ProviderSource,
+        kind: TitleKind,
+        hit: TmdbTitle,
+        offer_type: OfferType,
+        provider_id: int,
+        region: str,
+    ) -> RawItem:
+        return RawItem(
+            source_key=source.key,
+            kind=kind,
+            name=hit.name,
+            name_alt=hit.original_name if hit.original_name != hit.name else None,
+            year=hit.year,
+            tmdb_id=hit.tmdb_id,
+            offer_type=offer_type,
+            deep_link_url=watch_url(kind, hit.tmdb_id, region),
+            poster_url=image_url(hit.poster_path) if hit.poster_path else None,
+            extra={"provider_id": provider_id},
+        )
+
     def _fetch_kind(
         self,
         tmdb: TmdbClient,
@@ -180,18 +260,7 @@ class TmdbProvidersPlugin(SourcePlugin):
         for hit in tmdb.discover_by_provider(kind, provider_id, max_pages=max_pages):
             seen += 1
             ctx.record_success()
-            yield RawItem(
-                source_key=source.key,
-                kind=kind,
-                name=hit.name,
-                name_alt=hit.original_name if hit.original_name != hit.name else None,
-                year=hit.year,
-                tmdb_id=hit.tmdb_id,
-                offer_type=OfferType.STREAM,
-                deep_link_url=watch_url(kind, hit.tmdb_id, tmdb.region),
-                poster_url=image_url(hit.poster_path) if hit.poster_path else None,
-                extra={"provider_id": provider_id},
-            )
+            yield from self._offers_for(tmdb, source, kind, provider_id, hit, ctx)
 
         if seen >= max_pages * 20:
             ctx.logger.warning(
@@ -220,6 +289,30 @@ def _client_from(ctx: FetchContext) -> TmdbClient:
         ctx.http,
         ctx.settings.tmdb_api_key.get_secret_value(),
         rate_limit_rps=ctx.settings.tmdb.rate_limit_rps,
+    )
+
+
+#: TMDB's names for the ways a title can be offered, by our own offer type.
+_BUCKETS: dict[OfferType, str] = {
+    OfferType.STREAM: "flatrate",
+    OfferType.RENT: "rent",
+    OfferType.BUY: "buy",
+    OfferType.FREE: "free",
+}
+
+
+def _carries(offered: dict[str, Any], offer_type: OfferType, provider_id: int) -> bool:
+    """Whether this provider offers the title that particular way.
+
+    Matched on provider id rather than name: the id is what was resolved from
+    the region's provider list, and TMDB renames providers more often than it
+    renumbers them.
+    """
+    bucket = offered.get(_BUCKETS[offer_type])
+    if not isinstance(bucket, list):
+        return False
+    return any(
+        isinstance(entry, dict) and entry.get("provider_id") == provider_id for entry in bucket
     )
 
 

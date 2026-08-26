@@ -358,6 +358,20 @@ uv run eifo-fetch sources list                      # state, title count, last s
 uv run eifo-fetch review list                       # listings no title could be matched to
 ```
 
+Enrichment can leave parts out for one run, which is what a catch-up over a large backlog
+usually wants. The enrichers are not equally priced: TMDB is an API and answers at twenty
+requests a second, while `rt` is scraped and runs at a rate chosen to be polite to
+somebody's website - so it costs an order of magnitude more per title and supplies
+ratings rather than the posters and names a new title is missing.
+
+```bash
+uv run eifo-fetch enrich --limit 10000 --skip rt    # metadata and posters, fast
+uv run eifo-fetch enrich --skip rt --skip imdb      # repeatable; --skip-imdb is the same
+```
+
+Skipping is per run and never edits the configured set, so a catch-up cannot quietly
+become the new normal. To switch one off for good, use `disabled` under `[enrich]`.
+
 ### Turning on sign-in
 
 Only needed if you want lists and ratings.

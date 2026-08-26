@@ -8,6 +8,7 @@ process exit code reports whether anything failed.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -130,13 +131,31 @@ def enrich_all(
     force: bool = False,
     limit: int | None = None,
     skip_imdb: bool = False,
+    skip: Iterable[str] | None = None,
 ) -> EnrichResultTally:
     """Run the per-title enrichers, then the IMDb bulk pass, then rescore.
 
     IMDb goes last because it depends on ``imdb_id`` values the TMDB enricher
     fills in, and it runs as one bulk join rather than per title.
+
+    Args:
+        skip: enricher keys to leave out of this run only, without touching the
+            configured set. What it is for: one enricher can be an order of
+            magnitude slower than the rest - ``rt`` is scraped, so it runs at a
+            rate chosen to be polite to somebody's website while TMDB answers
+            twenty times faster - and a catch-up over a large backlog is a
+            different job from a nightly refresh.
     """
-    enrichers = discover_enrichers(settings)
+    skipped = {key.strip().casefold() for key in (skip or ()) if key.strip()}
+    enrichers = [e for e in discover_enrichers(settings) if e.key not in skipped]
+    skip_imdb = skip_imdb or IMDB_RUN_KEY in skipped
+
+    unknown = sorted(skipped - {e.key for e in discover_enrichers(settings)} - {IMDB_RUN_KEY})
+    if unknown:
+        # Said out loud: a typo that silently skips nothing would look like the
+        # flag not working, on a run that takes hours.
+        logger.warning("nothing to skip called: %s", ", ".join(unknown))
+
     logger.info("enriching with: %s", ", ".join(e.key for e in enrichers) or "nothing")
 
     with session_factory() as session:

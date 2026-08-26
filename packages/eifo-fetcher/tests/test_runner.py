@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -14,9 +15,10 @@ from eifo_core.enums import FetchStatus, SourceKind, TitleKind
 from eifo_core.models import Base, Source
 from eifo_core.settings import Settings, SourceConfig
 from eifo_fetcher.daemon import _parse_time, run_daemon, run_nightly, run_once
+from eifo_fetcher.enrich import EnrichResultTally
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.lock import single_flight
-from eifo_fetcher.runner import sync_all
+from eifo_fetcher.runner import enrich_all, sync_all
 from eifo_fetcher.sources.base import FetchContext, RawItem, SourceInfo, SourcePlugin
 
 
@@ -320,3 +322,74 @@ class TestTheSchedule:
 
         assert job["coalesce"] is True
         assert job["max_instances"] == 1
+
+
+class TestSkippingAnEnricherForOneRun:
+    """One enricher can be an order of magnitude slower than the rest.
+
+    `rt` is scraped, so it runs at a rate chosen to be polite to somebody's
+    website while TMDB answers twenty times faster - which makes a catch-up
+    over a large backlog a different job from a nightly refresh. Skipping is
+    per run and never touches the configured set: a catch-up must not quietly
+    become the new normal.
+    """
+
+    def _run(
+        self,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
+        **kwargs: Any,
+    ) -> EnrichResultTally:
+        """A run with nothing due, so only the choice of enrichers is exercised."""
+        return enrich_all(session_factory, settings, http=http, limit=0, **kwargs)
+
+    def test_by_default_every_configured_enricher_runs(
+        self, session_factory, settings: Settings, http: HttpClient, caplog
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
+            self._run(session_factory, settings, http, skip_imdb=True)
+
+        assert "enriching with: tmdb, rt" in caplog.text
+
+    def test_one_can_be_left_out(
+        self, session_factory, settings: Settings, http: HttpClient, caplog
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
+            self._run(session_factory, settings, http, skip_imdb=True, skip=["rt"])
+
+        assert "enriching with: tmdb" in caplog.text
+        assert "rt" not in caplog.text.split("enriching with:")[1].split("\n")[0]
+
+    def test_the_case_it_is_typed_in_does_not_matter(
+        self, session_factory, settings: Settings, http: HttpClient, caplog
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
+            self._run(session_factory, settings, http, skip_imdb=True, skip=["RT", " tmdb "])
+
+        assert "enriching with: nothing" in caplog.text
+
+    def test_skipping_imdb_by_name_works_like_the_flag(
+        self, session_factory, settings: Settings, http: HttpClient
+    ) -> None:
+        """So there is one obvious lever rather than two half-overlapping ones."""
+        tally = self._run(session_factory, settings, http, skip=["imdb"])
+
+        assert "imdb" not in tally.by_enricher
+
+    def test_a_name_that_matches_nothing_is_said_out_loud(
+        self, session_factory, settings: Settings, http: HttpClient, caplog
+    ) -> None:
+        """A typo that silently skips nothing looks like the flag not working."""
+        with caplog.at_level(logging.WARNING, logger="eifo.fetch.runner"):
+            self._run(session_factory, settings, http, skip_imdb=True, skip=["rotten"])
+
+        assert "nothing to skip called: rotten" in caplog.text
+
+    def test_skipping_nothing_is_the_same_as_not_asking(
+        self, session_factory, settings: Settings, http: HttpClient, caplog
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
+            self._run(session_factory, settings, http, skip_imdb=True, skip=[])
+
+        assert "enriching with: tmdb, rt" in caplog.text

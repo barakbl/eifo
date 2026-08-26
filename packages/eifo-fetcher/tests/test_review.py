@@ -266,3 +266,71 @@ class TestExpiry:
 
         assert removed == 0
         assert session.scalars(select(MatchReview)).one().decision is MatchDecision.DISMISSED
+
+
+class TestWhatIsNotATitle:
+    """The queue's junk filter, which dismisses without asking anybody.
+
+    That makes a false positive expensive: `review auto --apply` records the
+    ruling as "not a title, never offer it again", and the listing leaves the
+    catalog for good. So the bar is what a word actually tells you.
+    """
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Who Said Hannah Montana Music Video",
+            "Rotten To The Core Sing Along Descendants",
+            "One Last Adventure: The Making of Stranger Things 5",
+            "Behind the Scenes of Dune",
+            "Fauda Featurette",
+        ],
+    )
+    def test_a_phrase_that_is_only_ever_bonus_content(self, name: str) -> None:
+        assert review.not_a_title(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Trailer",
+            "The Batman Trailer",
+            "Trailer: The Batman",
+            "Teaser - Dune",
+            "Teaser \u2013 Dune",  # an en dash, which titles use and a linter mistrusts
+        ],
+    )
+    def test_an_ordinary_word_counts_where_it_sits(self, name: str) -> None:
+        """The whole name, the end of it, or the start followed by a separator."""
+        assert review.not_a_title(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Trailer Park Boys",
+            "Young Farts Trailer Parts",
+            "Trailer Horn",
+            "LEGO Marvel Super Heroes: Avengers Reassembled!",
+            "The Heat Is Back On: The Remaking of Miss Saigon",
+        ],
+    )
+    def test_and_not_where_it_is_merely_present(self, name: str) -> None:
+        """Every one of these is a real title the previous rule threw away.
+
+        Trailer Park Boys ran for twelve seasons. "Reassembled" is not
+        "assembled", and "Remaking" is not "making of" - the old pattern had no
+        word boundaries at all.
+        """
+        assert not review.not_a_title(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        ["קדימון לעונה 2", "סיכום יומי", "קליפ חנוכה - הילה הכל יכולה", "פסטיגל- הקליפ"],
+    )
+    def test_hebrew_markers_do_not_wait_for_punctuation(self, name: str) -> None:
+        """Hebrew does not separate a label from a name the way English does,
+        and writes the definite article as part of the word - הקליפ."""
+        assert review.not_a_title(name)
+
+    @pytest.mark.parametrize("name", ["פאודה", "שוברים שורה", "Foxtrot", "", "   "])
+    def test_a_real_name_is_left_alone(self, name: str) -> None:
+        assert not review.not_a_title(name)

@@ -48,15 +48,64 @@ AUTO_CREATE_BELOW = AMBIGUOUS_THRESHOLD
 #: Names that are not titles. Trailers, promos, sing-alongs, daily recaps -
 #: content a catalog of films and series has no row for, which sources feed into
 #: the same pipeline as everything else.
-NOT_A_TITLE = re.compile(
-    r"""
-    music \s* video | sing[\s-]?along | making \s+ of | assembled | featurette
-    | behind \s+ the \s+ scenes | trailer | teaser
+#: Phrases that are bonus content wherever they appear in a name. Nothing is a
+#: film called "… Music Video", and "the making of" is a documentary about a
+#: film rather than one.
+_ALWAYS = re.compile(
+    r"""\b(?:
+    music \s* video | sing[\s-]?along | making \s+ of | featurette
+    | behind \s+ the \s+ scenes
     | פרומו | קדימון | סיכום \s+ יומי | סיכום \s+ שבועי | מאחורי \s+ הקלעים
-    | קליפ | האודישן | באולפן
-    """,
+    | האודישן | באולפן
+    # ה? for the definite article, which Hebrew writes as part of the word:
+    # "הקליפ" is "the clip" and has no boundary before the noun.
+    | ה? קליפ
+    )\b""",
     re.IGNORECASE | re.VERBOSE,
 )
+
+#: Ordinary words that mark bonus content only by where they sit.
+#:
+#: "Trailer Park Boys" is a series that ran for twelve seasons; "Trailer" is a
+#: trailer. The word carries no meaning on its own, so position has to: it
+#: counts when it is the whole name, when it ends the name, or when it opens
+#: one and is followed by a separator rather than by more of the title.
+_EDGE_WORDS = r"trailer | teaser | assembled"
+
+#: The whole name, give or take punctuation.
+_ONLY = re.compile(rf"^\W*(?:{_EDGE_WORDS})\W*$", re.IGNORECASE | re.VERBOSE)
+#: "The Batman Trailer".
+_TRAILING = re.compile(rf"\b(?:{_EDGE_WORDS})\W*$", re.IGNORECASE | re.VERBOSE)
+#: "Trailer: The Batman" - a separator, not another word of the title. The
+#: dashes are escaped rather than literal so a linter cannot mistake the en
+#: dash a real title uses for a typo.
+_SEPARATORS = ":\\-\u2013\u2014|"
+_LEADING = re.compile(rf"^\W*(?:{_EDGE_WORDS})\s*[{_SEPARATORS}]", re.IGNORECASE | re.VERBOSE)
+
+
+def not_a_title(name: str) -> bool:
+    """Whether a listing names something a catalog of films and series has no row for.
+
+    Trailers, promos, sing-alongs, daily recaps: content sources feed into the
+    same pipeline as everything else.
+
+    Two rules rather than one list, because the words are not equally telling.
+    "Music video" is never part of a real name; "trailer" is a perfectly
+    ordinary word, and matching it anywhere threw away Trailer Park Boys and
+    Young Farts Trailer Parts. It used to match inside words too, so Avengers
+    Reassembled was a featurette.
+
+    The split is by language as much as by word: an English title separates a
+    label from a name with punctuation ("Trailer: The Batman"), and a Hebrew one
+    does not ("קליפ חנוכה" is a Hanukkah clip), so the Hebrew markers stay in the
+    first rule where position is not asked about.
+    """
+    text = name.strip()
+    if not text:
+        return False
+    if _ALWAYS.search(text):
+        return True
+    return bool(_ONLY.match(text) or _TRAILING.search(text) or _LEADING.match(text))
 
 
 @dataclass(slots=True)
@@ -183,7 +232,7 @@ def _decide(session: Session, review: MatchReview, tally: ReviewTally, *, apply:
             session.delete(review)
         return
 
-    if NOT_A_TITLE.search(name):
+    if not_a_title(name):
         tally.dismissed += 1
         if apply:
             dismiss(session, review)

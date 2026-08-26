@@ -8,7 +8,7 @@ against. One free API key covers both.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -104,11 +104,21 @@ class TmdbClient:
         *,
         language: str = HEBREW_LANGUAGE,
         max_pages: int = MAX_PAGE,
+        filters: Mapping[str, Any] | None = None,
+        on_total: Callable[[int], None] | None = None,
     ) -> Iterator[TmdbTitle]:
         """Every title a provider offers in the region, page by page.
 
         Stops at ``max_pages`` or TMDB's own hard limit, whichever comes first;
         the caller logs when a cap truncates a catalog.
+
+        Args:
+            filters: extra discover parameters, which is how a catalog bigger
+                than TMDB will page through gets read at all. The 500-page limit
+                is per query, not per provider, so a caller that cannot reach
+                the end of one listing asks several narrower ones instead.
+            on_total: called with ``total_results`` for the query, before any
+                item is yielded, so a caller can say when a cap truncated it.
         """
         page = 1
         total_pages = 1
@@ -119,7 +129,10 @@ class TmdbClient:
                 watch_region=self.region,
                 with_watch_providers=provider_id,
                 page=page,
+                **(filters or {}),
             )
+            if page == 1 and on_total is not None:
+                on_total(int(payload.get("total_results") or 0))
             total_pages = int(payload.get("total_pages") or 1)
             results = payload.get("results") or []
             if not results:
@@ -145,6 +158,24 @@ class TmdbClient:
         payload = self._get(f"/search/{_MEDIA_PATH[kind]}", **params)
         results = payload.get("results") or []
         return [_parse_title(result, kind) for result in results if isinstance(result, dict)]
+
+    def title_watch_providers(self, kind: TitleKind, tmdb_id: int) -> dict[str, Any]:
+        """How one title is offered in the region, split by monetisation.
+
+        Returns TMDB's region block - ``flatrate``, ``rent``, ``buy``, ``free``,
+        ``ads``, each a list of providers - or an empty dict when the title is
+        offered nowhere in the region.
+
+        This exists because ``discover`` cannot answer the same question.
+        Combining ``with_watch_providers`` with ``with_watch_monetization_types``
+        reads as "on this provider AND rentable somewhere", not "rentable on
+        this provider": asking it for rentals on Apple TV, a subscription that
+        rents nothing, returns films whose rental is on the Apple TV Store. One
+        request per title is the price of an offer type that is actually true.
+        """
+        payload = self._get(f"/{_MEDIA_PATH[kind]}/{tmdb_id}/watch/providers")
+        region = (payload.get("results") or {}).get(self.region)
+        return region if isinstance(region, dict) else {}
 
     def external_ids(self, kind: TitleKind, tmdb_id: int) -> dict[str, Any]:
         """External identifiers for a title, notably ``imdb_id``."""

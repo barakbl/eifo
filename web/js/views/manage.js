@@ -124,6 +124,7 @@ function statStrip(stats, { t, language }) {
       value: stats.titles_missing_poster,
     },
     { label: t("manage.stat.people"), value: stats.people_count },
+    { label: t("manage.stat.available"), value: stats.titles_available },
     { label: t("manage.stat.offers"), value: stats.current_offers },
     {
       label: t("manage.stat.pending"),
@@ -188,6 +189,10 @@ function sourcesTable(sources, { t, language }) {
 }
 
 function sourceRow(source, { t, language, widest }) {
+  // Three things can decide this - an operator, the config file, the plugin's
+  // own default - and the row can honestly distinguish only the first from the
+  // other two. It used to claim "from the config file" about sources the file
+  // had never heard of.
   const status = el("span", {
     class: "source__note",
     text: source.enabled === null ? t("manage.source.fromConfig") : t("manage.source.override"),

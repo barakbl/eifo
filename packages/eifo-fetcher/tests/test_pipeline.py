@@ -17,6 +17,7 @@ from eifo_fetcher.pipeline import (
     COMMIT_EVERY,
     MISS_LIMIT,
     deactivate_missing_sources,
+    register_declared_sources,
     sync_source,
 )
 from eifo_fetcher.sources.base import (
@@ -540,3 +541,71 @@ class TestPlausibleYears:
         stored = session.scalars(select(Title)).one()
         assert stored.year is None
         assert stored.name_he == "מגלים את אמריקע"
+
+
+class TestASourceExistsBeforeItHasRun:
+    """A source used to exist only once it had synced.
+
+    That made the operator's source list a list of sources that had already
+    run: one switched off, or one added in an upgrade, was invisible on the
+    single screen whose job is showing services - so the toggle that would have
+    switched it on was not there to press.
+    """
+
+    def _declared(self) -> dict[str, SourceInfo]:
+        return {
+            "on_one": SourceInfo(
+                key="on_one",
+                name="Switched On",
+                kind=SourceKind.SUBSCRIPTION,
+                website_url="https://on.example",
+            ),
+            "off_one": SourceInfo(
+                key="off_one",
+                name="Switched Off",
+                kind=SourceKind.RENT_BUY,
+                website_url="https://off.example",
+            ),
+        }
+
+    def test_every_declared_source_gets_a_row(self, session: Session) -> None:
+        written = register_declared_sources(session, self._declared(), enabled=["on_one"])
+
+        assert sorted(written) == ["off_one", "on_one"]
+        keys = {source.key for source in session.scalars(select(Source)).all()}
+        assert keys == {"on_one", "off_one"}
+
+    def test_one_that_is_switched_off_starts_inactive(self, session: Session) -> None:
+        """Declared, known, and not currently collected - which is what it is."""
+        register_declared_sources(session, self._declared(), enabled=["on_one"])
+
+        stored = {s.key: s for s in session.scalars(select(Source)).all()}
+        assert stored["on_one"].active is True
+        assert stored["off_one"].active is False
+        assert stored["off_one"].deactivated_at is not None
+
+    def test_it_does_not_touch_a_source_that_already_exists(self, session: Session) -> None:
+        """Including one somebody has retired: registering is not reactivating."""
+        session.add(
+            Source(
+                key="on_one",
+                name="A Name Somebody Edited",
+                kind=SourceKind.FREE,
+                website_url="https://elsewhere.example",
+                active=False,
+            )
+        )
+        session.flush()
+
+        written = register_declared_sources(session, self._declared(), enabled=["on_one"])
+
+        assert written == ["off_one"]
+        existing = session.scalars(select(Source).where(Source.key == "on_one")).one()
+        assert existing.active is False
+        assert existing.name == "A Name Somebody Edited"
+
+    def test_running_it_twice_writes_nothing_the_second_time(self, session: Session) -> None:
+        register_declared_sources(session, self._declared(), enabled=["on_one"])
+
+        assert register_declared_sources(session, self._declared(), enabled=["on_one"]) == []
+        assert len(session.scalars(select(Source)).all()) == 2

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 import httpx
@@ -11,13 +13,13 @@ import respx
 from pydantic import SecretStr
 
 from eifo_core.db import create_engine_from_settings, make_session_factory
-from eifo_core.enums import OfferType, TitleKind
+from eifo_core.enums import OfferType, SourceKind, TitleKind
 from eifo_core.models import Base
 from eifo_core.settings import Settings, SourceConfig
 from eifo_fetcher.enrichers.tmdb_meta import _client_from as _enricher_client_from
 from eifo_fetcher.http import HttpClient, RateLimiter
 from eifo_fetcher.runner import _tmdb_client, fetch_images
-from eifo_fetcher.sources.base import FetchContext
+from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError
 from eifo_fetcher.sources.tmdb_providers import (
     PROVIDER_SOURCES,
     TmdbProvidersPlugin,
@@ -361,3 +363,338 @@ class TestTheRateItIsAskedAt:
         build(settings, limited)
 
         assert self._spacing(limited, API_HOST) == pytest.approx(1 / 7.0)
+
+
+@contextmanager
+def caplog_at_warning() -> Iterator[list[str]]:
+    """The fetcher's own warnings, for a run that must not fail silently."""
+    records: list[str] = []
+
+    class _Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            # getMessage already interpolates the args.
+            records.append(record.getMessage())
+
+    handler = _Collect(level=logging.WARNING)
+    logger = logging.getLogger("eifo")
+    previous = logger.level
+    logger.setLevel(logging.WARNING)
+    logger.addHandler(handler)
+    try:
+        yield records
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous)
+
+
+class TestAStorefrontIsNotASubscription:
+    """Apple TV Store: the same film is rented, sold, or both, and a discover
+    listing says which of those it is - nothing.
+
+    The subscription beside it (`apple_tv_plus`, provider "Apple TV") carries
+    110 films in Israel; the store carries 17,799. Getting the offer type wrong
+    on a catalog that size is the difference between "watch it" and "buy it"
+    on every card in the product.
+    """
+
+    def _settings(self, **overrides: Any) -> Settings:
+        return Settings(_env_file=None, tmdb_api_key="k", db_url="sqlite:///:memory:", **overrides)
+
+    def _ctx(self, http: HttpClient, key: str = "apple_tv_store") -> FetchContext:
+        return FetchContext(source_key=key, http=http, settings=self._settings())
+
+    def _providers(self, movie_id: int = 2) -> None:
+        respx.get(f"{BASE_URL}/watch/providers/movie").mock(
+            return_value=httpx.Response(
+                200,
+                json={"results": [{"provider_id": movie_id, "provider_name": "Apple TV Store"}]},
+            )
+        )
+        # TMDB lists no series provider for the store in Israel.
+        respx.get(f"{BASE_URL}/watch/providers/tv").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+
+    def _discover(self, *results: dict[str, Any]) -> None:
+        respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(200, json={"total_pages": 1, "results": list(results)})
+        )
+
+    def _offers(self, tmdb_id: int, **buckets: list[dict[str, Any]]) -> None:
+        respx.get(f"{BASE_URL}/movie/{tmdb_id}/watch/providers").mock(
+            return_value=httpx.Response(200, json={"results": {"IL": buckets}})
+        )
+
+    def test_the_store_is_declared_as_a_rent_buy_source(self) -> None:
+        store = next(s for s in TmdbProvidersPlugin().sources() if s.key == "apple_tv_store")
+
+        assert store.kind is SourceKind.RENT_BUY
+        assert store.name == "Apple TV Store"
+
+    @respx.mock
+    def test_a_film_that_is_both_rented_and_sold_yields_both(self, http: HttpClient) -> None:
+        self._providers()
+        self._discover(movie_result(693134, "Dune: Part Two"))
+        self._offers(
+            693134,
+            rent=[{"provider_id": 2, "provider_name": "Apple TV Store"}],
+            buy=[{"provider_id": 2, "provider_name": "Apple TV Store"}],
+        )
+
+        items = list(TmdbProvidersPlugin().fetch(self._ctx(http)))
+
+        assert [item.offer_type for item in items] == [OfferType.RENT, OfferType.BUY]
+        assert {item.tmdb_id for item in items} == {693134}
+
+    @respx.mock
+    def test_a_film_only_sold_is_not_reported_as_rentable(self, http: HttpClient) -> None:
+        """The first Dune sells in Israel and does not rent. Saying otherwise
+        sends somebody to a shop that will not rent it to them."""
+        self._providers()
+        self._discover(movie_result(438631, "Dune"))
+        self._offers(438631, buy=[{"provider_id": 2, "provider_name": "Apple TV Store"}])
+
+        items = list(TmdbProvidersPlugin().fetch(self._ctx(http)))
+
+        assert [item.offer_type for item in items] == [OfferType.BUY]
+
+    @respx.mock
+    def test_another_shops_rental_is_not_this_shops_rental(self, http: HttpClient) -> None:
+        """The whole reason for the per-title request.
+
+        TMDB's discover filter reads as "on this provider AND rentable
+        somewhere", so a title rented by a different storefront would come back
+        as ours. Matching on the resolved provider id is what stops it.
+        """
+        self._providers()
+        self._discover(movie_result(77, "Somebody Else's Rental"))
+        self._offers(77, rent=[{"provider_id": 350, "provider_name": "Apple TV"}])
+
+        assert list(TmdbProvidersPlugin().fetch(self._ctx(http))) == []
+
+    @respx.mock
+    def test_a_film_offered_no_way_we_sell_yields_nothing(self, http: HttpClient) -> None:
+        self._providers()
+        self._discover(movie_result(78, "Streaming Only"))
+        self._offers(78, flatrate=[{"provider_id": 2, "provider_name": "Apple TV Store"}])
+
+        assert list(TmdbProvidersPlugin().fetch(self._ctx(http))) == []
+
+    @respx.mock
+    def test_a_title_offered_nowhere_in_the_region_yields_nothing(self, http: HttpClient) -> None:
+        self._providers()
+        self._discover(movie_result(79, "Not In Israel"))
+        respx.get(f"{BASE_URL}/movie/79/watch/providers").mock(
+            return_value=httpx.Response(200, json={"results": {"US": {"buy": []}}})
+        )
+
+        assert list(TmdbProvidersPlugin().fetch(self._ctx(http))) == []
+
+    @respx.mock
+    def test_an_unreadable_title_is_recorded_and_skipped_not_guessed(
+        self, http: HttpClient
+    ) -> None:
+        """An invented offer is worse than a missing one."""
+        self._providers()
+        self._discover(movie_result(80, "Unreadable"))
+        respx.get(f"{BASE_URL}/movie/80/watch/providers").mock(return_value=httpx.Response(500))
+        ctx = self._ctx(http)
+
+        assert list(TmdbProvidersPlugin().fetch(ctx)) == []
+        assert ctx.error_count == 1
+
+    @respx.mock
+    def test_a_subscription_still_costs_no_extra_request(self, http: HttpClient) -> None:
+        """Being on a subscription provider already means it streams there."""
+        respx.get(f"{BASE_URL}/watch/providers/movie").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"provider_id": 8, "provider_name": "Netflix"}]}
+            )
+        )
+        respx.get(f"{BASE_URL}/watch/providers/tv").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+        self._discover(movie_result(11, "Foxtrot"))
+        per_title = respx.get(f"{BASE_URL}/movie/11/watch/providers").mock(
+            return_value=httpx.Response(200, json={"results": {}})
+        )
+
+        items = list(TmdbProvidersPlugin().fetch(self._ctx(http, "netflix_il")))
+
+        assert [item.offer_type for item in items] == [OfferType.STREAM]
+        assert per_title.call_count == 0
+
+
+class TestACatalogBiggerThanOneListing:
+    """TMDB stops paging at 500 pages - 10,000 titles - and that is a limit on
+    the query, not on the provider.
+
+    The Apple TV Store is 17,799 films, so one listing reaches the popular half
+    and stops. Asked a release year at a time the biggest slice is about a
+    thousand, and every film is reachable. A first run against the real API read
+    1,000 films and called that the whole store; it was 5.6% of it.
+    """
+
+    def _settings(self) -> Settings:
+        return Settings(_env_file=None, tmdb_api_key="k", db_url="sqlite:///:memory:")
+
+    def _ctx(self, http: HttpClient, key: str = "apple_tv_store") -> FetchContext:
+        return FetchContext(source_key=key, http=http, settings=self._settings())
+
+    def _providers(self) -> None:
+        respx.get(f"{BASE_URL}/watch/providers/movie").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"provider_id": 2, "provider_name": "Apple TV Store"}]}
+            )
+        )
+        respx.get(f"{BASE_URL}/watch/providers/tv").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+
+    @respx.mock
+    def test_it_asks_for_one_release_year_at_a_time(self, http: HttpClient) -> None:
+        self._providers()
+        route = respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200, json={"total_pages": 1, "total_results": 0, "results": []}
+            )
+        )
+
+        list(TmdbProvidersPlugin().fetch(self._ctx(http)))
+
+        asked = [call.request.url.params for call in route.calls]
+        years = {p["primary_release_year"] for p in asked if "primary_release_year" in p}
+        assert len(years) > 60, "expected a slice per year, not one listing"
+        # And one bucket for everything before the years start, or the early
+        # films would be in no slice at all.
+        assert any("primary_release_date.lte" in p for p in asked)
+
+    @respx.mock
+    def test_a_subscription_still_asks_once(self, http: HttpClient) -> None:
+        """Slicing is for a catalog that cannot be finished, not for every one."""
+        respx.get(f"{BASE_URL}/watch/providers/movie").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"provider_id": 8, "provider_name": "Netflix"}]}
+            )
+        )
+        respx.get(f"{BASE_URL}/watch/providers/tv").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+        route = respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200, json={"total_pages": 1, "total_results": 0, "results": []}
+            )
+        )
+
+        list(TmdbProvidersPlugin().fetch(self._ctx(http, "netflix_il")))
+
+        assert route.call_count == 1
+        assert "primary_release_year" not in route.calls.last.request.url.params
+
+    @respx.mock
+    def test_a_film_in_two_slices_costs_one_verification(self, http: HttpClient) -> None:
+        """A per-title request is the expensive part; a boundary is not worth one."""
+        self._providers()
+        respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200,
+                json={"total_pages": 1, "total_results": 1, "results": [movie_result(5, "Twice")]},
+            )
+        )
+        verify = respx.get(f"{BASE_URL}/movie/5/watch/providers").mock(
+            return_value=httpx.Response(
+                200,
+                json={"results": {"IL": {"buy": [{"provider_id": 2}]}}},
+            )
+        )
+
+        items = list(TmdbProvidersPlugin().fetch(self._ctx(http)))
+
+        assert len(items) == 1
+        assert verify.call_count == 1
+
+    @respx.mock
+    def test_a_slice_too_big_for_its_pages_says_so(self, http: HttpClient) -> None:
+        """Silence here is a catalog quietly missing its tail."""
+        self._providers()
+        respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200, json={"total_pages": 900, "total_results": 18_000, "results": []}
+            )
+        )
+        ctx = self._ctx(http)
+
+        with caplog_at_warning() as records:
+            list(TmdbProvidersPlugin().fetch(ctx))
+
+        assert any("more than" in message for message in records)
+
+
+class TestAShopThatCannotBeAskedIsNotAnEmptyShop:
+    """A title that yields no offer is a title the sweep counts as missing, and
+    after two such nights its availability is retired.
+
+    So "we could not ask" must not look like "it is not sold". A run whose
+    lookups are all failing has to give up rather than report an empty shop -
+    otherwise a bad hour at TMDB retires a storefront two nights later.
+    """
+
+    def _settings(self) -> Settings:
+        return Settings(_env_file=None, tmdb_api_key="k", db_url="sqlite:///:memory:")
+
+    def _ctx(self, http: HttpClient) -> FetchContext:
+        return FetchContext(source_key="apple_tv_store", http=http, settings=self._settings())
+
+    def _providers(self) -> None:
+        respx.get(f"{BASE_URL}/watch/providers/movie").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"provider_id": 2, "provider_name": "Apple TV Store"}]}
+            )
+        )
+        respx.get(f"{BASE_URL}/watch/providers/tv").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+
+    @respx.mock
+    def test_lookups_that_all_fail_stop_the_run(self, http: HttpClient) -> None:
+        """Rather than quietly yielding nothing for every film in the shop."""
+        self._providers()
+        many = [movie_result(i, f"Film {i}") for i in range(1, 41)]
+        respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200, json={"total_pages": 1, "total_results": len(many), "results": many}
+            )
+        )
+        respx.get(url__regex=rf"{BASE_URL}/movie/\d+/watch/providers").mock(
+            return_value=httpx.Response(503)
+        )
+        ctx = self._ctx(http)
+
+        with pytest.raises(TooManyErrorsError):
+            list(TmdbProvidersPlugin().fetch(ctx))
+
+    @respx.mock
+    def test_one_bad_lookup_among_good_ones_does_not(self, http: HttpClient) -> None:
+        """A scattered failure is incidental; the streak resets on the next read."""
+        self._providers()
+        respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "total_pages": 1,
+                    "total_results": 2,
+                    "results": [movie_result(1, "Fine"), movie_result(2, "Broken")],
+                },
+            )
+        )
+        sold = {"results": {"IL": {"buy": [{"provider_id": 2}]}}}
+        respx.get(f"{BASE_URL}/movie/1/watch/providers").mock(
+            return_value=httpx.Response(200, json=sold)
+        )
+        respx.get(f"{BASE_URL}/movie/2/watch/providers").mock(return_value=httpx.Response(503))
+        ctx = self._ctx(http)
+
+        items = list(TmdbProvidersPlugin().fetch(ctx))
+
+        assert [item.tmdb_id for item in items] == [1]
+        assert ctx.error_count == 1

@@ -29,6 +29,15 @@ class SourceInfo:
     kind: SourceKind
     website_url: str
     logo_path: str | None = None
+    #: What this source does when the configuration file says nothing about it.
+    #:
+    #: True for almost everything, which is why adding a plugin is one file
+    #: rather than a file plus a config edit. A source sets it False when
+    #: syncing it costs more than an operator would expect to spend without
+    #: having asked - the Apple TV Store spends a request per film - because
+    #: "absent means on" would then hand an existing deployment a much longer
+    #: nightly run for upgrading.
+    default_enabled: bool = True
 
 
 #: Near enough to cinema's first year. The Israeli Film Archive holds material

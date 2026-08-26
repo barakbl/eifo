@@ -26,8 +26,14 @@ from eifo_fetcher.enrichers import discover_enrichers
 from eifo_fetcher.enrichers.imdb import ImdbDatasetLoader
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.images import ImageFetcher, ImageResult
-from eifo_fetcher.pipeline import SyncResult, deactivate_missing_sources, sync_source
+from eifo_fetcher.pipeline import (
+    SyncResult,
+    deactivate_missing_sources,
+    register_declared_sources,
+    sync_source,
+)
 from eifo_fetcher.registry import (
+    declared_sources,
     discover_plugins,
     enabled_sources,
     plugins_for,
@@ -82,6 +88,15 @@ def sync_all(
     with session_factory() as session:
         overrides = source_overrides(session)
     available = enabled_sources(plugins, settings, overrides=overrides)
+
+    # Every plugin gets a row, switched on or not. Without this a source only
+    # existed once it had synced, so one that was off could not be seen - let
+    # alone switched on - from the operator's source list.
+    with session_factory() as session:
+        added = register_declared_sources(session, declared_sources(plugins), enabled=available)
+        session.commit()
+    if added:
+        logger.info("sources now known: %s", ", ".join(sorted(added)))
 
     if only:
         unknown = sorted(set(only) - set(available))

@@ -281,6 +281,14 @@ class Source(TimestampMixin, Base):
     #: off from the Manage tab does not silently freeze every other source at
     #: whatever the file happened to say the day somebody first used the toggle.
     enabled: Mapped[bool | None] = mapped_column(default=None)
+    #: What the plugin declares this source does when nothing is configured.
+    #:
+    #: Written by the fetcher, which is the only thing that knows what plugins
+    #: exist, and read by the API, which cannot ask it. Without it the Manage
+    #: tab reported a source as on because the config file was silent, while
+    #: the fetcher was skipping it because its plugin declares itself off - the
+    #: screen and the run disagreeing about the same source.
+    default_enabled: Mapped[bool] = mapped_column(default=True)
 
     availability: Mapped[list[Availability]] = relationship(
         back_populates="source",

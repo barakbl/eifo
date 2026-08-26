@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from helpers import MakeAdmin, SeedSource, SignIn
 from seed import Seeded
@@ -18,8 +19,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_api.security import CSRF_HEADER
-from eifo_core.enums import FetchPhase, FetchStatus
-from eifo_core.models import FetchRun, MatchReview, Source
+from eifo_core.enums import FetchPhase, FetchStatus, OfferType, SourceKind
+from eifo_core.models import Availability, FetchRun, MatchReview, Source
+from eifo_core.settings import SourceConfig
 
 NOW = dt.datetime(2026, 8, 7, 12, 0, tzinfo=dt.UTC)
 
@@ -326,3 +328,143 @@ class TestNothingHereIsCached:
 
         assert response.status_code == 404
         assert response.headers["cache-control"] == "no-store"
+
+
+class TestTheTabAgreesWithTheFetcher:
+    """Three things decide whether a source is collected, and the screen has to
+    read them in the same order the run does.
+
+    It did not. A plugin that declares itself off - the Apple TV Store, which
+    costs a request per film - showed as on, because the config file said
+    nothing about it and "nothing" used to mean "on". The tab was describing a
+    sync that was never going to happen.
+    """
+
+    def _source(
+        self,
+        factory: sessionmaker[Session],
+        *,
+        key: str = "apple_tv_store",
+        default_enabled: bool = False,
+        enabled: bool | None = None,
+    ) -> None:
+        with factory() as session:
+            session.add(
+                Source(
+                    key=key,
+                    name="Apple TV Store",
+                    kind=SourceKind.RENT_BUY,
+                    website_url="https://tv.apple.com/il",
+                    default_enabled=default_enabled,
+                    enabled=enabled,
+                )
+            )
+            session.commit()
+
+    def _row(self, client: TestClient, key: str = "apple_tv_store") -> dict[str, object]:
+        rows = {row["key"]: row for row in client.get("/api/v1/admin/sources").json()}
+        return rows[key]
+
+    def test_a_plugin_that_declares_itself_off_reads_as_off(
+        self, client: TestClient, admin: dict[str, str], session_factory: sessionmaker[Session]
+    ) -> None:
+        self._source(session_factory)
+
+        assert self._row(client)["effective_enabled"] is False
+
+    def test_the_config_file_still_wins_over_the_declaration(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        app: FastAPI,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        self._source(session_factory)
+        app.state.settings.sources["apple_tv_store"] = SourceConfig(enabled=True)
+
+        assert self._row(client)["effective_enabled"] is True
+
+    def test_and_an_operator_switch_wins_over_both(
+        self, client: TestClient, admin: dict[str, str], session_factory: sessionmaker[Session]
+    ) -> None:
+        self._source(session_factory, default_enabled=False, enabled=True)
+
+        row = self._row(client)
+        assert row["enabled"] is True
+        assert row["effective_enabled"] is True
+
+    def test_an_ordinary_source_still_defaults_to_on(
+        self, client: TestClient, admin: dict[str, str], session_factory: sessionmaker[Session]
+    ) -> None:
+        """Which is why adding a plugin is one file rather than a config edit."""
+        self._source(session_factory, key="some_new_plugin", default_enabled=True)
+
+        assert self._row(client, "some_new_plugin")["effective_enabled"] is True
+
+
+class TestAvailableNowMeansTitles:
+    """ "Available now" reads as a number of titles, so it has to be one.
+
+    It counted availability rows, which is a different and larger number: a
+    title on two services is one title and two offers. The Apple TV Store made
+    the gap conspicuous - it lists the same film as rentable and buyable, so
+    every one of its films counted twice - but the label was wrong before that.
+    """
+
+    def _offers(self, factory: sessionmaker[Session], catalog: Seeded) -> None:
+        """One title offered two ways by one source, plus one offered once."""
+        with factory() as session:
+            source = session.scalars(select(Source).where(Source.key == "netflix_il")).one()
+            session.add_all(
+                [
+                    Availability(
+                        title_id=catalog.foxtrot,
+                        source_id=source.id,
+                        offer_type=OfferType.RENT,
+                        first_seen=NOW,
+                        last_seen=NOW,
+                        is_current=True,
+                    ),
+                    Availability(
+                        title_id=catalog.foxtrot,
+                        source_id=source.id,
+                        offer_type=OfferType.BUY,
+                        first_seen=NOW,
+                        last_seen=NOW,
+                        is_current=True,
+                    ),
+                ]
+            )
+            session.commit()
+
+    def test_a_title_offered_two_ways_is_one_title(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        before = client.get("/api/v1/admin/stats").json()
+        self._offers(session_factory, catalog)
+
+        after = client.get("/api/v1/admin/stats").json()
+
+        # Two more ways to watch, but only one more thing to watch. That gap is
+        # the whole point: the old number reported the 2.
+        assert after["current_offers"] == before["current_offers"] + 2
+        assert after["titles_available"] == before["titles_available"] + 1
+
+    def test_it_never_exceeds_the_catalog(
+        self, client: TestClient, admin: dict[str, str], catalog: Seeded
+    ) -> None:
+        """The old number could, and did: 50,990 "available" of 33,949 titles."""
+        stats = client.get("/api/v1/admin/stats").json()
+
+        assert stats["titles_available"] <= stats["title_count"]
+
+    def test_a_title_on_nothing_is_not_available(
+        self, client: TestClient, admin: dict[str, str], catalog: Seeded
+    ) -> None:
+        stats = client.get("/api/v1/admin/stats").json()
+
+        assert stats["titles_available"] < stats["title_count"]

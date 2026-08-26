@@ -34,7 +34,13 @@ from eifo_fetcher.dedupe import (
 )
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.lock import AlreadyRunningError, single_flight
-from eifo_fetcher.registry import declared_sources, discover_plugins
+from eifo_fetcher.pipeline import register_declared_sources
+from eifo_fetcher.registry import (
+    declared_sources,
+    discover_plugins,
+    enabled_sources,
+    source_overrides,
+)
 from eifo_fetcher.runner import enrich_all, fetch_images, repair_names, sync_all
 from eifo_fetcher.runs import close_abandoned_runs
 from eifo_fetcher.sources.base import SourceInfo
@@ -283,20 +289,31 @@ def _cmd_all(_args: argparse.Namespace, settings: Settings) -> int:
 
 
 def _cmd_sources(_args: argparse.Namespace, settings: Settings) -> int:
-    declared = declared_sources(discover_plugins())
+    plugins = discover_plugins()
+    declared = declared_sources(plugins)
 
     with _database(settings) as session_factory, session_factory() as session:
+        # This command is the source inventory, so it leaves the inventory
+        # written down rather than only printed: an operator who has just added
+        # a plugin can see it in the Manage tab without waiting for a sync.
+        register_declared_sources(
+            session,
+            declared,
+            enabled=enabled_sources(plugins, settings, overrides=source_overrides(session)),
+        )
+        session.commit()
         stored = {source.key: source for source in session.scalars(select(Source)).all()}
         rows = []
         for key in sorted(set(declared) | set(stored)):
             source = stored.get(key)
+            last_run = _last_run_label(session, key)
             rows.append(
                 (
                     key,
                     declared[key].name if key in declared else (source.name if source else key),
-                    _source_state(key, declared, source),
+                    _source_state(key, declared, source, has_run=last_run != NEVER),
                     str(_count_current(session, source)) if source else "-",
-                    _last_run_label(session, key),
+                    last_run,
                 )
             )
 
@@ -400,19 +417,30 @@ def _database(settings: Settings) -> Iterator[sessionmaker[Session]]:
         engine.dispose()
 
 
-def _source_state(key: str, declared: Mapping[str, SourceInfo], source: Source | None) -> str:
+def _source_state(
+    key: str,
+    declared: Mapping[str, SourceInfo],
+    source: Source | None,
+    *,
+    has_run: bool,
+) -> str:
     """What this source is doing, and whether somebody said so by hand.
 
     An operator switch set from the Manage tab is named as one: a source that
     is off because the file says so and a source that is off because somebody
     turned it off are the same silence otherwise, and only one of them is
     answered by editing the file.
+
+    "Never synced" comes from the run history rather than from a missing row.
+    Every declared source has a row now, written before its first sync so that
+    it can be seen and switched on; asking the row whether it exists would say
+    "active" about something that has never once run.
     """
     if key not in declared:
         return "retired"
     if source is not None and source.enabled is not None:
         return "on (override)" if source.enabled else "off (override)"
-    if source is None:
+    if source is None or not has_run:
         return "never synced"
     return "active" if source.active else "retired"
 
@@ -429,6 +457,10 @@ def _count_current(session: Session, source: Source) -> int:
     )
 
 
+#: What the table shows for a source that has never completed a run.
+NEVER = "-"
+
+
 def _last_run_label(session: Session, key: str) -> str:
     run = session.scalar(
         select(FetchRun)
@@ -437,7 +469,7 @@ def _last_run_label(session: Session, key: str) -> str:
         .limit(1)
     )
     if run is None:
-        return "-"
+        return NEVER
     when = run.finished_at or run.started_at
     marker = "" if run.status is FetchStatus.OK else f" ({run.status.value})"
     return f"{when:%Y-%m-%d %H:%M}{marker}"

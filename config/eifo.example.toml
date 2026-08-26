@@ -51,6 +51,22 @@ enabled = true
 [sources.apple_tv_plus]
 enabled = true
 
+# The rent-and-buy storefront beside the subscription, and the biggest catalog
+# JustWatch reports for Israel by a distance - 17,799 films against 110.
+#
+# Off by default because it is not free to sync. TMDB stops paging any one
+# query at 10,000 results, so this catalog is read one release year at a time -
+# eighty listings rather than one - and whether each film is rented, sold or
+# both is then asked per title. About 18,700 requests and eighteen minutes for
+# the whole store, which reaches 17,770 of its 17,799 films.
+#
+# max_pages here bounds one release year rather than the whole catalog, and
+# defaults high enough to finish the biggest of them (about a thousand films).
+# Lower it for a quick trial: 1 reads twenty films per year.
+[sources.apple_tv_store]
+enabled = false
+# max_pages = 500
+
 [sources.hbo_max_il]
 enabled = true
 

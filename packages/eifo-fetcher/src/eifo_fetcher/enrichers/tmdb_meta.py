@@ -252,16 +252,18 @@ def _genres(hebrew: dict[str, Any], english: dict[str, Any]) -> list[dict[str, A
         if isinstance(genre, dict) and "id" in genre
     }
 
-    genres = [
-        {
+    # dict rather than a list comprehension: TMDB repeats a genre now and then,
+    # and the catalog holds one row per title and genre.
+    by_id = {
+        genre["id"]: {
             "tmdb_id": genre["id"],
             "name_en": _clean(genre.get("name")) or "",
             "name_he": localised.get(genre["id"]),
         }
         for genre in english.get("genres", [])
         if isinstance(genre, dict) and "id" in genre
-    ]
-    return genres or None
+    }
+    return list(by_id.values()) or None
 
 
 def _clean(value: Any) -> str | None:

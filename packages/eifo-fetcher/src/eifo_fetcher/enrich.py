@@ -472,13 +472,21 @@ def _apply_genres(session: Session, title: Title, genres: Any) -> bool:
         return False
 
     changed = False
+    # TMDB lists the same genre twice for the occasional title, and the join
+    # table will not have it: the insert fails, the flush raises, and the whole
+    # enrich run ends on one bad payload - twenty-two titles into a backlog of
+    # thirty thousand. Deduplicated on the row rather than on the id TMDB sent,
+    # so two of its ids resolving to one genre here is covered too.
+    attached: set[int] = set()
     for entry in genres:
         if not isinstance(entry, dict) or not entry.get("tmdb_id"):
             continue
         genre = _get_or_create_genre(session, entry)
-        if genre is not None:
-            session.add(TitleGenre(title_id=title.id, genre_id=genre.id))
-            changed = True
+        if genre is None or genre.id in attached:
+            continue
+        attached.add(genre.id)
+        session.add(TitleGenre(title_id=title.id, genre_id=genre.id))
+        changed = True
     return changed
 
 

@@ -501,6 +501,49 @@ class TestMetadataPatch:
         assert genre.name_he == "דרמה"
         assert session.scalars(select(Title)).one().genres == [genre]
 
+    def test_a_genre_listed_twice_is_attached_once(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """TMDB repeats one now and then, and the join table will not have it.
+
+        The insert failed, the flush raised, and the whole enrich run ended on
+        one bad payload - twenty-two titles into a backlog of thirty thousand.
+        """
+        add_title(session)
+        enricher = FakeEnricher(
+            EnrichResult(
+                metadata_patch={
+                    "genres": [
+                        {"tmdb_id": 18, "name_en": "Drama"},
+                        {"tmdb_id": 35, "name_en": "Comedy"},
+                        {"tmdb_id": 18, "name_en": "Drama"},
+                    ]
+                }
+            )
+        )
+
+        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+
+        stored = session.scalars(select(Title)).one()
+        assert sorted(genre.name_en for genre in stored.genres) == ["Comedy", "Drama"]
+
+    def test_the_run_survives_it(self, session: Session, settings: Settings, http: Any) -> None:
+        """The failure that mattered was not the duplicate; it was the run dying."""
+        add_title(session)
+        enricher = FakeEnricher(
+            EnrichResult(
+                metadata_patch={
+                    "genres": [{"tmdb_id": 18, "name_en": "Drama"}] * 3,
+                    "runtime_minutes": 100,
+                }
+            )
+        )
+
+        tally = enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+
+        assert tally.errors == []
+        assert session.scalars(select(Title)).one().runtime_minutes == 100
+
     def test_reuses_an_existing_genre(
         self, session: Session, settings: Settings, http: Any
     ) -> None:

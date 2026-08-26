@@ -81,7 +81,17 @@ def build_parser() -> argparse.ArgumentParser:
     enrich.add_argument(
         "--skip-imdb",
         action="store_true",
-        help="skip the IMDb dataset download (tens of megabytes)",
+        help="skip the IMDb dataset download (tens of megabytes); same as --skip imdb",
+    )
+    enrich.add_argument(
+        "--skip",
+        action="append",
+        dest="skip",
+        metavar="KEY",
+        help=(
+            "skip one enricher for this run; repeatable. "
+            "`rt` is the scraped one and by far the slowest"
+        ),
     )
 
     images = subcommands.add_parser("images", help="download missing artwork")
@@ -222,6 +232,7 @@ def _cmd_enrich(args: argparse.Namespace, settings: Settings) -> int:
             force=args.force,
             limit=args.limit,
             skip_imdb=args.skip_imdb,
+            skip=args.skip,
         )
     return EXIT_PARTIAL if tally.errors else EXIT_OK
 

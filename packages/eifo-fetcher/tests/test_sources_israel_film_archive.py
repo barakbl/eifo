@@ -21,6 +21,7 @@ from eifo_fetcher.sources.israel_film_archive import (
     SITEMAP_URL,
     ArchiveCatalogError,
     IsraelFilmArchivePlugin,
+    _absolute,
     parse_film,
     parse_sitemap,
 )
@@ -183,3 +184,31 @@ class TestRobots:
 
         assert [str(call.request.url) for call in respx.calls] == [ROBOTS_URL]
         assert CATALOG_URL not in [str(call.request.url) for call in respx.calls]
+
+
+class TestArtworkUrlsAreFetchable:
+    """The archive gives an absolute og:image on almost every page, and a
+    page-relative one on a couple.
+
+    Stored as written, the image pipeline handed it to an HTTP client that
+    refuses a URL with no scheme - so the nightly artwork phase reported itself
+    failed, every night, for two posters it was never going to get.
+    """
+
+    PAGE = "https://jfc.org.il/movie/32066-2/"
+
+    def test_a_page_relative_url_is_resolved_against_its_page(self) -> None:
+        resolved = _absolute("/media/MOVIES/ZARIM_BALAYLA_32066_MAIN.jpg", self.PAGE)
+
+        assert resolved == "https://jfc.org.il/media/MOVIES/ZARIM_BALAYLA_32066_MAIN.jpg"
+
+    def test_an_absolute_url_is_left_as_it_is(self) -> None:
+        assert _absolute("https://jfc.org.il/x.jpg", self.PAGE) == "https://jfc.org.il/x.jpg"
+
+    @pytest.mark.parametrize("candidate", [None, "", "   "])
+    def test_nothing_stays_nothing(self, candidate: str | None) -> None:
+        assert _absolute(candidate, self.PAGE) is None
+
+    def test_something_that_cannot_be_made_into_a_url_is_dropped(self) -> None:
+        """Better no poster than a stored value that fails every night."""
+        assert _absolute("data:image/png;base64,iVBOR", self.PAGE) is None

@@ -38,6 +38,7 @@ import logging
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
+from urllib.parse import urljoin
 
 from selectolax.parser import HTMLParser
 
@@ -194,8 +195,27 @@ def parse_film(html: str, url: str) -> ArchiveFilm | None:
         director=_director(og_title),
         genre=genre.text(strip=True) if genre else None,
         description=_meta(tree, "og:description"),
-        poster_url=_meta(tree, "og:image"),
+        poster_url=_absolute(_meta(tree, "og:image"), url),
     )
+
+
+def _absolute(candidate: str | None, page_url: str) -> str | None:
+    """Resolve an artwork URL against the page it was found on.
+
+    Most of the archive's pages give an absolute ``og:image`` and two do not -
+    ``/media/MOVIES/ZARIM_BALAYLA_32066_MAIN.jpg``. Stored as written, the image
+    pipeline handed it to httpx, which refuses a URL with no scheme, and the
+    nightly artwork phase reported itself failed every night for two posters it
+    was never going to fetch.
+    """
+    # Stripped here rather than trusting the caller: urljoin("...", "  ")
+    # answers with the page itself, which would store the film's own URL as
+    # its artwork and fail in a way that looks like a working poster.
+    text = (candidate or "").strip()
+    if not text:
+        return None
+    resolved = urljoin(page_url, text)
+    return resolved if resolved.startswith(("http://", "https://")) else None
 
 
 def _meta(tree: HTMLParser, prop: str) -> str | None:

@@ -263,3 +263,37 @@ class TestToItem:
         assert item is not None
         assert item.name == "Loki"
         assert item.kind is TitleKind.SERIES
+
+
+class TestAPossessiveSurvivesTheSlug:
+    """A slug cannot carry an apostrophe, so Disney drops it and the s is
+    stranded as a word of its own.
+
+    Left alone it becomes a word of the title: "Disney S Fairy Tale Weddings",
+    which is the name the catalog stores and a viewer reads. Of the Disney
+    titles that failed to resolve against TMDB, 58 carried a stranded s -
+    against none of the 2,760 that resolved.
+    """
+
+    @pytest.mark.parametrize(
+        ("slug", "expected"),
+        [
+            ("disney-s-fairy-tale-weddings", "Disney's Fairy Tale Weddings"),
+            ("william-shakespeare-s-romeo-juliet", "William Shakespeare's Romeo Juliet"),
+            ("what-s-my-name", "What's My Name"),
+            ("mickey-s-country-farm", "Mickey's Country Farm"),
+        ],
+    )
+    def test_it_is_rejoined_to_the_word_it_belongs_to(self, slug: str, expected: str) -> None:
+        assert title_from_slug(slug) == expected
+
+    def test_a_leading_s_is_a_word_in_its_own_right(self) -> None:
+        """There is nothing before it to be possessive about."""
+        assert title_from_slug("s-club-7") == "S Club 7"
+
+    def test_a_single_letter_that_is_not_s_is_left_alone(self) -> None:
+        """BURN-E is a Pixar short, not a possessive."""
+        assert title_from_slug("burn-e") == "Burn E"
+
+    def test_an_ordinary_slug_is_unchanged(self) -> None:
+        assert title_from_slug("star-wars-the-force-awakens") == "Star Wars The Force Awakens"

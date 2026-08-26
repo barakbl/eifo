@@ -171,6 +171,17 @@ def title_from_slug(slug: str) -> str:
     title is matched, which is also what supplies the Hebrew name and the year.
     """
     words = [word for word in slug.replace("-", " ").split() if word]
-    return " ".join(
-        word.upper() if word in _NUMERALS else word[:1].upper() + word[1:] for word in words
-    )
+
+    parts: list[str] = []
+    for word in words:
+        # A possessive apostrophe is not a character a slug can carry, so
+        # "disney-s-fairy-tale" arrives with the s stranded as its own word.
+        # Left that way it is a word of the title, and "Disney S Fairy Tale"
+        # matches nothing: of the Disney titles that failed to resolve, 58
+        # carried a stranded s, against none of the 2,760 that resolved.
+        if word == "s" and parts and parts[-1][-1:].isalpha():
+            parts[-1] += "'s"
+            continue
+        parts.append(word.upper() if word in _NUMERALS else word[:1].upper() + word[1:])
+
+    return " ".join(parts)

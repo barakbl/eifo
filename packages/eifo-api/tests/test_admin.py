@@ -206,6 +206,58 @@ class TestTheSwitch:
             stored = session.scalars(select(Source).where(Source.key == "netflix_il")).one()
             assert stored.enabled is None
 
+    def test_switching_one_on_asks_for_its_catalog(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Turning a service on is a request for its titles, not just consent.
+
+        Nobody switches a source on to look at an empty row until 03:00, so the
+        ask is recorded here and the fetcher acts on it within the minute.
+        """
+        client.patch("/api/v1/admin/sources/netflix_il", json={"enabled": False}, headers=admin)
+
+        response = client.patch(
+            "/api/v1/admin/sources/netflix_il", json={"enabled": True}, headers=admin
+        )
+
+        assert response.json()["backfill_requested_at"] is not None
+        with session_factory() as session:
+            stored = session.scalars(select(Source).where(Source.key == "netflix_il")).one()
+            assert stored.backfill_requested_at is not None
+
+    def test_switching_one_off_withdraws_the_ask(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """A source nobody wants on should not be dragged through a full sync."""
+        client.patch("/api/v1/admin/sources/netflix_il", json={"enabled": False}, headers=admin)
+        client.patch("/api/v1/admin/sources/netflix_il", json={"enabled": True}, headers=admin)
+
+        response = client.patch(
+            "/api/v1/admin/sources/netflix_il", json={"enabled": False}, headers=admin
+        )
+
+        assert response.json()["backfill_requested_at"] is None
+
+    def test_switching_on_something_already_on_asks_for_nothing(
+        self, client: TestClient, admin: dict[str, str], catalog: Seeded
+    ) -> None:
+        """Only the change is the request. Otherwise every visit to the tab
+        that touched a switch would queue a full sync of a healthy source."""
+        response = client.patch(
+            "/api/v1/admin/sources/netflix_il", json={"enabled": True}, headers=admin
+        )
+
+        assert response.json()["effective_enabled"] is True
+        assert response.json()["backfill_requested_at"] is None
+
     def test_a_source_that_does_not_exist_is_a_404(
         self, client: TestClient, admin: dict[str, str]
     ) -> None:

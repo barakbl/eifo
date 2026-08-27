@@ -155,12 +155,12 @@ class TestItems:
     ) -> None:
         response = client.put(
             f"/api/v1/me/items/{catalog.fauda}",
-            json={"status": "want_to_watch"},
+            json={"want_to_watch": True},
             headers=headers,
         )
 
         assert response.status_code == 200
-        assert response.json()["status"] == "want_to_watch"
+        assert response.json()["want_to_watch"] is True
 
     def test_updates_one_field_without_clearing_the_others(
         self,
@@ -170,7 +170,7 @@ class TestItems:
     ) -> None:
         client.put(
             f"/api/v1/me/items/{catalog.fauda}",
-            json={"status": "watched", "rating": 9},
+            json={"watched": True, "rating": 9},
             headers=headers,
         )
 
@@ -178,7 +178,7 @@ class TestItems:
             f"/api/v1/me/items/{catalog.fauda}", json={"rating": 10}, headers=headers
         )
 
-        assert response.json()["status"] == "watched"
+        assert response.json()["watched"] is True
         assert response.json()["rating"] == 10
 
     def test_an_explicit_null_clears_a_field(
@@ -189,7 +189,7 @@ class TestItems:
     ) -> None:
         client.put(
             f"/api/v1/me/items/{catalog.fauda}",
-            json={"status": "watched", "rating": 9},
+            json={"watched": True, "rating": 9},
             headers=headers,
         )
 
@@ -198,7 +198,7 @@ class TestItems:
         )
 
         assert response.json()["rating"] is None
-        assert response.json()["status"] == "watched"
+        assert response.json()["watched"] is True
 
     def test_clearing_everything_removes_the_entry(
         self,
@@ -208,9 +208,9 @@ class TestItems:
         session_factory: sessionmaker[Session],
     ) -> None:
         """An entry that says nothing is not worth a row - or a list slot."""
-        client.put(f"/api/v1/me/items/{catalog.fauda}", json={"status": "watched"}, headers=headers)
+        client.put(f"/api/v1/me/items/{catalog.fauda}", json={"watched": True}, headers=headers)
 
-        client.put(f"/api/v1/me/items/{catalog.fauda}", json={"status": None}, headers=headers)
+        client.put(f"/api/v1/me/items/{catalog.fauda}", json={"watched": False}, headers=headers)
 
         with session_factory() as session:
             assert session.scalars(select(UserItem)).all() == []
@@ -247,7 +247,7 @@ class TestItems:
     ) -> None:
         response = client.put(
             f"/api/v1/me/items/{catalog.fauda}",
-            json={"status": "watched", "note": "   "},
+            json={"watched": True, "note": "   "},
             headers=headers,
         )
 
@@ -272,7 +272,7 @@ class TestItems:
         headers: dict[str, str],
         catalog: Seeded,
     ) -> None:
-        client.put(f"/api/v1/me/items/{catalog.fauda}", json={"status": "watched"}, headers=headers)
+        client.put(f"/api/v1/me/items/{catalog.fauda}", json={"watched": True}, headers=headers)
 
         assert (
             client.delete(f"/api/v1/me/items/{catalog.fauda}", headers=headers).status_code == 204
@@ -300,12 +300,12 @@ class TestMyList:
     ) -> Seeded:
         client.put(
             f"/api/v1/me/items/{catalog.fauda}",
-            json={"status": "watched", "rating": 9},
+            json={"watched": True, "rating": 9},
             headers=headers,
         )
         client.put(
             f"/api/v1/me/items/{catalog.foxtrot}",
-            json={"status": "want_to_watch"},
+            json={"want_to_watch": True},
             headers=headers,
         )
         client.put(f"/api/v1/me/items/{catalog.shtisel}", json={"rating": 7}, headers=headers)
@@ -335,6 +335,39 @@ class TestMyList:
 
         assert {item["title_id"] for item in page["items"]} == {filled.fauda, filled.shtisel}
 
+    def test_filters_to_the_titles_asked_about(self, client: TestClient, filled: Seeded) -> None:
+        """What the catalog grid asks: which of these am I already keeping."""
+        page = client.get(
+            "/api/v1/me/items", params={"title_ids": [filled.fauda, filled.shtisel]}
+        ).json()
+
+        assert {item["title_id"] for item in page["items"]} == {filled.fauda, filled.shtisel}
+
+    def test_a_title_with_no_entry_simply_comes_back_absent(
+        self, client: TestClient, filled: Seeded
+    ) -> None:
+        """The grid reads a missing entry as "not on any list", so asking about
+        a title nobody has filed is not an error."""
+        page = client.get(
+            "/api/v1/me/items", params={"title_ids": [filled.fauda, filled.orphan]}
+        ).json()
+
+        assert [item["title_id"] for item in page["items"]] == [filled.fauda]
+
+    def test_asking_about_titles_stays_inside_the_user(
+        self,
+        client: TestClient,
+        filled: Seeded,
+        sign_in: SignIn,
+    ) -> None:
+        """Naming somebody else's title id does not reach their entry."""
+        client.cookies.clear()
+        sign_in(AuthProvider.X)
+
+        page = client.get("/api/v1/me/items", params={"title_ids": [filled.fauda]}).json()
+
+        assert page["total"] == 0
+
     def test_pages(self, client: TestClient, filled: Seeded) -> None:
         page = client.get("/api/v1/me/items", params={"page_size": 2}).json()
 
@@ -361,7 +394,7 @@ class TestAccountDeletion:
         catalog: Seeded,
         session_factory: sessionmaker[Session],
     ) -> None:
-        client.put(f"/api/v1/me/items/{catalog.fauda}", json={"status": "watched"}, headers=headers)
+        client.put(f"/api/v1/me/items/{catalog.fauda}", json={"watched": True}, headers=headers)
 
         assert client.delete("/api/v1/me", headers=headers).status_code == 204
 

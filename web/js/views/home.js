@@ -1,6 +1,7 @@
 /* The catalog grid: filters, search-as-you-type, and endless scrolling. */
 
-import { ApiError, listGenres, listTitles } from "../api.js";
+import { ApiError, listGenres, listMyItems, listTitles } from "../api.js";
+import { cardActions } from "../account.js";
 import {
   DEFAULT_FILTERS,
   filtersToParams,
@@ -87,7 +88,7 @@ function readSavedSources() {
   }
 }
 
-export function createHomeView({ mount, app, router }) {
+export function createHomeView({ mount, app, router, items }) {
   return async function render(route) {
     const { t, language, sources, user } = app.get();
     const filters = paramsToFilters(route.search);
@@ -180,12 +181,41 @@ export function createHomeView({ mount, app, router }) {
         state.loaded = reset ? page.items : [...state.loaded, ...page.items];
         state.done = state.loaded.length >= page.total || page.items.length === 0;
         paint();
+        // The catalog does not wait on a personal-data request to appear. The
+        // toggles fill in a beat later, and only if there was anything to fill.
+        if ((await loadMine(page.items)) && token === requestToken) paint();
       } catch (error) {
         if (token !== requestToken) return;
         state.error = error;
         paintError();
       } finally {
         if (token === requestToken) state.loading = false;
+      }
+    }
+
+    /**
+     * Which of the titles just loaded the viewer is already keeping.
+     *
+     * Asked per page rather than by fetching the whole list up front: somebody
+     * with a thousand entries should not download all of them to light up
+     * twenty-four cards. A failure here costs the toggles their state, which is
+     * worth strictly less than the catalog, so it is swallowed.
+     *
+     * Returns whether anything came back, so a grid of titles the viewer has
+     * never filed - which is most of them - is not repainted for nothing.
+     */
+    async function loadMine(titles) {
+      if (!user || !titles.length) return false;
+      try {
+        const mine = await listMyItems(
+          { titleIds: titles.map((title) => title.id) },
+          { pageSize: titles.length },
+        );
+        items.merge(mine.items);
+        return mine.items.length > 0;
+      } catch {
+        // The cards still render; their toggles just start empty.
+        return false;
       }
     }
 
@@ -218,7 +248,16 @@ export function createHomeView({ mount, app, router }) {
       );
       replace(
         grid,
-        state.loaded.map((title, index) => titleCard(title, language, index)),
+        state.loaded.map((title, index) =>
+          // Only for somebody who has somewhere to put them. Signed out, the
+          // buttons would be two dead controls on every card in the catalog.
+          titleCard(
+            title,
+            language,
+            index,
+            user ? cardActions({ titleId: title.id, items, t }) : null,
+          ),
+        ),
       );
     }
 

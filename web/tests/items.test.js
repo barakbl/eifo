@@ -6,24 +6,32 @@ import {
   WATCHED,
   createItemStore,
   isEmptyEntry,
-  nextStatus,
+  toggleList,
   normalizeRating,
 } from "../js/items.js";
 import { myItemsQuery } from "../js/api.js";
 
 const FAUDA = 1;
 
-describe("nextStatus", () => {
+describe("toggleList", () => {
   it("files a title under the list that was pressed", () => {
-    assert.equal(nextStatus(null, WANT_TO_WATCH), WANT_TO_WATCH);
+    assert.deepEqual(toggleList(null, WANT_TO_WATCH), { [WANT_TO_WATCH]: true });
   });
 
   it("takes it out when the list it is already in is pressed again", () => {
-    assert.equal(nextStatus({ status: WATCHED }, WATCHED), null);
+    assert.deepEqual(toggleList({ [WATCHED]: true }, WATCHED), { [WATCHED]: false });
   });
 
-  it("moves it when the other list is pressed", () => {
-    assert.equal(nextStatus({ status: WANT_TO_WATCH }, WATCHED), WATCHED);
+  it("leaves the other list alone, because they are not opposites", () => {
+    /* Seen it, and would watch it again. The patch does not mention the list
+     * that was not pressed, so nothing can quietly clear it. */
+    assert.deepEqual(toggleList({ [WANT_TO_WATCH]: true }, WATCHED), { [WATCHED]: true });
+  });
+
+  it("can put one title on both lists", () => {
+    const entry = { [WANT_TO_WATCH]: true, [WATCHED]: true };
+    assert.equal(entry[WANT_TO_WATCH] && entry[WATCHED], true);
+    assert.deepEqual(toggleList(entry, WATCHED), { [WATCHED]: false });
   });
 });
 
@@ -55,16 +63,21 @@ describe("isEmptyEntry", () => {
   });
 
   it("a rating alone is enough to keep", () => {
-    assert.equal(isEmptyEntry({ status: null, rating: 6, note: null }), false);
+    assert.equal(isEmptyEntry({ rating: 6, note: null }), false);
+  });
+
+  it("either list alone is enough to keep", () => {
+    assert.equal(isEmptyEntry({ [WANT_TO_WATCH]: true }), false);
+    assert.equal(isEmptyEntry({ [WATCHED]: true }), false);
   });
 });
 
 describe("createItemStore", () => {
   it("indexes entries by title, whatever type the id arrives as", () => {
-    const items = createItemStore([{ title_id: FAUDA, status: WATCHED }]);
+    const items = createItemStore([{ title_id: FAUDA, [WATCHED]: true }]);
 
-    assert.equal(items.get(FAUDA).status, WATCHED);
-    assert.equal(items.get("1").status, WATCHED);
+    assert.equal(items.get(FAUDA)[WATCHED], true);
+    assert.equal(items.get("1")[WATCHED], true);
   });
 
   it("reports nothing for a title that was never touched", () => {
@@ -74,39 +87,43 @@ describe("createItemStore", () => {
   it("applies a change immediately", () => {
     const items = createItemStore();
 
-    items.apply(FAUDA, { status: WANT_TO_WATCH });
+    items.apply(FAUDA, { [WANT_TO_WATCH]: true });
 
-    assert.equal(items.get(FAUDA).status, WANT_TO_WATCH);
+    assert.equal(items.get(FAUDA)[WANT_TO_WATCH], true);
   });
 
   it("keeps the fields a change did not mention", () => {
-    const items = createItemStore([{ title_id: FAUDA, status: WATCHED, rating: 9, note: "hi" }]);
+    const items = createItemStore([
+      { title_id: FAUDA, [WATCHED]: true, rating: 9, note: "hi" },
+    ]);
 
     items.apply(FAUDA, { rating: 10 });
 
-    assert.equal(items.get(FAUDA).status, WATCHED);
+    assert.equal(items.get(FAUDA)[WATCHED], true);
     assert.equal(items.get(FAUDA).note, "hi");
     assert.equal(items.get(FAUDA).rating, 10);
   });
 
   it("drops an entry once nothing is left in it", () => {
-    const items = createItemStore([{ title_id: FAUDA, status: WATCHED }]);
+    const items = createItemStore([{ title_id: FAUDA, [WATCHED]: true }]);
 
-    items.apply(FAUDA, { status: null });
+    items.apply(FAUDA, { [WATCHED]: false });
 
     assert.equal(items.get(FAUDA), null);
     assert.equal(items.size, 0);
   });
 
   it("hands back an undo that restores the previous entry exactly", () => {
-    const items = createItemStore([{ title_id: FAUDA, status: WATCHED, rating: 8, note: null }]);
+    const items = createItemStore([
+      { title_id: FAUDA, [WATCHED]: true, rating: 8, note: null },
+    ]);
 
     const rollback = items.apply(FAUDA, { rating: 3 });
     rollback();
 
     assert.deepEqual(items.get(FAUDA), {
       title_id: FAUDA,
-      status: WATCHED,
+      [WATCHED]: true,
       rating: 8,
       note: null,
     });
@@ -115,28 +132,50 @@ describe("createItemStore", () => {
   it("undoes an addition by removing it again", () => {
     const items = createItemStore();
 
-    const rollback = items.apply(FAUDA, { status: WATCHED });
+    const rollback = items.apply(FAUDA, { [WATCHED]: true });
     rollback();
 
     assert.equal(items.get(FAUDA), null);
   });
 
   it("undoes a removal by putting the entry back", () => {
-    const items = createItemStore([{ title_id: FAUDA, status: WATCHED, rating: null }]);
+    const items = createItemStore([{ title_id: FAUDA, [WATCHED]: true, rating: null }]);
 
-    const rollback = items.apply(FAUDA, { status: null });
+    const rollback = items.apply(FAUDA, { [WATCHED]: false });
     rollback();
 
-    assert.equal(items.get(FAUDA).status, WATCHED);
+    assert.equal(items.get(FAUDA)[WATCHED], true);
   });
 
   it("replaces everything when the server has spoken", () => {
-    const items = createItemStore([{ title_id: FAUDA, status: WATCHED }]);
+    const items = createItemStore([{ title_id: FAUDA, [WATCHED]: true }]);
 
-    items.replaceAll([{ title_id: 2, status: WANT_TO_WATCH }]);
+    items.replaceAll([{ title_id: 2, [WANT_TO_WATCH]: true }]);
 
     assert.equal(items.get(FAUDA), null);
-    assert.equal(items.get(2).status, WANT_TO_WATCH);
+    assert.equal(items.get(2)[WANT_TO_WATCH], true);
+  });
+
+  it("holds a title that is on both lists", () => {
+    /* Watched, and worth watching again: the store keeps both flags because
+     * setting one never mentions the other. */
+    const items = createItemStore([{ title_id: FAUDA, [WATCHED]: true }]);
+
+    items.apply(FAUDA, { [WANT_TO_WATCH]: true });
+
+    assert.equal(items.get(FAUDA)[WATCHED], true);
+    assert.equal(items.get(FAUDA)[WANT_TO_WATCH], true);
+  });
+
+  it("keeps an entry that is still on the other list", () => {
+    const items = createItemStore([
+      { title_id: FAUDA, [WATCHED]: true, [WANT_TO_WATCH]: true },
+    ]);
+
+    items.apply(FAUDA, { [WATCHED]: false });
+
+    assert.equal(items.get(FAUDA)[WANT_TO_WATCH], true);
+    assert.equal(items.size, 1);
   });
 
   it("empties on sign-out", () => {
@@ -159,5 +198,20 @@ describe("myItemsQuery", () => {
 
   it("omits filters that are not set", () => {
     assert.equal(myItemsQuery(), "page=1&page_size=24");
+  });
+
+  it("asks about one page of the catalog", () => {
+    /* Repeated rather than comma-joined: that is the shape FastAPI reads a
+     * list of query values in. */
+    assert.equal(
+      myItemsQuery({ titleIds: [1, 2] }, { pageSize: 2 }),
+      "title_ids=1&title_ids=2&page=1&page_size=2",
+    );
+  });
+
+  it("cannot express an empty list, which is why nobody may ask with one", () => {
+    /* No ids at all reads as "no filter" at the far end - every entry the user
+     * has. The caller checks it has something to ask about first. */
+    assert.equal(myItemsQuery({ titleIds: [] }), "page=1&page_size=24");
   });
 });

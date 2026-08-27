@@ -22,6 +22,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -32,7 +33,6 @@ from eifo_core.enums import (
     EnrichOutcome,
     FetchPhase,
     FetchStatus,
-    ItemStatus,
     MatchDecision,
     OfferType,
     RatingProvider,
@@ -81,6 +81,7 @@ class Title(TimestampMixin, Base):
             name="ck_titles_has_a_name",
         ),
         Index("ix_titles_type_year", "type", "year"),
+        UniqueConstraint("type", "tmdb_id", name="uq_title_tmdb"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -88,7 +89,13 @@ class Title(TimestampMixin, Base):
 
     # Canonical external anchors. Both nullable: local-only titles (Israeli
     # reality shows, say) exist on neither service.
-    tmdb_id: Mapped[int | None] = mapped_column(Integer, unique=True)
+    #: Unique per media type, not globally: TMDB numbers films and series in
+    #: separate namespaces, so movie 105 (Back to the Future) and series 105
+    #: (Sex and the City) are different works that share a number. Held as
+    #: globally unique, the second one to arrive was silently taken for the
+    #: first, and its offers were filed against a title it has nothing to do
+    #: with. IMDb ids need no such qualifier - those really are global.
+    tmdb_id: Mapped[int | None] = mapped_column(Integer)
     imdb_id: Mapped[str | None] = mapped_column(String(16), unique=True)
 
     name_en: Mapped[str | None] = mapped_column(String(500))
@@ -289,6 +296,14 @@ class Source(TimestampMixin, Base):
     #: the fetcher was skipping it because its plugin declares itself off - the
     #: screen and the run disagreeing about the same source.
     default_enabled: Mapped[bool] = mapped_column(default=True)
+    #: When an operator asked for this source's catalog to be pulled in full.
+    #:
+    #: Switching a source on is a request for its titles, not merely permission
+    #: to collect them tonight - and a source switched on at noon showing an
+    #: empty catalog until 03:00 reads as broken rather than as scheduled. The
+    #: API writes the time here and the fetcher clears it once it has run, the
+    #: database being the only thing the two share.
+    backfill_requested_at: Mapped[dt.datetime | None]
 
     availability: Mapped[list[Availability]] = relationship(
         back_populates="source",
@@ -413,8 +428,12 @@ class TmdbAlias(Base):
 
     __tablename__ = "tmdb_aliases"
 
-    #: The id that is not the canonical one. Primary key: an id can only ever
-    #: be an alias for one title.
+    #: Which namespace the id belongs to. Part of the key for the same reason it
+    #: is on a title: TMDB numbers films and series separately, so an alias
+    #: recorded for one would otherwise shadow the other's id.
+    type: Mapped[TitleKind] = mapped_column(_enum(TitleKind, "title_kind"), primary_key=True)
+    #: The id that is not the canonical one. Keyed with the type above: an id
+    #: can only ever be an alias for one title of its own kind.
     tmdb_id: Mapped[int] = mapped_column(primary_key=True)
     title_id: Mapped[int] = mapped_column(
         ForeignKey("titles.id", ondelete="CASCADE"),
@@ -543,8 +562,11 @@ class UserSession(Base):
 class UserItem(Base):
     """What one user has to say about one title.
 
-    ``status`` is nullable because rating or noting a title without filing it
-    under a list is a real thing people do.
+    The two lists are separate flags rather than one status, because they are
+    not opposites: something watched and worth watching again belongs on both,
+    and a single column made that unsayable. Both false is the ordinary case -
+    rating or noting a title without filing it anywhere is a real thing people
+    do, and so is being in neither list.
     """
 
     __tablename__ = "user_items"
@@ -558,14 +580,18 @@ class UserItem(Base):
             f"note IS NULL OR length(note) <= {NOTE_MAX_LENGTH}",
             name="ck_user_items_note_length",
         ),
-        Index("ix_user_items_user_status", "user_id", "status"),
+        # One index per list: the two are queried separately, and a title can
+        # be in both, so there is no single column to sort them under.
+        Index("ix_user_items_user_watched", "user_id", "watched"),
+        Index("ix_user_items_user_want", "user_id", "want_to_watch"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     title_id: Mapped[int] = mapped_column(ForeignKey("titles.id", ondelete="CASCADE"))
 
-    status: Mapped[ItemStatus | None] = mapped_column(_enum(ItemStatus, "item_status"))
+    want_to_watch: Mapped[bool] = mapped_column(default=False, server_default=false())
+    watched: Mapped[bool] = mapped_column(default=False, server_default=false())
     rating: Mapped[int | None]
     #: Private always, including on a public profile - a memo, not a review.
     note: Mapped[str | None] = mapped_column(Text)
@@ -578,10 +604,15 @@ class UserItem(Base):
     @property
     def is_empty(self) -> bool:
         """Whether nothing is left worth keeping a row for."""
-        return self.status is None and self.rating is None and not self.note
+        return not self.want_to_watch and not self.watched and self.rating is None and not self.note
 
     def __repr__(self) -> str:
-        return f"<UserItem user={self.user_id} title={self.title_id} {self.status}>"
+        lists = " ".join(
+            name
+            for name, on in (("want_to_watch", self.want_to_watch), ("watched", self.watched))
+            if on
+        )
+        return f"<UserItem user={self.user_id} title={self.title_id} {lists or '-'}>"
 
 
 class FetchRun(Base):

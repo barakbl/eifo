@@ -29,6 +29,7 @@ from eifo_fetcher.http import HttpClient
 from eifo_fetcher.images import ImageFetcher, ImageResult
 from eifo_fetcher.pipeline import (
     SyncResult,
+    clear_backfill_requests,
     deactivate_missing_sources,
     register_declared_sources,
     sync_source,
@@ -125,6 +126,16 @@ def sync_all(
                 result.titles_created,
                 result.retired,
             )
+
+    # An operator's ask is answered by having tried, not by having succeeded: a
+    # source whose sync failed has a run in the Runs tab saying so, and leaving
+    # the ask standing would put the daemon back on it every half minute. Doing
+    # it here rather than in the daemon means a hand-run `eifo-fetch sync`
+    # answers the ask too, instead of leaving one queued behind work just done.
+    if wanted:
+        with session_factory() as session:
+            clear_backfill_requests(session, wanted)
+            session.commit()
 
     # Only prune when syncing everything: a targeted run says nothing about the
     # sources it was not asked to touch.

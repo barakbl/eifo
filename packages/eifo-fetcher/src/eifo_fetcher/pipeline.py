@@ -405,6 +405,30 @@ def register_declared_sources(
     return written
 
 
+def requested_backfills(session: Session) -> list[str]:
+    """Source keys an operator has asked to have pulled in full, oldest first."""
+    return list(
+        session.scalars(
+            select(Source.key)
+            .where(Source.backfill_requested_at.is_not(None))
+            .order_by(Source.backfill_requested_at)
+        ).all()
+    )
+
+
+def clear_backfill_requests(session: Session, keys: Iterable[str]) -> None:
+    """Mark an operator's asks as answered.
+
+    Cleared after the sync rather than before it, so a fetcher that dies partway
+    leaves the ask standing and the next tick tries again. The cost of running
+    one twice is a repeated sync; the cost of clearing one too early is a source
+    that was asked for and never arrives.
+    """
+    for source in session.scalars(select(Source).where(Source.key.in_(list(keys)))).all():
+        source.backfill_requested_at = None
+    session.flush()
+
+
 def deactivate_missing_sources(session: Session, active_keys: Iterable[str]) -> list[str]:
     """Retire sources that configuration or plugins no longer provide.
 

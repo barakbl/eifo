@@ -292,7 +292,7 @@ async function start() {
   );
   const router = activeRouter;
 
-  const home = createHomeView({ mount: main, app, router });
+  const home = createHomeView({ mount: main, app, router, items });
   const title = createTitleView({ mount: main, app, router, items });
   const mylist = createMyListView({ mount: main, app, router, items });
   const settings = createSettingsView({ mount: main, app, router, onSignedOut: () => signOut(router) });

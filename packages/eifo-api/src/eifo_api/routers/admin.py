@@ -90,15 +90,32 @@ def toggle_source(
 ) -> AdminSource:
     """Set - or clear - the operator's override of the configured switch.
 
-    Takes effect on the next run rather than the current one: the daemon opens
-    a fresh session per phase, so nothing has to be restarted, and a sync
-    already in flight is left to finish rather than half-obeying a new answer.
+    Switching one on also asks for its catalog. Permission and intent are the
+    same gesture here: nobody turns a service on to see an empty row until the
+    small hours, so the ask is recorded and the fetcher acts on it within the
+    minute. Switching off is only a decision about tonight - it withdraws a
+    pending ask, and nothing already collected is touched.
+
+    A change to the switch itself takes effect on the next run rather than the
+    current one: the daemon opens a fresh session per phase, so nothing has to
+    be restarted, and a sync already in flight is left to finish rather than
+    half-obeying a new answer.
     """
     source = session.scalar(select(Source).where(Source.key == key))
     if source is None:
         raise HTTPException(status_code=404, detail=f"No source with key {key!r}")
 
+    was_on = _effective(source, settings)
     source.enabled = body.enabled
+    now_on = _effective(source, settings)
+
+    if now_on and not was_on:
+        source.backfill_requested_at = utcnow()
+    elif not now_on:
+        # Withdrawn rather than left queued: a source switched off should not
+        # be dragged back through a full sync by an ask nobody stands behind.
+        source.backfill_requested_at = None
+
     session.commit()
 
     stale_before = utcnow() - dt.timedelta(hours=settings.stale_after_hours)
@@ -244,6 +261,7 @@ def _to_admin_source(
         titles_with_poster=coverage.with_poster,
         titles_with_score=coverage.with_score,
         titles_enriched=coverage.enriched,
+        backfill_requested_at=source.backfill_requested_at,
         pending_reviews=pending_reviews,
         last_sync_at=last_at,
         last_sync_status=last_status,

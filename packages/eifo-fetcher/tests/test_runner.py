@@ -14,7 +14,8 @@ from eifo_core.db import create_engine_from_settings
 from eifo_core.enums import FetchStatus, SourceKind, TitleKind
 from eifo_core.models import Base, Source
 from eifo_core.settings import Settings, SourceConfig
-from eifo_fetcher.daemon import _parse_time, run_daemon, run_nightly, run_once
+from eifo_core.types import utcnow
+from eifo_fetcher.daemon import _parse_time, run_backfills, run_daemon, run_nightly, run_once
 from eifo_fetcher.enrich import EnrichResultTally
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.lock import single_flight
@@ -150,6 +151,11 @@ class TestSyncAll:
         self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
     ) -> None:
         """The same, from the Manage tab rather than the config file."""
+
+    def test_a_sync_answers_an_operators_ask(
+        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+    ) -> None:
+        """Cleared by having tried, so the daemon does not sit on it forever."""
         sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
         with session_factory() as session:
             source = session.scalar(select(Source).where(Source.key == "beta"))
@@ -163,6 +169,58 @@ class TestSyncAll:
         with session_factory() as session:
             beta = session.scalar(select(Source).where(Source.key == "beta"))
             assert beta is not None and beta.active is True
+            source.backfill_requested_at = utcnow()
+            session.commit()
+
+        sync_all(session_factory, settings, http=http, only=["beta"], plugins=[TwoSourcePlugin()])
+
+        with session_factory() as session:
+            beta = session.scalar(select(Source).where(Source.key == "beta"))
+            assert beta is not None and beta.backfill_requested_at is None
+
+    def test_a_failed_sync_still_answers_it(
+        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+    ) -> None:
+        """The run is in the Runs tab saying what went wrong. Leaving the ask
+        standing would put the daemon back on a broken source every half
+        minute; the operator can ask again by flipping the switch."""
+        sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+        with session_factory() as session:
+            source = session.scalar(select(Source).where(Source.key == "alpha"))
+            assert source is not None
+            source.backfill_requested_at = utcnow()
+            session.commit()
+
+        report = sync_all(
+            session_factory,
+            settings,
+            http=http,
+            only=["alpha"],
+            plugins=[TwoSourcePlugin(failing="alpha")],
+        )
+
+        assert report.results[0].status is FetchStatus.FAILED
+        with session_factory() as session:
+            alpha = session.scalar(select(Source).where(Source.key == "alpha"))
+            assert alpha is not None and alpha.backfill_requested_at is None
+
+    def test_a_source_nobody_asked_about_keeps_its_ask(
+        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+    ) -> None:
+        """A targeted run answers only the ask it was pointed at."""
+        sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+        with session_factory() as session:
+            for key in ("alpha", "beta"):
+                source = session.scalar(select(Source).where(Source.key == key))
+                assert source is not None
+                source.backfill_requested_at = utcnow()
+            session.commit()
+
+        sync_all(session_factory, settings, http=http, only=["alpha"], plugins=[TwoSourcePlugin()])
+
+        with session_factory() as session:
+            beta = session.scalar(select(Source).where(Source.key == "beta"))
+            assert beta is not None and beta.backfill_requested_at is not None
 
     def test_a_targeted_run_never_retires_anything(
         self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
@@ -257,6 +315,71 @@ class TestTheNightlyChain:
     def test_run_once_is_the_same_run(self, settings: Settings, phases: list[str]) -> None:
         assert run_once(settings) is True
         assert phases == ["sync_all", "enrich_all", "fetch_images"]
+
+
+class TestBackfillOnRequest:
+    """Switching a source on in the Manage tab should not mean waiting for 03:00."""
+
+    def _ask_for(self, settings: Settings, key: str) -> None:
+        engine = create_engine_from_settings(settings)
+        with sessionmaker(engine)() as session:
+            session.add(
+                Source(
+                    key=key,
+                    name=key,
+                    kind=SourceKind.SUBSCRIPTION,
+                    website_url=f"https://{key}.example",
+                    backfill_requested_at=utcnow(),
+                )
+            )
+            session.commit()
+        engine.dispose()
+
+    def test_nothing_pending_runs_nothing(self, settings: Settings, phases: list[str]) -> None:
+        """The common case, thirty seconds apart forever: it must cost nothing."""
+        assert run_backfills(settings) is True
+
+        assert phases == []
+
+    def test_a_requested_source_is_synced(self, settings: Settings, phases: list[str]) -> None:
+        self._ask_for(settings, "beta")
+
+        assert run_backfills(settings) is True
+
+        assert phases == ["sync_all"]
+
+    def test_it_syncs_only(self, settings: Settings, phases: list[str]) -> None:
+        """Enrichment and artwork cost far more than the titles and are the
+        nightly chain's business; what was asked for is the service showing up."""
+        self._ask_for(settings, "beta")
+
+        run_backfills(settings)
+
+        assert "enrich_all" not in phases and "fetch_images" not in phases
+
+    def test_it_stands_down_while_a_nightly_run_holds_the_lock(
+        self, settings: Settings, phases: list[str]
+    ) -> None:
+        """The ask keeps. A backfill beside a full sync is two fetchers at one
+        database, which is the thing the lock exists to prevent."""
+        self._ask_for(settings, "beta")
+
+        with single_flight(settings):
+            assert run_backfills(settings) is True
+
+        assert phases == []
+
+    def test_a_failure_does_not_take_the_daemon_down(
+        self, settings: Settings, phases: list[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._ask_for(settings, "beta")
+
+        def explode(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("the source is down")
+
+        monkeypatch.setattr("eifo_fetcher.daemon.sync_all", explode)
+
+        assert run_backfills(settings) is False
 
 
 class TestOnlyOneFetcherAtATime:

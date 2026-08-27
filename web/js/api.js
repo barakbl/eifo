@@ -171,11 +171,16 @@ export function logout() {
   return request("/auth/logout", { method: "POST" });
 }
 
-/** Build a my-list query for one of the tabs. */
-export function myItemsQuery({ status = "", rated = false } = {}, { page = 1, pageSize = 24 } = {}) {
+/** Build a my-list query for one of the tabs, or for a page of the catalog. */
+export function myItemsQuery(
+  { status = "", rated = false, titleIds = null } = {},
+  { page = 1, pageSize = 24 } = {},
+) {
   const params = new URLSearchParams();
   if (status) params.set("status", status);
   if (rated) params.set("rated", "true");
+  // Repeated rather than comma-joined, which is how FastAPI reads a list.
+  for (const id of titleIds ?? []) params.append("title_ids", String(id));
   params.set("page", String(page));
   params.set("page_size", String(pageSize));
   return params.toString();

@@ -16,7 +16,6 @@ from eifo_core.enums import (
     CreditRole,
     FetchPhase,
     FetchStatus,
-    ItemStatus,
     OfferType,
     RatingProvider,
     SourceKind,
@@ -314,7 +313,10 @@ class UserItemOut(BaseModel):
     """One title in a user's lists, from that user's point of view."""
 
     title_id: int
-    status: ItemStatus | None = None
+    #: Two lists, not two halves of one. Both true is a title somebody has seen
+    #: and means to see again; both false is one they only rated or noted.
+    want_to_watch: bool = False
+    watched: bool = False
     rating: int | None = None
     #: Private always, even on a public profile.
     note: str | None = None
@@ -344,7 +346,10 @@ class ItemUpsert(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    status: ItemStatus | None = None
+    #: Each list is set on its own. Sending one does not disturb the other,
+    #: which is the whole point of their being two.
+    want_to_watch: bool | None = None
+    watched: bool | None = None
     rating: int | None = Field(default=None, ge=RATING_MIN, le=RATING_MAX)
     note: str | None = Field(default=None, max_length=NOTE_MAX_LENGTH)
 
@@ -377,6 +382,9 @@ class AdminSource(BaseModel):
     titles_with_poster: int = 0
     titles_with_score: int = 0
     titles_enriched: int = 0
+    #: Set while an operator's request for a full pull is still outstanding, so
+    #: the tab can say "queued" rather than look like the switch did nothing.
+    backfill_requested_at: dt.datetime | None = None
     pending_reviews: int = 0
     last_sync_at: dt.datetime | None = None
     last_sync_status: FetchStatus | None = None

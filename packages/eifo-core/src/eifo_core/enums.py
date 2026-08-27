@@ -78,10 +78,12 @@ class AuthProvider(StrEnum):
 
 
 class ItemStatus(StrEnum):
-    """Where a title sits in a user's lists.
+    """The name of one of a user's lists.
 
-    Null rather than a member of this enum is the third state: a title that was
-    rated or noted without being filed under either list.
+    Not a state a title is *in*: the two lists are independent flags on the
+    entry, and a title can sit in both - something seen and worth seeing again
+    is not a contradiction. This enum only names which list is being asked
+    about, which is all a filter needs.
     """
 
     WATCHED = "watched"

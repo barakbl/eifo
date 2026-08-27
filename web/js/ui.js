@@ -116,6 +116,54 @@ export function stateBlock({ title, body, actionLabel, onAction }) {
   ]);
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/**
+ * The line art for the two lists, on a 24-unit grid.
+ *
+ * A bookmark for the one you mean to get to and an eye for the one you already
+ * have is what the services that track both concepts settled on - Letterboxd
+ * and JustWatch both draw it this way, and IMDb's watchlist is a bookmark.
+ * Each says which list it is; a tick or a plus only says on or off, which is a
+ * thing to know about a control rather than a name for one.
+ */
+const ICONS = {
+  // The ribbon with its notch cut out of the bottom edge.
+  bookmark: ["M6 3.5h12v17l-6-3.6-6 3.6z"],
+  // Lid, then pupil. Drawn as two strokes so it reads at 16px.
+  eye: [
+    "M2 12s3.8-6.5 10-6.5S22 12 22 12s-3.8 6.5-10 6.5S2 12 2 12z",
+    "M12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z",
+  ],
+};
+
+/**
+ * An inline icon, built node by node.
+ *
+ * createElementNS rather than markup in a string: this file never hands
+ * anything to innerHTML, and an SVG is not the place to make the first
+ * exception.
+ */
+export function icon(name, { title = "" } = {}) {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("class", "icon");
+  // The button beside it carries the name; a second copy would read it twice.
+  svg.setAttribute("aria-hidden", "true");
+  if (title) svg.setAttribute("title", title);
+
+  for (const d of ICONS[name] ?? []) {
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    svg.append(path);
+  }
+  return svg;
+}
+
 /** Placeholder cards, so a loading grid has the shape of the real one. */
 export function skeletonCards(count = 12) {
   return Array.from({ length: count }, () =>
@@ -128,8 +176,14 @@ export function skeletonCards(count = 12) {
  * without racing to fetch everything below the fold. */
 const EAGER_IMAGES = 12;
 
-/** One title in a grid: poster, name, year and score. */
-export function titleCard(title, language, index = 0) {
+/**
+ * One title in a grid: poster, name, year and score.
+ *
+ * `actions` is an optional node laid over the poster's corner. It is a sibling
+ * of the card rather than a child: the card is one big anchor, and a button
+ * inside an anchor is neither valid nor clickable - the link swallows it.
+ */
+export function titleCard(title, language, index = 0, actions = null) {
   const name = displayName(title, language);
   const eager = index < EAGER_IMAGES;
   const poster = title.poster_url
@@ -142,9 +196,7 @@ export function titleCard(title, language, index = 0) {
       })
     : el("div", { class: "card__placeholder", text: name.slice(0, 1), "aria-hidden": "true" });
 
-  return el(
-    "li",
-    {},
+  return el("li", { class: actions ? "card-slot" : "" }, [
     el("a", { class: "card", href: `#/title/${title.id}` }, [
       el("div", { class: "card__poster" }, [poster, spine(currentSources(title.availability))]),
       el("span", { class: "card__title", text: name }),
@@ -153,5 +205,6 @@ export function titleCard(title, language, index = 0) {
         scorePill(title.score),
       ]),
     ]),
-  );
+    actions,
+  ]);
 }

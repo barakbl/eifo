@@ -14,7 +14,6 @@ from eifo_core.enums import (
     AuthProvider,
     FetchPhase,
     FetchStatus,
-    ItemStatus,
     OfferType,
     TitleKind,
 )
@@ -277,7 +276,7 @@ class TestUserItem:
             UserItem(
                 user_id=user.id,
                 title_id=title.id,
-                status=ItemStatus.WATCHED,
+                watched=True,
                 rating=9,
                 note="לצפות שוב",
             )
@@ -285,16 +284,28 @@ class TestUserItem:
         session.commit()
 
         item = session.scalars(select(UserItem)).one()
-        assert item.status is ItemStatus.WATCHED
+        assert item.watched is True
+        assert item.want_to_watch is False
         assert item.rating == 9
         assert item.is_empty is False
+
+    def test_one_title_can_be_on_both_lists(self, session: Session) -> None:
+        """Seen it, and would watch it again - not a contradiction."""
+        user, title = _user_and_title(session)
+        session.add(UserItem(user_id=user.id, title_id=title.id, want_to_watch=True, watched=True))
+        session.commit()
+
+        item = session.scalars(select(UserItem)).one()
+        assert (item.want_to_watch, item.watched) == (True, True)
 
     def test_a_rating_needs_no_list(self, session: Session) -> None:
         user, title = _user_and_title(session)
         session.add(UserItem(user_id=user.id, title_id=title.id, rating=7))
         session.commit()
 
-        assert session.scalars(select(UserItem)).one().status is None
+        item = session.scalars(select(UserItem)).one()
+        assert item.want_to_watch is False
+        assert item.watched is False
 
     def test_rejects_a_rating_outside_one_to_ten(self, session: Session) -> None:
         user, title = _user_and_title(session)
@@ -324,7 +335,11 @@ class TestUserItem:
             session.commit()
 
     def test_an_untouched_row_reports_itself_empty(self, session: Session) -> None:
-        assert UserItem(status=None, rating=None, note="").is_empty is True
+        assert UserItem(rating=None, note="").is_empty is True
+
+    def test_a_row_on_only_one_list_is_not_empty(self) -> None:
+        assert UserItem(want_to_watch=True).is_empty is False
+        assert UserItem(watched=True).is_empty is False
 
 
 class TestUserSession:
@@ -338,7 +353,7 @@ class TestUserSession:
                     user_id=user.id,
                     expires_at=dt.datetime(2030, 1, 1, tzinfo=dt.UTC),
                 ),
-                UserItem(user_id=user.id, title_id=title.id, status=ItemStatus.WANT_TO_WATCH),
+                UserItem(user_id=user.id, title_id=title.id, want_to_watch=True),
             ]
         )
         session.commit()

@@ -46,6 +46,14 @@ img {
   display: block;
 }
 
+/* An author `display` outranks the UA sheet's `[hidden] { display: none }`, so
+   every component that sets one had to remember to opt back out - and the ones
+   that forgot stayed on screen while claiming to be hidden. Said once here
+   instead of once per component that trips over it. */
+[hidden] {
+  display: none !important;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -398,10 +406,6 @@ img {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow-pop);
-}
-
-.suggest[hidden] {
-  display: none;
 }
 
 .suggest__group {
@@ -1100,6 +1104,13 @@ img {
 .badge--untracked {
   background: color-mix(in srgb, var(--score-mid) 16%, transparent);
   color: var(--score-mid);
+}
+
+/* Work that has been asked for and not done yet: the accent, because it is a
+   thing in progress rather than a thing wrong. */
+.badge--busy {
+  background: var(--accent-quiet);
+  color: var(--accent);
 }
 
 /* -- states --------------------------------------------------------------- */
@@ -1994,12 +2005,6 @@ img {
 
 .chips--quiet {
   margin-block-start: var(--space-2);
-}
-
-/* `hidden` is a UA-stylesheet `display: none`, which an explicit display beats -
- * so without this the bar showed as an empty strip with nothing selected. */
-.bulk[hidden] {
-  display: none;
 }
 
 .bulk {

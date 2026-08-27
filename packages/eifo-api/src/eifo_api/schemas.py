@@ -382,6 +382,9 @@ class AdminSource(BaseModel):
     titles_with_poster: int = 0
     titles_with_score: int = 0
     titles_enriched: int = 0
+    #: Set while an operator's request for a full pull is still outstanding, so
+    #: the tab can say "queued" rather than look like the switch did nothing.
+    backfill_requested_at: dt.datetime | None = None
     pending_reviews: int = 0
     last_sync_at: dt.datetime | None = None
     last_sync_status: FetchStatus | None = None

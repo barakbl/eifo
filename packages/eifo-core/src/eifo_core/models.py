@@ -289,6 +289,14 @@ class Source(TimestampMixin, Base):
     #: the fetcher was skipping it because its plugin declares itself off - the
     #: screen and the run disagreeing about the same source.
     default_enabled: Mapped[bool] = mapped_column(default=True)
+    #: When an operator asked for this source's catalog to be pulled in full.
+    #:
+    #: Switching a source on is a request for its titles, not merely permission
+    #: to collect them tonight - and a source switched on at noon showing an
+    #: empty catalog until 03:00 reads as broken rather than as scheduled. The
+    #: API writes the time here and the fetcher clears it once it has run, the
+    #: database being the only thing the two share.
+    backfill_requested_at: Mapped[dt.datetime | None]
 
     availability: Mapped[list[Availability]] = relationship(
         back_populates="source",

@@ -292,6 +292,14 @@ function sourceRow(source, { t, language }) {
     text: source.enabled === null ? t("manage.source.fromConfig") : t("manage.source.override"),
   });
 
+  // Built whether or not it applies yet, so flipping the switch has something
+  // to reveal without the row being rebuilt around it.
+  const queued = el("span", {
+    class: "badge badge--busy",
+    text: t("manage.source.queued"),
+    hidden: !source.backfill_requested_at,
+  });
+
   const toggle = el("input", {
     class: "switch",
     type: "checkbox",
@@ -305,6 +313,9 @@ function sourceRow(source, { t, language }) {
     input.disabled = true;
     try {
       const updated = await setSourceEnabled(source.key, input.checked);
+      // The server decides whether switching this on queued a pull, so the
+      // badge follows its answer rather than the checkbox's.
+      queued.hidden = !updated.backfill_requested_at;
       // Believe the server, not the checkbox: it folds the config file and the
       // override together and the answer can differ from what was clicked.
       input.checked = updated.effective_enabled;
@@ -319,6 +330,10 @@ function sourceRow(source, { t, language }) {
   });
 
   const badges = [
+    // First, because it explains the row: a source waiting on its first pull
+    // has no coverage yet, and every other figure on it reads as alarming
+    // until this says why.
+    queued,
     source.stale ? el("span", { class: "badge badge--warn", text: t("manage.source.stale") }) : null,
     source.active ? null : el("span", { class: "badge", text: t("manage.source.retired") }),
   ].filter(Boolean);

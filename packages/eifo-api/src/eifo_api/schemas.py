@@ -371,6 +371,12 @@ class AdminSource(BaseModel):
     #: together - which is the thing an operator is asking about.
     effective_enabled: bool
     title_count: int = 0
+    #: How much of what this source offers the catalog has actually filled in.
+    #: Counts rather than percentages: the denominator is ``title_count`` and
+    #: the client is the one deciding how to round and colour them.
+    titles_with_poster: int = 0
+    titles_with_score: int = 0
+    titles_enriched: int = 0
     pending_reviews: int = 0
     last_sync_at: dt.datetime | None = None
     last_sync_status: FetchStatus | None = None
@@ -421,6 +427,10 @@ class AdminStats(BaseModel):
     titles_available: int
     current_offers: int
     pending_reviews: int
+    #: Every listing ever parked, ruled on or not. With ``pending_reviews`` it
+    #: says how much of the queue has been worked through, which is the figure
+    #: that answers "is anybody keeping up".
+    reviews_total: int
     sources_total: int
     sources_stale: int
     #: When the newest finished run of any kind finished. None on an instance

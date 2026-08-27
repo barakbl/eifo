@@ -13,10 +13,11 @@ surface exists.
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, case, func, select
 from sqlalchemy.orm import Session
 
 from eifo_api.deps import AdminDep, CsrfDep, SessionDep, SettingsDep
@@ -28,10 +29,11 @@ from eifo_api.schemas import (
     RunOut,
     SourceToggle,
 )
-from eifo_core.enums import FetchPhase, FetchStatus
+from eifo_core.enums import EnrichOutcome, FetchPhase, FetchStatus
 from eifo_core.models import (
     AggregateScore,
     Availability,
+    EnrichAttempt,
     FetchRun,
     MatchReview,
     Person,
@@ -56,7 +58,7 @@ def list_sources(
     """One row per source: switched on, coverage, last run, queue depth."""
     stale_before = utcnow() - dt.timedelta(hours=settings.stale_after_hours)
 
-    titles = _current_offer_counts(session)
+    coverage = _coverage_by_source(session)
     reviews = _pending_review_counts(session)
     last_sync = _last_sync_by_source(session)
 
@@ -64,7 +66,7 @@ def list_sources(
         _to_admin_source(
             source,
             settings=settings,
-            title_count=titles.get(source.id, 0),
+            coverage=coverage.get(source.id, _Coverage()),
             pending_reviews=reviews.get(source.key, 0),
             last=last_sync.get(source.key),
             stale_before=stale_before,
@@ -103,7 +105,7 @@ def toggle_source(
     return _to_admin_source(
         source,
         settings=settings,
-        title_count=_current_offer_counts(session).get(source.id, 0),
+        coverage=_coverage_by_source(session).get(source.id, _Coverage()),
         pending_reviews=_pending_review_counts(session).get(source.key, 0),
         last=_last_sync_by_source(session).get(source.key),
         stale_before=stale_before,
@@ -174,6 +176,7 @@ def get_stats(_admin: AdminDep, session: SessionDep, settings: SettingsDep) -> A
         pending_reviews=_count(
             session, select(MatchReview).where(MatchReview.resolved_at.is_(None))
         ),
+        reviews_total=_count(session, select(MatchReview)),
         sources_total=len(active),
         sources_stale=stale,
         last_run_at=session.scalar(select(func.max(FetchRun.finished_at))),
@@ -223,7 +226,7 @@ def _to_admin_source(
     source: Source,
     *,
     settings: Settings,
-    title_count: int,
+    coverage: _Coverage,
     pending_reviews: int,
     last: tuple[dt.datetime | None, FetchStatus | None] | None,
     stale_before: dt.datetime,
@@ -237,7 +240,10 @@ def _to_admin_source(
         active=source.active,
         enabled=source.enabled,
         effective_enabled=_effective(source, settings),
-        title_count=title_count,
+        title_count=coverage.titles,
+        titles_with_poster=coverage.with_poster,
+        titles_with_score=coverage.with_score,
+        titles_enriched=coverage.enriched,
         pending_reviews=pending_reviews,
         last_sync_at=last_at,
         last_sync_status=last_status,
@@ -271,14 +277,57 @@ def _is_stale(
     return last_at is None or last_at < stale_before
 
 
-def _current_offer_counts(session: Session) -> dict[int, int]:
-    """Titles each source is currently offering."""
+#: Enrichment outcomes that count as done with. ``OK`` found ratings; ``NO_DATA``
+#: established there are none to find, which is true of most of a catalog this
+#: local and is as complete as that title is ever going to get. The other two are
+#: unfinished business - ``NO_MATCH`` cannot be asked about until matching
+#: improves, ``ERROR`` is a provider that was down - and counting them as
+#: enriched would paint a column green precisely when every attempt had failed.
+_SETTLED = (EnrichOutcome.OK, EnrichOutcome.NO_DATA)
+
+
+@dataclass(frozen=True, slots=True)
+class _Coverage:
+    """How complete one source's titles are, counted rather than divided."""
+
+    titles: int = 0
+    with_poster: int = 0
+    with_score: int = 0
+    enriched: int = 0
+
+
+def _coverage_by_source(session: Session) -> dict[int, _Coverage]:
+    """What each source offers, and how much of it the catalog has filled in.
+
+    One query with conditional counts rather than four: the joins are the
+    expensive part, and a source list that costs four table scans per column
+    is a page an operator stops opening.
+    """
+    distinct = func.count(func.distinct(Availability.title_id))
     rows = session.execute(
-        select(Availability.source_id, func.count(func.distinct(Availability.title_id)))
+        select(
+            Availability.source_id,
+            distinct,
+            func.count(
+                func.distinct(case((Title.poster_path.is_not(None), Availability.title_id)))
+            ),
+            func.count(
+                func.distinct(case((AggregateScore.title_id.is_not(None), Availability.title_id)))
+            ),
+            func.count(
+                func.distinct(case((EnrichAttempt.outcome.in_(_SETTLED), Availability.title_id)))
+            ),
+        )
+        .join(Title, Title.id == Availability.title_id)
+        .outerjoin(AggregateScore, AggregateScore.title_id == Title.id)
+        .outerjoin(EnrichAttempt, EnrichAttempt.title_id == Title.id)
         .where(Availability.is_current.is_(True))
         .group_by(Availability.source_id)
     ).all()
-    return {source_id: count for source_id, count in rows}
+    return {
+        source_id: _Coverage(titles, poster, score, enriched)
+        for source_id, titles, poster, score, enriched in rows
+    }
 
 
 def _pending_review_counts(session: Session) -> dict[str, int]:

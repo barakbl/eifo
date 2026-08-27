@@ -355,18 +355,18 @@ class TestTheMergeStaying:
 
         merge_all(session)
 
-        alias = session.get(TmdbAlias, 327352)
+        alias = session.get(TmdbAlias, (TitleKind.SERIES, 327352))
         assert alias is not None and alias.title_id == keeper.id
 
     def test_aliases_the_loser_had_come_along_too(self, session: Session) -> None:
         keeper = add_title(session, imdb_id="tt1", tmdb_id=1)
         loser = add_title(session, tmdb_id=2)
-        session.add(TmdbAlias(tmdb_id=999, title_id=loser.id))
+        session.add(TmdbAlias(type=loser.type, tmdb_id=999, title_id=loser.id))
         session.commit()
 
         merge_all(session)
 
-        assert session.get(TmdbAlias, 999).title_id == keeper.id
+        assert session.get(TmdbAlias, (TitleKind.SERIES, 999)).title_id == keeper.id
 
 
 class TestFailureIsPerGroup:

@@ -114,8 +114,15 @@ def plan_rematch(
         verdict, hits = confident_tmdb_choice(pairs, title.year)
         if verdict == "auto":
             hit = hits[0]
+            # Within the hit's own namespace: a film and a series can share a
+            # number, and folding one into the other is exactly the mistake
+            # this pass exists to undo.
             owner = session.scalar(
-                select(Title).where(Title.tmdb_id == hit.tmdb_id, Title.id != title.id)
+                select(Title).where(
+                    Title.type == hit.kind,
+                    Title.tmdb_id == hit.tmdb_id,
+                    Title.id != title.id,
+                )
             )
             if owner is not None:
                 plan.folds.append(Fold(owner=owner, duplicate=title, hit=hit))

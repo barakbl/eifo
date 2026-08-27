@@ -276,9 +276,11 @@ def _remember_the_losing_id(
 
     if loser.tmdb_id is None or loser.tmdb_id == winner.tmdb_id:
         return
-    if session.get(TmdbAlias, loser.tmdb_id) is not None:
+    # Keyed with the kind: the number alone belongs to two works, one in each
+    # of TMDB's namespaces.
+    if session.get(TmdbAlias, (loser.type, loser.tmdb_id)) is not None:
         return
-    session.add(TmdbAlias(tmdb_id=loser.tmdb_id, title_id=winner.id))
+    session.add(TmdbAlias(type=loser.type, tmdb_id=loser.tmdb_id, title_id=winner.id))
     tally.aliases_recorded += 1
 
 

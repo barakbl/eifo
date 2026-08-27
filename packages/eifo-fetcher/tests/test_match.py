@@ -158,6 +158,53 @@ class TestExternalId:
         assert result.method is MatchMethod.EXTERNAL_ID
         assert result.title is existing
 
+    def test_a_film_and_a_series_may_share_a_tmdb_id(self, session: Session) -> None:
+        """TMDB numbers the two separately, so movie 105 (Back to the Future)
+        and series 105 (Sex and the City) are different works.
+
+        Matching on the number alone gave the film to the series: it was never
+        created, and its rent-and-buy offers were filed against a show that has
+        nothing to do with it.
+        """
+        series = Title(type=TitleKind.SERIES, name_en="Sex and the City", tmdb_id=105, year=1998)
+        session.add(series)
+        session.flush()
+
+        result = TitleMatcher(session).match(
+            item(kind=TitleKind.MOVIE, name="Back to the Future", year=1985, tmdb_id=105)
+        )
+
+        assert result.title is not series
+        assert result.title.type is TitleKind.MOVIE
+
+    def test_the_same_id_in_the_same_namespace_still_matches(self, session: Session) -> None:
+        """The qualifier narrows the lookup; it does not break it."""
+        film = Title(type=TitleKind.MOVIE, name_en="Back to the Future", tmdb_id=105, year=1985)
+        session.add(film)
+        session.flush()
+
+        result = TitleMatcher(session).match(
+            item(kind=TitleKind.MOVIE, name="Back to the Future", year=1985, tmdb_id=105)
+        )
+
+        assert result.method is MatchMethod.EXTERNAL_ID
+        assert result.title is film
+
+    def test_an_alias_does_not_reach_across_namespaces(self, session: Session) -> None:
+        """An alias keyed on the bare number would shadow the other kind's id
+        exactly as a title used to."""
+        held = Title(type=TitleKind.SERIES, name_en="Some Show", tmdb_id=1, year=2010)
+        session.add(held)
+        session.flush()
+        session.add(TmdbAlias(type=TitleKind.SERIES, tmdb_id=105, title_id=held.id))
+        session.flush()
+
+        result = TitleMatcher(session).match(
+            item(kind=TitleKind.MOVIE, name="Back to the Future", year=1985, tmdb_id=105)
+        )
+
+        assert result.title is not held
+
     def test_matches_on_imdb_id(self, session: Session) -> None:
         existing = Title(type=TitleKind.SERIES, name_en="Fauda", imdb_id="tt4565380", year=2015)
         session.add(existing)
@@ -491,7 +538,7 @@ class TestTmdbDuplicatesItsOwnRecords:
         session.flush()
         TitleMatcher(session).match(item(name="The Pacific", year=2010, tmdb_id=327352))
 
-        alias = session.get(TmdbAlias, 327352)
+        alias = session.get(TmdbAlias, (TitleKind.SERIES, 327352))
         assert alias is not None and alias.title_id == held.id
 
     def test_the_alias_resolves_on_the_next_sync(self, session: Session) -> None:

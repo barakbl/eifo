@@ -81,6 +81,7 @@ class Title(TimestampMixin, Base):
             name="ck_titles_has_a_name",
         ),
         Index("ix_titles_type_year", "type", "year"),
+        UniqueConstraint("type", "tmdb_id", name="uq_title_tmdb"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -88,7 +89,13 @@ class Title(TimestampMixin, Base):
 
     # Canonical external anchors. Both nullable: local-only titles (Israeli
     # reality shows, say) exist on neither service.
-    tmdb_id: Mapped[int | None] = mapped_column(Integer, unique=True)
+    #: Unique per media type, not globally: TMDB numbers films and series in
+    #: separate namespaces, so movie 105 (Back to the Future) and series 105
+    #: (Sex and the City) are different works that share a number. Held as
+    #: globally unique, the second one to arrive was silently taken for the
+    #: first, and its offers were filed against a title it has nothing to do
+    #: with. IMDb ids need no such qualifier - those really are global.
+    tmdb_id: Mapped[int | None] = mapped_column(Integer)
     imdb_id: Mapped[str | None] = mapped_column(String(16), unique=True)
 
     name_en: Mapped[str | None] = mapped_column(String(500))
@@ -421,8 +428,12 @@ class TmdbAlias(Base):
 
     __tablename__ = "tmdb_aliases"
 
-    #: The id that is not the canonical one. Primary key: an id can only ever
-    #: be an alias for one title.
+    #: Which namespace the id belongs to. Part of the key for the same reason it
+    #: is on a title: TMDB numbers films and series separately, so an alias
+    #: recorded for one would otherwise shadow the other's id.
+    type: Mapped[TitleKind] = mapped_column(_enum(TitleKind, "title_kind"), primary_key=True)
+    #: The id that is not the canonical one. Keyed with the type above: an id
+    #: can only ever be an alias for one title of its own kind.
     tmdb_id: Mapped[int] = mapped_column(primary_key=True)
     title_id: Mapped[int] = mapped_column(
         ForeignKey("titles.id", ondelete="CASCADE"),

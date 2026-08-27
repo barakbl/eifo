@@ -122,6 +122,48 @@ class TestSyncAll:
             beta = session.scalar(select(Source).where(Source.key == "beta"))
             assert beta is not None and beta.active is False
 
+    def test_switching_a_source_off_does_not_retire_it(
+        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+    ) -> None:
+        """Off and gone are different claims about a source.
+
+        Retiring one badges it "no longer tracked" in the Manage tab, and only a
+        successful sync clears that - so a source switched off used to come back
+        wearing a label that outlived being switched on again.
+        """
+        sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+
+        off = Settings(
+            _env_file=None,
+            db_url="sqlite:///:memory:",
+            sources={"beta": SourceConfig(enabled=False)},
+        )
+        report = sync_all(session_factory, off, http=http, plugins=[TwoSourcePlugin()])
+
+        assert [result.source_key for result in report.results] == ["alpha"]
+        assert report.retired_sources == []
+        with session_factory() as session:
+            beta = session.scalar(select(Source).where(Source.key == "beta"))
+            assert beta is not None and beta.active is True
+
+    def test_an_operator_switching_one_off_does_not_retire_it_either(
+        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+    ) -> None:
+        """The same, from the Manage tab rather than the config file."""
+        sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+        with session_factory() as session:
+            source = session.scalar(select(Source).where(Source.key == "beta"))
+            assert source is not None
+            source.enabled = False
+            session.commit()
+
+        report = sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+
+        assert report.retired_sources == []
+        with session_factory() as session:
+            beta = session.scalar(select(Source).where(Source.key == "beta"))
+            assert beta is not None and beta.active is True
+
     def test_a_targeted_run_never_retires_anything(
         self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
     ) -> None:

@@ -130,7 +130,13 @@ def sync_all(
     # sources it was not asked to touch.
     if not only:
         with session_factory() as session:
-            report.retired_sources = deactivate_missing_sources(session, available)
+            # Against what the plugins declare, not what is switched on. Off and
+            # gone are different claims, and this used to make them the same
+            # one: turning a source off badged it "no longer tracked" on the
+            # next full run, which is untrue of a plugin sitting right there,
+            # and the badge outlived being switched back on because only a sync
+            # clears it.
+            report.retired_sources = deactivate_missing_sources(session, declared_sources(plugins))
             session.commit()
         if report.retired_sources:
             logger.info("retired sources (data kept): %s", ", ".join(report.retired_sources))

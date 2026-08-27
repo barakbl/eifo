@@ -19,8 +19,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_api.security import CSRF_HEADER
-from eifo_core.enums import FetchPhase, FetchStatus, OfferType, SourceKind
-from eifo_core.models import Availability, FetchRun, MatchReview, Source
+from eifo_core.enums import (
+    EnrichOutcome,
+    FetchPhase,
+    FetchStatus,
+    OfferType,
+    SourceKind,
+)
+from eifo_core.models import (
+    Availability,
+    EnrichAttempt,
+    FetchRun,
+    MatchReview,
+    Source,
+)
 from eifo_core.settings import SourceConfig
 
 NOW = dt.datetime(2026, 8, 7, 12, 0, tzinfo=dt.UTC)
@@ -468,3 +480,136 @@ class TestAvailableNowMeansTitles:
         stats = client.get("/api/v1/admin/stats").json()
 
         assert stats["titles_available"] < stats["title_count"]
+
+
+class TestPerSourceCompleteness:
+    """The source table reports how filled-in each service's titles are.
+
+    Counts rather than percentages: the denominator is title_count, and the
+    client is the one deciding how to round and colour them - a server that
+    sends 96.4 has already thrown away the numbers behind it.
+    """
+
+    def _row(self, client: TestClient, key: str = "netflix_il") -> dict[str, object]:
+        rows = {row["key"]: row for row in client.get("/api/v1/admin/sources").json()}
+        return rows[key]
+
+    def test_it_counts_posters_scores_and_enrichment(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        with session_factory() as session:
+            session.add(
+                EnrichAttempt(
+                    title_id=catalog.fauda,
+                    attempted_at=NOW,
+                    outcome=EnrichOutcome.OK,
+                    fruitless=0,
+                    due_at=NOW,
+                )
+            )
+            session.commit()
+
+        row = self._row(client)
+
+        assert row["title_count"] > 0
+        assert row["titles_with_poster"] <= row["title_count"]
+        assert row["titles_with_score"] <= row["title_count"]
+        assert row["titles_enriched"] == 1
+
+    @pytest.mark.parametrize(
+        ("outcome", "enriched"),
+        [
+            (EnrichOutcome.OK, 1),
+            # Nobody has rated it, which is most of a catalog this local and is
+            # as complete as that title is ever going to get.
+            (EnrichOutcome.NO_DATA, 1),
+            # Unfinished business: one cannot be asked about until matching
+            # improves, the other is a provider that was down.
+            (EnrichOutcome.NO_MATCH, 0),
+            (EnrichOutcome.ERROR, 0),
+        ],
+    )
+    def test_a_failed_attempt_is_not_enrichment(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+        outcome: EnrichOutcome,
+        enriched: int,
+    ) -> None:
+        """Otherwise the column goes green precisely when every attempt failed."""
+        with session_factory() as session:
+            session.add(
+                EnrichAttempt(
+                    title_id=catalog.fauda,
+                    attempted_at=NOW,
+                    outcome=outcome,
+                    fruitless=0,
+                    due_at=NOW,
+                )
+            )
+            session.commit()
+
+        assert self._row(client)["titles_enriched"] == enriched
+
+    def test_a_source_offering_nothing_reports_zeroes_not_nulls(
+        self, client: TestClient, admin: dict[str, str], seed_source: SeedSource
+    ) -> None:
+        """The client turns a zero denominator into "no figure"; the API's job
+        is only to be honest that there is nothing there."""
+        seed_source(key="quiet_source")
+
+        row = self._row(client, "quiet_source")
+
+        assert row["title_count"] == 0
+        assert row["titles_with_poster"] == 0
+        assert row["titles_with_score"] == 0
+        assert row["titles_enriched"] == 0
+
+    def test_only_current_offers_count(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """A title a service has stopped carrying is not its coverage."""
+        before = self._row(client)["title_count"]
+        with session_factory() as session:
+            source = session.scalars(select(Source).where(Source.key == "netflix_il")).one()
+            row = session.scalars(
+                select(Availability).where(
+                    Availability.source_id == source.id, Availability.is_current.is_(True)
+                )
+            ).first()
+            assert row is not None
+            row.is_current = False
+            session.commit()
+
+        assert self._row(client)["title_count"] == before - 1
+
+    def test_stats_report_the_queue_it_was_measured_against(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """A pending count with no total cannot say whether anybody is keeping up."""
+        with session_factory() as session:
+            session.add_all(
+                [
+                    MatchReview(source_key="mako", raw_payload={"name": "ממתין"}),
+                    MatchReview(source_key="mako", raw_payload={"name": "טופל"}, resolved_at=NOW),
+                ]
+            )
+            session.commit()
+
+        stats = client.get("/api/v1/admin/stats").json()
+
+        assert stats["reviews_total"] == 2
+        assert stats["pending_reviews"] == 1

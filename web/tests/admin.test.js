@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { reviewsQuery, runsQuery } from "../js/api.js";
-import { statEntries } from "../js/views/manage.js";
+import {
+  formatPercent,
+  percentBand,
+  share,
+  statEntries,
+} from "../js/views/manage.js";
 
 /* The two query builders behind the Manage tab.
  *
@@ -109,5 +114,72 @@ describe("statEntries", () => {
 
   it("skips a null without rendering the word", () => {
     assert.deepEqual(statEntries({ finished: null, seen: 2 }), [["seen", "2"]]);
+  });
+});
+
+describe("percentBand", () => {
+  /* The colours only mean anything because every figure they sit on is stated
+   * so that more is better - "with a poster" rather than "no poster". */
+  it("is green above 95", () => {
+    assert.equal(percentBand(95.1), "good");
+    assert.equal(percentBand(100), "good");
+  });
+
+  it("is amber above 75 and up to 95", () => {
+    assert.equal(percentBand(95), "warn");
+    assert.equal(percentBand(75.1), "warn");
+  });
+
+  it("is red at 75 and below", () => {
+    assert.equal(percentBand(75), "bad");
+    assert.equal(percentBand(0), "bad");
+  });
+
+  it("has no verdict on a missing figure", () => {
+    assert.equal(percentBand(null), "none");
+    assert.equal(percentBand(undefined), "none");
+  });
+});
+
+describe("share", () => {
+  it("is the part over the whole", () => {
+    assert.equal(share(1, 4), 25);
+  });
+
+  it("is nothing at all when there is no whole", () => {
+    /* A source that has never synced has no completeness. Calling it 0% would
+     * read as "everything is missing" and paint the row red. */
+    assert.equal(share(0, 0), null);
+  });
+});
+
+describe("formatPercent", () => {
+  it("rounds to whole numbers, which is how a dashboard is read", () => {
+    assert.equal(formatPercent(96.4), "96%");
+    assert.equal(formatPercent(75.5), "76%");
+  });
+
+  it("keeps a decimal below ten", () => {
+    /* Rounding 0.7% to 1% triples it; rounding it to 0% hides a queue that is
+     * not empty. */
+    assert.equal(formatPercent(0.7), "0.7%");
+    assert.equal(formatPercent(9.9), "9.9%");
+  });
+
+  it("shows a dash rather than a number it does not have", () => {
+    assert.equal(formatPercent(null), "—");
+  });
+
+  it("reaches 100% only when there is nothing left", () => {
+    /* 3407 of 3410 cleared is 99.91%, and a column reading 100% over three
+     * listings still waiting is the one figure nobody would think to check. */
+    assert.equal(formatPercent((3407 / 3410) * 100), "99%");
+    assert.equal(formatPercent(99.99), "99%");
+    assert.equal(formatPercent(100), "100%");
+  });
+
+  it("reaches 0% only when there is nothing at all", () => {
+    assert.equal(formatPercent((1 / 34024) * 100), "<0.1%");
+    assert.equal(formatPercent(0), "0%");
   });
 });

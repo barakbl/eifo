@@ -85,6 +85,47 @@ function tabStrip(current, t, router) {
   );
 }
 
+/* -- percentages ----------------------------------------------------------- */
+
+/** Where a completeness figure sits: green above 95, amber above 75, red below. */
+export function percentBand(percent) {
+  if (percent === null || percent === undefined) return "none";
+  if (percent > 95) return "good";
+  if (percent > 75) return "warn";
+  return "bad";
+}
+
+/**
+ * A share of a whole, or null when there is no whole to take a share of.
+ *
+ * A source with nothing in it has no completeness - not 0%, which would read
+ * as "everything is missing" and colour the row red for a service that has
+ * simply never synced.
+ */
+export function share(part, whole) {
+  return whole > 0 ? (part / whole) * 100 : null;
+}
+
+/**
+ * A percentage as somebody reads it.
+ *
+ * Whole numbers, because a dashboard is read at a glance - except below ten,
+ * where rounding 0.7% to 1% triples it and rounding it to 0% hides a queue
+ * that is not empty.
+ *
+ * Neither end is allowed to round to its bound. A source with three listings
+ * still queued is 99.91% cleared, and a column reading "100%" over a queue that
+ * is not empty is the one number on this page nobody would think to check.
+ */
+export function formatPercent(percent) {
+  if (percent === null || percent === undefined) return "—";
+  if (percent >= 100) return "100%";
+  if (percent > 99) return "99%";
+  if (percent <= 0) return "0%";
+  if (percent < 0.1) return "<0.1%";
+  return percent < 10 ? `${percent.toFixed(1)}%` : `${Math.round(percent)}%`;
+}
+
 /* -- overview -------------------------------------------------------------- */
 
 async function overviewPanel(panel, { t, app }) {
@@ -106,33 +147,43 @@ async function overviewPanel(panel, { t, app }) {
   }
 
   const { language } = app.get();
-  replace(panel, [statStrip(stats, { t, language }), sourcesTable(sources, { t, language })]);
+  replace(panel, [statStrip(stats, { t }), sourcesTable(sources, { t, language })]);
   return null;
 }
 
-function statStrip(stats, { t, language }) {
+function statStrip(stats, { t }) {
   const stale = stats.sources_stale > 0;
-  const lastRun = stats.last_run_at
-    ? formatDate(stats.last_run_at, language)
-    : t("manage.stat.never");
+
+  // Three of these are completeness rather than counts, and completeness is
+  // what the colours are for. Each is stated in the direction where more is
+  // better - a catalog 3% short of posters is 97% covered, and colouring the
+  // 3 would paint a healthy figure red.
+  const withPoster = stats.title_count - stats.titles_missing_poster;
+  const cleared = stats.reviews_total - stats.pending_reviews;
 
   const tiles = [
     { label: t("manage.stat.titles"), value: stats.title_count },
-    { label: t("manage.stat.scored"), value: stats.titles_with_score },
     {
-      label: t("manage.stat.missingPoster"),
-      value: stats.titles_missing_poster,
+      label: t("manage.stat.scored"),
+      percent: share(stats.titles_with_score, stats.title_count),
+      count: t("manage.stat.ofTitles", {
+        count: stats.titles_with_score,
+        total: stats.title_count,
+      }),
+    },
+    {
+      label: t("manage.stat.withPoster"),
+      percent: share(withPoster, stats.title_count),
+      count: t("manage.stat.missing", { count: stats.titles_missing_poster }),
+    },
+    {
+      label: t("manage.stat.queueCleared"),
+      percent: share(cleared, stats.reviews_total),
+      count: t("manage.stat.waiting", { count: stats.pending_reviews }),
     },
     { label: t("manage.stat.people"), value: stats.people_count },
     { label: t("manage.stat.available"), value: stats.titles_available },
     { label: t("manage.stat.offers"), value: stats.current_offers },
-    {
-      label: t("manage.stat.pending"),
-      value: stats.pending_reviews,
-      // A queue with anything in it is content missing from the catalog, so it
-      // is never merely informational.
-      warn: stats.pending_reviews > 0,
-    },
     {
       label: t("manage.stat.stale"),
       value: t("manage.staleOf", {
@@ -141,54 +192,97 @@ function statStrip(stats, { t, language }) {
       }),
       warn: stale,
     },
-    {
-      label: t("manage.stat.lastRun"),
-      value: lastRun,
-      warn: !stats.last_run_at,
-    },
   ];
 
   return el(
     "ul",
     { class: "stats" },
-    tiles.map((tile) =>
-      // A tile holding a date or a ratio is not a headline number, and set at
-      // the same size it wraps to three lines and stretches every tile in the
-      // row to match it.
-      el(
-        "li",
-        {
-          class: [
-            "stat",
-            tile.warn ? "stat--warn" : "",
-            typeof tile.value === "number" ? "" : "stat--text",
-          ]
-            .filter(Boolean)
-            .join(" "),
-        },
-        [
-          el("span", { class: "stat__value", text: String(tile.value) }),
-          el("span", { class: "stat__label", text: tile.label }),
-        ],
-      ),
-    ),
+    tiles.map((tile) => statTile(tile)),
+  );
+}
+
+function statTile(tile) {
+  const isPercent = tile.percent !== undefined;
+  // A tile holding a date or a ratio is not a headline number, and set at the
+  // same size it wraps to three lines and stretches every tile in the row.
+  const asText = !isPercent && typeof tile.value !== "number";
+
+  return el(
+    "li",
+    {
+      class: ["stat", tile.warn ? "stat--warn" : "", asText ? "stat--text" : ""]
+        .filter(Boolean)
+        .join(" "),
+    },
+    [
+      el("span", {
+        class: isPercent
+          ? `stat__value stat__value--${percentBand(tile.percent)}`
+          : "stat__value",
+        text: isPercent ? formatPercent(tile.percent) : String(tile.value),
+      }),
+      el("span", { class: "stat__label", text: tile.label }),
+      // The figure the percentage was taken from. A share with no numbers
+      // behind it is a number nobody can check.
+      tile.count ? el("span", { class: "stat__count", text: tile.count }) : null,
+    ],
   );
 }
 
 function sourcesTable(sources, { t, language }) {
-  const widest = Math.max(1, ...sources.map((source) => source.title_count));
+  const columns = [
+    t("manage.col.source"),
+    t("manage.col.titles"),
+    t("manage.col.poster"),
+    t("manage.col.score"),
+    t("manage.col.queue"),
+    t("manage.col.enriched"),
+    t("manage.source.lastSync"),
+    t("manage.source.enabled"),
+  ];
 
   return el("section", { class: "panel" }, [
     el("h2", { class: "panel__title", text: t("manage.sources") }),
+    // Its own scroller: eight columns do not fit a phone, and a table that
+    // widens the page makes every other panel scroll sideways with it.
     el(
-      "ul",
-      { class: "sources" },
-      sources.map((source) => sourceRow(source, { t, language, widest })),
+      "div",
+      { class: "table-scroll" },
+      el("table", { class: "sources" }, [
+        el(
+          "thead",
+          {},
+          el(
+            "tr",
+            {},
+            columns.map((name, index) =>
+              el("th", { scope: "col", class: index === 0 ? "" : "num", text: name }),
+            ),
+          ),
+        ),
+        el(
+          "tbody",
+          {},
+          sources.map((source) => sourceRow(source, { t, language })),
+        ),
+      ]),
     ),
   ]);
 }
 
-function sourceRow(source, { t, language, widest }) {
+/** A completeness cell: the share, coloured, with its own numerator beneath. */
+function percentCell(part, whole, { title = "" } = {}) {
+  const percent = share(part, whole);
+  return el("td", { class: "num", title }, [
+    el("span", {
+      class: `pct pct--${percentBand(percent)}`,
+      text: formatPercent(percent),
+    }),
+    percent === null ? null : el("span", { class: "pct__of", text: String(part) }),
+  ]);
+}
+
+function sourceRow(source, { t, language }) {
   // Three things can decide this - an operator, the config file, the plugin's
   // own default - and the row can honestly distinguish only the first from the
   // other two. It used to claim "from the config file" about sources the file
@@ -225,44 +319,34 @@ function sourceRow(source, { t, language, widest }) {
   });
 
   const badges = [
-    source.stale
-      ? el("span", {
-          class: "badge badge--warn",
-          text: t("manage.source.stale"),
-        })
-      : null,
+    source.stale ? el("span", { class: "badge badge--warn", text: t("manage.source.stale") }) : null,
     source.active ? null : el("span", { class: "badge", text: t("manage.source.retired") }),
-    source.pending_reviews
-      ? el("span", {
-          class: "badge badge--warn",
-          text: `${t("manage.source.pending")}: ${source.pending_reviews}`,
-        })
-      : null,
   ].filter(Boolean);
 
-  return el("li", { class: "source" }, [
-    el("div", { class: "source__main" }, [
+  // A parked listing is not one of this source's titles yet - it is a listing
+  // waiting to become one - so the share is of everything it has offered us.
+  const seen = source.title_count + source.pending_reviews;
+
+  return el("tr", {}, [
+    el("td", {}, [
       el("span", { class: "source__name", text: source.name }),
       el("span", { class: "source__key", text: source.key, dir: "ltr" }),
       ...badges,
     ]),
-    el("div", { class: "source__coverage" }, [
-      el("span", {
-        class: "source__bar",
-        style: {
-          "--fill": `${Math.round((source.title_count / widest) * 100)}%`,
-        },
-        "aria-hidden": "true",
-      }),
-      el("span", { class: "source__count", text: String(source.title_count) }),
-    ]),
-    el("span", {
-      class: "source__synced",
-      text: source.last_sync_at
-        ? formatDate(source.last_sync_at, language)
-        : t("manage.stat.never"),
+    el("td", { class: "num source__count", text: String(source.title_count) }),
+    percentCell(source.titles_with_poster, source.title_count),
+    percentCell(source.titles_with_score, source.title_count),
+    // Cleared rather than waiting, so more is better here as it is everywhere
+    // else in the row and one colour scale reads the same across all of them.
+    percentCell(source.title_count, seen, {
+      title: t("manage.source.waitingCount", { count: source.pending_reviews }),
     }),
-    el("div", { class: "source__switch" }, [toggle, status]),
+    percentCell(source.titles_enriched, source.title_count),
+    el("td", {
+      class: "num source__synced",
+      text: source.last_sync_at ? formatDate(source.last_sync_at, language) : t("manage.stat.never"),
+    }),
+    el("td", { class: "num" }, el("div", { class: "source__switch" }, [toggle, status])),
   ]);
 }
 

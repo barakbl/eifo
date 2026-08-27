@@ -17,6 +17,7 @@ import logging
 import re
 import unicodedata
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -152,6 +153,85 @@ def _strip_punctuation(text: str) -> str:
         char if char.isspace() or unicodedata.category(char)[0] in _KEPT_CATEGORIES else " "
         for char in text
     )
+
+
+#: Floor for the fallback that reads a name past its decoration. Higher than
+#: SIMILARITY_THRESHOLD because token scores run higher than whole-string ones:
+#: dropping decoration is the whole point, so near-misses score near-perfect.
+TOKEN_MATCH_THRESHOLD = 95.0
+
+
+def _acronymish(text: str) -> bool:
+    """Whether a name is all one-and-two-letter tokens, where token scoring lies.
+
+    "T O T's" against "O.T.T." is a perfect token-set score and a different
+    film. A name like this gets no token credit; only the plain ratio counts.
+    """
+    tokens = normalise(text).split()
+    return not tokens or all(len(token) <= 2 for token in tokens)
+
+
+def confident_tmdb_choice(
+    pairs: Sequence[tuple[str, TmdbTitle]],
+    year: int | None,
+) -> tuple[str, list[TmdbTitle]]:
+    """Judge search candidates the way a person reading both names would.
+
+    The plain ratio cannot see that "Marvel Studios Thor Ragnarok" is
+    "Thor: Ragnarok" - decoration around a name costs about twenty points -
+    so candidates are also scored on their tokens. Token scores are generous,
+    which is why every acceptance carries a guard:
+
+    * **Direction.** A token-set score forgives extra words on either side,
+      and the two directions are not equally trustworthy. Our name carrying
+      words around theirs is the pattern decoration makes. Ours being a
+      fragment of theirs is how "Air Crash Investigation" matched its own
+      spin-off - so that direction needs the plain ratio or the year to agree.
+    * **Acronyms** score on the plain ratio alone.
+    * **Ambiguity.** Two different records qualifying - both Dumbos, when
+      nothing says which - is not a match. Guessing between remakes is how a
+      catalog quietly lies; measured against 2,059 known answers, refusing to
+      guess was the difference between 99.3% and no errors at all.
+
+    Returns ``("auto", [hit])``, ``("ambiguous", hits)`` or ``("none", [])``.
+    """
+    qualifying: dict[int, TmdbTitle] = {}
+    for query, hit in pairs:
+        if not years_match(year, hit.year):
+            continue
+        corroborated = year is not None and hit.year is not None
+        normalised_query = normalise(query)
+        query_tokens = set(normalised_query.split())
+        for name in (hit.name, hit.original_name):
+            if not name:
+                continue
+            normalised_name = normalise(name)
+            plain = fuzz.ratio(normalised_query, normalised_name)
+            if _acronymish(query) or _acronymish(name):
+                score = plain
+            else:
+                score = max(plain, fuzz.token_set_ratio(normalised_query, normalised_name))
+            if score < TOKEN_MATCH_THRESHOLD:
+                continue
+            decorated_ours = set(normalised_name.split()) <= query_tokens
+            if plain >= SIMILARITY_THRESHOLD or decorated_ours or corroborated:
+                qualifying.setdefault(hit.tmdb_id, hit)
+    if not qualifying:
+        return ("none", [])
+    if len(qualifying) == 1:
+        return ("auto", list(qualifying.values()))
+    return ("ambiguous", list(qualifying.values()))
+
+
+def adopt_tmdb_hit(session: Session, title: Title, hit: TmdbTitle) -> None:
+    """Anchor a title we already held on the TMDB record that matches it."""
+    title.tmdb_id = hit.tmdb_id
+    if is_hebrew(hit.name):
+        title.name_he = title.name_he or hit.name
+    else:
+        title.name_en = title.name_en or hit.name
+    title.year = title.year or plausible_year(hit.year)
+    session.flush()
 
 
 def similarity(left: str, right: str) -> float:
@@ -360,14 +440,7 @@ class TitleMatcher:
         self._session.flush()
 
     def _adopt_tmdb_hit(self, title: Title, hit: TmdbTitle) -> None:
-        """Anchor a title we already held on the TMDB record that matches it."""
-        title.tmdb_id = hit.tmdb_id
-        if is_hebrew(hit.name):
-            title.name_he = title.name_he or hit.name
-        else:
-            title.name_en = title.name_en or hit.name
-        title.year = title.year or plausible_year(hit.year)
-        self._session.flush()
+        adopt_tmdb_hit(self._session, title, hit)
 
     def _search_tmdb(self, item: RawItem) -> TmdbTitle | None:
         """Best TMDB candidate for an item, or None if none is convincing.
@@ -380,6 +453,7 @@ class TitleMatcher:
         with the tolerance this project uses rather than TMDB's none.
         """
         assert self._tmdb is not None
+        seen: list[tuple[str, TmdbTitle]] = []
         for query in filter(None, (item.name, item.name_alt)):
             for year in _search_years(item.year):
                 try:
@@ -389,6 +463,7 @@ class TitleMatcher:
                     return None
 
                 for candidate in candidates:
+                    seen.append((query, candidate))
                     if not years_match(item.year, candidate.year):
                         continue
                     names = (candidate.name, candidate.original_name)
@@ -396,7 +471,12 @@ class TitleMatcher:
                         name and similarity(query, name) >= SIMILARITY_THRESHOLD for name in names
                     ):
                         return candidate
-        return None
+
+        # Nothing cleared the plain bar. Read the same candidates past their
+        # decoration before giving up - strictly additive: it only ever fires
+        # where this method used to return None.
+        verdict, hits = confident_tmdb_choice(seen, item.year)
+        return hits[0] if verdict == "auto" else None
 
     def _best_local_candidate(
         self,

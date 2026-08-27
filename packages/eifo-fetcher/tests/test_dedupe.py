@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session
 from eifo_core.enums import (
     AuthProvider,
     CreditRole,
-    ItemStatus,
     OfferType,
     RatingProvider,
     SourceKind,
@@ -236,9 +235,7 @@ class TestWhatMustSurviveAMerge:
         keeper = add_title(session, imdb_id="tt1")
         loser = add_title(session)
         user = add_user(session)
-        session.add(
-            UserItem(user_id=user.id, title_id=loser.id, status=ItemStatus.WATCHED, rating=9)
-        )
+        session.add(UserItem(user_id=user.id, title_id=loser.id, watched=True, rating=9))
         session.commit()
 
         merge_all(session)

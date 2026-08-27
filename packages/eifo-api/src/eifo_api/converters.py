@@ -266,7 +266,8 @@ def to_user(user: User) -> UserOut:
 def to_user_item(item: UserItem, *, title: Title | None = None) -> UserItemOut:
     return UserItemOut(
         title_id=item.title_id,
-        status=item.status,
+        want_to_watch=item.want_to_watch,
+        watched=item.watched,
         rating=item.rating,
         note=item.note,
         updated_at=item.updated_at,

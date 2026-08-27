@@ -719,6 +719,75 @@ img {
   font-family: var(--font-data);
 }
 
+/* Line art sized to the text beside it, and coloured by it. */
+.icon {
+  inline-size: 1em;
+  block-size: 1em;
+  flex: none;
+}
+
+/* -- list toggles on the poster ------------------------------------------- */
+
+/* The card is one anchor, so the toggles are a sibling laid over it and the
+   list item is what positions them. */
+.card-slot {
+  position: relative;
+}
+
+.card__actions {
+  position: absolute;
+  inset-block-start: var(--space-2);
+  inset-inline-end: var(--space-2);
+  display: flex;
+  gap: var(--space-1);
+  /* The card lifts on hover; these are not inside it, so they are lifted with
+     it rather than being left behind on the artwork. */
+  transition: transform var(--duration) var(--ease);
+}
+
+.card-slot:hover .card__actions {
+  transform: translateY(-3px);
+}
+
+/* Dark scrim rather than a themed surface: these sit on artwork, which is the
+   same brightness whichever theme the page is in. */
+.card-action {
+  display: grid;
+  place-items: center;
+  inline-size: 1.75rem;
+  block-size: 1.75rem;
+  padding: 0;
+  /* The icon is the whole button here, so it wants to be bigger than a glyph
+     sitting in a line of text would be. */
+  font-size: 1rem;
+  line-height: 1;
+  color: #fff;
+  background: rgb(0 0 0 / 0.55);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgb(255 255 255 / 0.25);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition:
+    background var(--duration) var(--ease),
+    color var(--duration) var(--ease);
+}
+
+.card-action:hover {
+  background: rgb(0 0 0 / 0.8);
+}
+
+/* In the list, and meant to be readable as such from across the grid without
+   hovering anything. */
+.card-action--on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.card-action--on:hover {
+  background: var(--accent);
+}
+
 /* -- score ---------------------------------------------------------------- */
 
 .score {
@@ -1115,7 +1184,8 @@ img {
     transition-duration: 0.01ms !important;
   }
 
-  .card:hover {
+  .card:hover,
+  .card-slot:hover .card__actions {
     transform: none;
   }
 }
@@ -1285,6 +1355,9 @@ img {
 }
 
 .toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--line);
   border-radius: var(--radius-pill);
@@ -1305,10 +1378,6 @@ img {
   background: var(--accent-quiet);
   border-color: var(--accent);
   color: var(--accent);
-}
-
-.toggle--on::before {
-  content: "✓ ";
 }
 
 .rating-select {

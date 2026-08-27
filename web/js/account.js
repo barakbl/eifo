@@ -12,10 +12,10 @@ import {
   RATING_MIN,
   WANT_TO_WATCH,
   WATCHED,
-  nextStatus,
   normalizeRating,
+  toggleList,
 } from "./items.js";
-import { el } from "./ui.js";
+import { el, icon } from "./ui.js";
 
 const RATINGS = Array.from({ length: RATING_MAX - RATING_MIN + 1 }, (_, i) => RATING_MIN + i);
 
@@ -124,14 +124,77 @@ export function titleActions({ titleId, items, t, onError, onChange }) {
   function paint() {
     const entry = items.get(titleId);
     container.replaceChildren(
-      statusButton(WANT_TO_WATCH, "item.wantToWatch", entry, t, commit),
-      statusButton(WATCHED, "item.watched", entry, t, commit),
+      statusButton(WANT_TO_WATCH, "item.wantToWatch", "bookmark", entry, t, commit),
+      statusButton(WATCHED, "item.watched", "eye", entry, t, commit),
       ratingControl(entry, t, commit),
     );
   }
 
   paint();
   return container;
+}
+
+/**
+ * The same two list toggles, sized for a poster in the grid.
+ *
+ * On the artwork rather than in the card's meta row: at two columns on a phone
+ * that row already carries the year and the score, and two more controls would
+ * push the whole grid taller for something most cards never use. Over the
+ * poster they cost no layout at all, and the state reads across the whole grid
+ * at once - which is the point of showing it out here.
+ *
+ * Always drawn, never on hover: a phone has no hover, and "have I seen this"
+ * that only appears when you reach for it is not an answer.
+ */
+export function cardActions({ titleId, items, t, onError }) {
+  const container = el("div", { class: "card__actions" });
+
+  function commit(patch) {
+    return commitItem(titleId, items, patch, { repaint: paint, onError });
+  }
+
+  function paint() {
+    const entry = items.get(titleId);
+    container.replaceChildren(
+      cardToggle(WANT_TO_WATCH, "item.wantToWatch", "bookmark", entry, t, commit),
+      cardToggle(WATCHED, "item.watched", "eye", entry, t, commit),
+    );
+  }
+
+  paint();
+  return container;
+}
+
+/**
+ * One poster toggle: the list's own icon, with on-or-off carried by the fill.
+ *
+ * The icon does not change when it is on. It names which list this is, and
+ * that does not stop being true once the title is on it - the amber says the
+ * rest. This is also why it is not a plus turning into a tick: that pair is
+ * one button in two states, and two of them side by side read as one control
+ * drawn twice rather than as two different lists.
+ */
+function cardToggle(list, key, iconName, entry, t, commit) {
+  const pressed = Boolean(entry?.[list]);
+  const label = t(key);
+
+  return el(
+    "button",
+    {
+      class: `card-action${pressed ? " card-action--on" : ""}`,
+      type: "button",
+      "aria-pressed": String(pressed),
+      "aria-label": label,
+      title: label,
+      onClick: (event) => {
+        // The button sits over a link that covers the whole card.
+        event.preventDefault();
+        event.stopPropagation();
+        commit(toggleList(entry, list));
+      },
+    },
+    icon(iconName),
+  );
 }
 
 /**
@@ -171,15 +234,20 @@ export function noteEditor({ titleId, items, t }) {
   ]);
 }
 
-function statusButton(status, key, entry, t, commit) {
-  const pressed = entry?.status === status;
-  return el("button", {
-    class: `toggle${pressed ? " toggle--on" : ""}`,
-    type: "button",
-    "aria-pressed": String(pressed),
-    text: t(key),
-    onClick: () => commit({ status: nextStatus(entry, status) }),
-  });
+/* The same icon as the poster toggle, beside the words that name it. Seeing
+   the two together here is what teaches the icon out in the grid. */
+function statusButton(list, key, iconName, entry, t, commit) {
+  const pressed = Boolean(entry?.[list]);
+  return el(
+    "button",
+    {
+      class: `toggle${pressed ? " toggle--on" : ""}`,
+      type: "button",
+      "aria-pressed": String(pressed),
+      onClick: () => commit(toggleList(entry, list)),
+    },
+    [icon(iconName), el("span", { text: t(key) })],
+  );
 }
 
 function ratingControl(entry, t, commit) {

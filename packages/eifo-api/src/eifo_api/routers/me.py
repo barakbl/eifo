@@ -84,15 +84,33 @@ def list_my_items(
     session: SessionDep,
     status: Annotated[ItemStatus | None, Query()] = None,
     rated: Annotated[bool | None, Query(description="Only titles you have rated")] = None,
+    title_ids: Annotated[
+        list[int] | None,
+        Query(description="Only these titles. For asking about a page of the catalog."),
+    ] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
 ) -> Page[UserItemOut]:
-    """Your entries, newest first, each carrying the title card to render it."""
+    """Your entries, newest first, each carrying the title card to render it.
+
+    ``title_ids`` answers a different question from the rest: not "what is on my
+    list" but "which of these am I already keeping". A grid showing a page of
+    the catalog asks about that page, so the cost of the answer stays the size
+    of the screen rather than the size of the list.
+    """
     filtered = select(UserItem).where(UserItem.user_id == principal.user.id)
     if status is not None:
-        filtered = filtered.where(UserItem.status == status)
+        # Naming a list asks whether the title is on it, not whether it is on
+        # that one and no other: something both watched and worth rewatching
+        # answers to either name.
+        column = UserItem.watched if status is ItemStatus.WATCHED else UserItem.want_to_watch
+        filtered = filtered.where(column)
     if rated:
         filtered = filtered.where(UserItem.rating.is_not(None))
+    if title_ids is not None:
+        # Capped at a page: the parameter exists to ask about what is on screen,
+        # and an unbounded IN list is a query somebody else writes for us.
+        filtered = filtered.where(UserItem.title_id.in_(title_ids[:MAX_PAGE_SIZE]))
 
     total = session.scalar(select(func.count()).select_from(filtered.subquery())) or 0
     items = list(
@@ -138,8 +156,12 @@ def upsert_my_item(
         session.add(item)
 
     changes = body.model_dump(exclude_unset=True)
-    if "status" in changes:
-        item.status = changes["status"]
+    # Each list is its own field, so setting one leaves the other exactly as it
+    # was. A null means "take it off that list", not "clear both".
+    if "want_to_watch" in changes:
+        item.want_to_watch = bool(changes["want_to_watch"])
+    if "watched" in changes:
+        item.watched = bool(changes["watched"])
     if "rating" in changes:
         item.rating = changes["rating"]
     if "note" in changes:

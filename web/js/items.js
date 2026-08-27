@@ -18,17 +18,21 @@ export const NOTE_MAX_LENGTH = 2000;
 
 /** Whether an entry still says anything worth keeping. */
 export function isEmptyEntry(entry) {
-  return !entry || (!entry.status && entry.rating == null && !entry.note);
+  return (
+    !entry ||
+    (!entry[WANT_TO_WATCH] && !entry[WATCHED] && entry.rating == null && !entry.note)
+  );
 }
 
 /**
- * What pressing a list button means.
+ * What pressing a list button means: on that list, or off it.
  *
- * Pressing the list a title is already in takes it out; pressing the other one
- * moves it. Two buttons, three states, no third button.
+ * Only the list that was pressed. The two are not opposites - something seen
+ * and worth seeing again belongs on both - so the other one is not this
+ * button's business, and the patch never mentions it.
  */
-export function nextStatus(entry, pressed) {
-  return entry?.status === pressed ? null : pressed;
+export function toggleList(entry, list) {
+  return { [list]: !entry?.[list] };
 }
 
 /** Clamp a rating to the range the server will accept, or null to clear it. */
@@ -42,7 +46,8 @@ export function normalizeRating(value) {
 function merged(previous, patch, titleId) {
   return {
     title_id: titleId,
-    status: previous?.status ?? null,
+    [WANT_TO_WATCH]: previous?.[WANT_TO_WATCH] ?? false,
+    [WATCHED]: previous?.[WATCHED] ?? false,
     rating: previous?.rating ?? null,
     note: previous?.note ?? null,
     ...patch,
@@ -74,6 +79,17 @@ export function createItemStore(entries = []) {
     },
 
     replaceAll,
+
+    /**
+     * Add entries without dropping the ones already held.
+     *
+     * The grid asks about one page of the catalog at a time, and scrolling on
+     * asks about the next: replacing would blank the toggles on everything
+     * already scrolled past.
+     */
+    merge(next) {
+      for (const entry of next) byTitle.set(Number(entry.title_id), entry);
+    },
 
     clear() {
       byTitle.clear();

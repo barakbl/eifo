@@ -22,6 +22,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -32,7 +33,6 @@ from eifo_core.enums import (
     EnrichOutcome,
     FetchPhase,
     FetchStatus,
-    ItemStatus,
     MatchDecision,
     OfferType,
     RatingProvider,
@@ -543,8 +543,11 @@ class UserSession(Base):
 class UserItem(Base):
     """What one user has to say about one title.
 
-    ``status`` is nullable because rating or noting a title without filing it
-    under a list is a real thing people do.
+    The two lists are separate flags rather than one status, because they are
+    not opposites: something watched and worth watching again belongs on both,
+    and a single column made that unsayable. Both false is the ordinary case -
+    rating or noting a title without filing it anywhere is a real thing people
+    do, and so is being in neither list.
     """
 
     __tablename__ = "user_items"
@@ -558,14 +561,18 @@ class UserItem(Base):
             f"note IS NULL OR length(note) <= {NOTE_MAX_LENGTH}",
             name="ck_user_items_note_length",
         ),
-        Index("ix_user_items_user_status", "user_id", "status"),
+        # One index per list: the two are queried separately, and a title can
+        # be in both, so there is no single column to sort them under.
+        Index("ix_user_items_user_watched", "user_id", "watched"),
+        Index("ix_user_items_user_want", "user_id", "want_to_watch"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     title_id: Mapped[int] = mapped_column(ForeignKey("titles.id", ondelete="CASCADE"))
 
-    status: Mapped[ItemStatus | None] = mapped_column(_enum(ItemStatus, "item_status"))
+    want_to_watch: Mapped[bool] = mapped_column(default=False, server_default=false())
+    watched: Mapped[bool] = mapped_column(default=False, server_default=false())
     rating: Mapped[int | None]
     #: Private always, including on a public profile - a memo, not a review.
     note: Mapped[str | None] = mapped_column(Text)
@@ -578,10 +585,15 @@ class UserItem(Base):
     @property
     def is_empty(self) -> bool:
         """Whether nothing is left worth keeping a row for."""
-        return self.status is None and self.rating is None and not self.note
+        return not self.want_to_watch and not self.watched and self.rating is None and not self.note
 
     def __repr__(self) -> str:
-        return f"<UserItem user={self.user_id} title={self.title_id} {self.status}>"
+        lists = " ".join(
+            name
+            for name, on in (("want_to_watch", self.want_to_watch), ("watched", self.watched))
+            if on
+        )
+        return f"<UserItem user={self.user_id} title={self.title_id} {lists or '-'}>"
 
 
 class FetchRun(Base):

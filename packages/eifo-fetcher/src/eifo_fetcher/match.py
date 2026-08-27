@@ -368,10 +368,13 @@ class TitleMatcher:
 
     def _by_external_id(self, item: RawItem) -> MatchResult | None:
         if item.tmdb_id is not None:
-            title = self._session.scalar(select(Title).where(Title.tmdb_id == item.tmdb_id))
+            # With the kind, always. TMDB numbers films and series separately,
+            # so movie 105 and series 105 are different works - and asking for
+            # the number alone answered with whichever arrived first.
+            title = self._by_tmdb_id(item.kind, item.tmdb_id)
             if title is not None:
                 return MatchResult(title=title, method=MatchMethod.EXTERNAL_ID)
-            aliased = self._by_alias(item.tmdb_id)
+            aliased = self._by_alias(item.kind, item.tmdb_id)
             if aliased is not None:
                 return MatchResult(title=aliased, method=MatchMethod.ALIAS)
         if item.imdb_id:
@@ -407,7 +410,7 @@ class TitleMatcher:
         if hit is None:
             return None
 
-        existing = self._session.scalar(select(Title).where(Title.tmdb_id == hit.tmdb_id))
+        existing = self._by_tmdb_id(hit.kind, hit.tmdb_id)
         if existing is not None:
             return MatchResult(title=existing, method=MatchMethod.TMDB)
 
@@ -422,9 +425,15 @@ class TitleMatcher:
 
         return MatchResult(title=self._create_from_tmdb(item, hit), method=MatchMethod.TMDB)
 
-    def _by_alias(self, tmdb_id: int) -> Title | None:
+    def _by_tmdb_id(self, kind: TitleKind, tmdb_id: int) -> Title | None:
+        """The title holding this id *in its own namespace*."""
+        return self._session.scalar(
+            select(Title).where(Title.type == kind, Title.tmdb_id == tmdb_id)
+        )
+
+    def _by_alias(self, kind: TitleKind, tmdb_id: int) -> Title | None:
         """The title a known-duplicate TMDB id belongs to."""
-        alias = self._session.get(TmdbAlias, tmdb_id)
+        alias = self._session.get(TmdbAlias, (kind, tmdb_id))
         return None if alias is None else self._session.get(Title, alias.title_id)
 
     def _remember_alias(self, tmdb_id: int, title: Title) -> None:
@@ -432,11 +441,14 @@ class TitleMatcher:
 
         Without it the merge undoes itself: the feed offers the same id
         tomorrow, nothing owns it, and a new title appears.
+
+        Filed under the title's own kind: an alias keyed on the bare number
+        would shadow the other namespace exactly as a title used to.
         """
-        if self._session.get(TmdbAlias, tmdb_id) is not None:
+        if self._session.get(TmdbAlias, (title.type, tmdb_id)) is not None:
             return
         logger.info("tmdb %s is a second record of title %s", tmdb_id, title.id)
-        self._session.add(TmdbAlias(tmdb_id=tmdb_id, title_id=title.id))
+        self._session.add(TmdbAlias(type=title.type, tmdb_id=tmdb_id, title_id=title.id))
         self._session.flush()
 
     def _adopt_tmdb_hit(self, title: Title, hit: TmdbTitle) -> None:

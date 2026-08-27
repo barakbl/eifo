@@ -25,7 +25,7 @@ from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.fts import ensure_search_triggers
 from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
 from eifo_core.settings import MissingSettingsError, Settings, get_settings
-from eifo_fetcher import review
+from eifo_fetcher import rematch, review
 from eifo_fetcher.dedupe import (
     apply_merges,
     dangling_references,
@@ -44,6 +44,7 @@ from eifo_fetcher.registry import (
 from eifo_fetcher.runner import enrich_all, fetch_images, repair_names, sync_all
 from eifo_fetcher.runs import close_abandoned_runs
 from eifo_fetcher.sources.base import SourceInfo
+from eifo_fetcher.tmdb import TmdbClient
 
 EXIT_OK = 0
 EXIT_FATAL = 1
@@ -104,6 +105,16 @@ def build_parser() -> argparse.ArgumentParser:
         "repair-names", help="re-ask TMDB for names stored in the wrong script"
     )
     repair.add_argument("--limit", type=int, default=None, help="stop after N titles")
+
+    rematch = subcommands.add_parser(
+        "rematch", help="give titles that never matched TMDB another, smarter try"
+    )
+    rematch.add_argument(
+        "--apply",
+        action="store_true",
+        help="write the matches; without it the plan is only printed",
+    )
+    rematch.add_argument("--limit", type=int, default=None, help="stop after N titles")
 
     dedupe = subcommands.add_parser("dedupe", help="merge titles the catalog holds twice")
     dedupe.add_argument(
@@ -241,6 +252,54 @@ def _cmd_repair_names(args: argparse.Namespace, settings: Settings) -> int:
     with single_flight(settings), _database(settings) as session_factory, HttpClient() as http:
         tally = repair_names(session_factory, settings, http=http, limit=args.limit)
     return EXIT_PARTIAL if tally.errors else EXIT_OK
+
+
+def _cmd_rematch(args: argparse.Namespace, settings: Settings) -> int:
+    """Show which identity-less titles now match, and match them only when asked.
+
+    Adopting an id and folding a duplicate are both irreversible in spirit -
+    enrichment immediately builds on whatever this decides - so the plan prints
+    by default and ``--apply`` is the second asking, exactly like dedupe.
+    """
+    settings.require("tmdb_api_key")
+    assert settings.tmdb_api_key is not None
+    with (
+        single_flight(settings),
+        _database(settings) as session_factory,
+        HttpClient() as http,
+        session_factory() as session,
+    ):
+        tmdb = TmdbClient(
+            http,
+            settings.tmdb_api_key.get_secret_value(),
+            rate_limit_rps=settings.tmdb.rate_limit_rps,
+        )
+        plan = rematch.plan_rematch(session, tmdb, limit=args.limit)
+
+        for line in rematch.describe(plan):
+            print(line)
+        print(
+            f"\n{len(plan.adoptions)} would adopt an id, {len(plan.folds)} would fold "
+            f"into a title we already hold, {len(plan.ambiguous)} ambiguous (left alone), "
+            f"{plan.junk_skipped} junk-named skipped, {plan.unmatched} with no confident match"
+        )
+
+        if not args.apply:
+            if plan.adoptions or plan.folds:
+                print("\nnothing written; pass --apply to match")
+            for failure in plan.errors:
+                logger.error("%s", failure)
+            return EXIT_PARTIAL if plan.errors else EXIT_OK
+
+        tally = rematch.apply_rematch(session, plan)
+        print(
+            f"adopted {len(plan.adoptions)}; folded {tally.groups} duplicate(s), moving "
+            f"{tally.availability_moved} offer(s) and {tally.ratings_moved} rating(s); "
+            f"enrichment will revisit all of them on its next run"
+        )
+        for failure in [*plan.errors, *tally.errors]:
+            logger.error("%s", failure)
+        return EXIT_PARTIAL if plan.errors or tally.errors else EXIT_OK
 
 
 def _cmd_dedupe(args: argparse.Namespace, settings: Settings) -> int:
@@ -512,6 +571,7 @@ _COMMANDS = {
     "enrich": _cmd_enrich,
     "images": _cmd_images,
     "repair-names": _cmd_repair_names,
+    "rematch": _cmd_rematch,
     "dedupe": _cmd_dedupe,
     "all": _cmd_all,
     "sources": _cmd_sources,

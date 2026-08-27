@@ -414,3 +414,50 @@ class TestOutputCarriesHebrew:
         cli._use_utf8_for_output()
 
         assert _is_utf8(err)
+
+
+class TestRematchCommand:
+    """The CLI face of the backfill: plan by default, writes only when asked."""
+
+    def test_the_plan_prints_and_writes_nothing(
+        self,
+        migrated: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setenv("EIFO_TMDB_API_KEY", "test-key")
+        get_settings.cache_clear()
+
+        from eifo_core.enums import TitleKind
+        from eifo_fetcher import rematch as rematch_module
+        from eifo_fetcher.rematch import Adoption, RematchPlan
+        from eifo_fetcher.tmdb import TmdbTitle
+
+        plan = RematchPlan(
+            adoptions=[
+                Adoption(
+                    title=Title(id=7, type=TitleKind.MOVIE, name_en="Marvel Studios Thor Ragnarok"),
+                    hit=TmdbTitle(
+                        tmdb_id=284053,
+                        kind=TitleKind.MOVIE,
+                        name="תור: ראגנארוק",
+                        original_name="Thor: Ragnarok",
+                        year=2017,
+                        overview=None,
+                        poster_path=None,
+                    ),
+                )
+            ],
+            unmatched=3,
+        )
+        monkeypatch.setattr(rematch_module, "plan_rematch", lambda session, tmdb, limit=None: plan)
+        applied = []
+        monkeypatch.setattr(rematch_module, "apply_rematch", lambda session, p: applied.append(p))
+
+        assert main(["rematch"]) == EXIT_OK
+
+        out = capsys.readouterr().out
+        assert "adopt  #7" in out
+        assert "tmdb 284053" in out
+        assert "nothing written; pass --apply" in out
+        assert applied == []

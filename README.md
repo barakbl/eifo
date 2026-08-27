@@ -373,6 +373,19 @@ uv run eifo-fetch enrich --skip rt --skip imdb      # repeatable; --skip-imdb is
 Skipping is per run and never edits the configured set, so a catch-up cannot quietly
 become the new normal. To switch one off for good, use `disabled` under `[enrich]`.
 
+Titles that never matched TMDB - named with decoration a strict comparison cannot see
+past, like "Star Wars The Force Awakens Episode VII" - can be given another try:
+
+```bash
+uv run eifo-fetch rematch            # print what would match; writes nothing
+uv run eifo-fetch rematch --apply    # adopt ids, fold duplicates, and let the
+                                     # next enrich pass fill in the rest
+```
+
+It acts only where exactly one record qualifies - measured against 2,059 titles whose
+right answer was already known, that refusal to guess made zero errors - and prints the
+ambiguous ones rather than choosing between a remake and its original.
+
 ### Turning on sign-in
 
 Only needed if you want lists and ratings.

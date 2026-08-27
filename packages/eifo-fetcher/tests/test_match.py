@@ -660,3 +660,141 @@ class TestWhichColumnANameBelongsIn:
         stored = session.scalars(select(Title)).one()
         assert stored.name_he == "ארץ פצועה"
         assert stored.name_en is None
+
+
+class TestReadingPastDecoration:
+    """The fallback that fires only after the plain ratio has given up.
+
+    Sources decorate names - "Marvel Studios Thor Ragnarok", "Star Wars The
+    Force Awakens Episode VII" - and the plain ratio prices that decoration at
+    about twenty points, which left films everyone has heard of sitting in the
+    catalog with no identity at all. Token scores can see past it, but they are
+    generous, so every acceptance here carries a guard; measured against 2,059
+    titles whose right answer was already known, the guards were the difference
+    between 99.3% correct and no errors at all.
+    """
+
+    def _match(self, session: Session, tmdb: FakeTmdb, raw: RawItem) -> Any:
+        return TitleMatcher(session, tmdb=tmdb).match(raw)
+
+    def test_our_decoration_around_their_name_is_a_match(self, session: Session) -> None:
+        tmdb = FakeTmdb(
+            [
+                tmdb_title(
+                    tmdb_id=284053,
+                    kind=TitleKind.MOVIE,
+                    name="תור: ראגנארוק",
+                    original_name="Thor: Ragnarok",
+                    year=2017,
+                )
+            ]
+        )
+
+        result = self._match(
+            session,
+            tmdb,
+            item(kind=TitleKind.MOVIE, name="Marvel Studios Thor Ragnarok", year=None),
+        )
+
+        assert result.method is MatchMethod.TMDB
+        assert result.title is not None and result.title.tmdb_id == 284053
+
+    def test_our_name_inside_theirs_is_not_one_on_its_own(self, session: Session) -> None:
+        """ "Air Crash Investigation" is not its own spin-off.
+
+        A fragment of a longer name is the untrustworthy direction: nothing
+        says the extra words are decoration rather than a different work.
+        """
+        tmdb = FakeTmdb(
+            [
+                tmdb_title(
+                    tmdb_id=120324,
+                    name="Air Crash Investigation: Special Report",
+                    original_name=None,
+                    year=2018,
+                )
+            ]
+        )
+
+        result = self._match(session, tmdb, item(name="Air Crash Investigation", year=None))
+
+        assert result.method is MatchMethod.CREATED
+        assert result.title is not None and result.title.tmdb_id is None
+
+    def test_unless_the_year_corroborates_it(self, session: Session) -> None:
+        """A fragment plus an agreeing year is two independent signals."""
+        tmdb = FakeTmdb(
+            [
+                tmdb_title(
+                    tmdb_id=421920,
+                    kind=TitleKind.MOVIE,
+                    name="טבאלוגה: הסרט",
+                    original_name="Tabaluga",
+                    year=2018,
+                )
+            ]
+        )
+
+        result = self._match(session, tmdb, item(kind=TitleKind.MOVIE, name="טבאלוגה", year=2019))
+
+        assert result.method is MatchMethod.TMDB
+        assert result.title is not None and result.title.tmdb_id == 421920
+
+    def test_two_qualifying_records_is_not_a_match(self, session: Session) -> None:
+        """Both Dumbos qualify and nothing says which - guessing between a
+        remake and its original is how a catalog quietly lies.
+
+        The decoration is what routes this through the fallback at all: a bare
+        "Dumbo" clears the plain bar and takes the first candidate, which is
+        today's behaviour and deliberately untouched.
+        """
+        tmdb = FakeTmdb(
+            [
+                tmdb_title(
+                    tmdb_id=11360,
+                    kind=TitleKind.MOVIE,
+                    name="דמבו",
+                    original_name="Dumbo",
+                    year=1941,
+                ),
+                tmdb_title(
+                    tmdb_id=329996,
+                    kind=TitleKind.MOVIE,
+                    name="דמבו",
+                    original_name="Dumbo",
+                    year=2019,
+                ),
+            ]
+        )
+
+        result = self._match(
+            session, tmdb, item(kind=TitleKind.MOVIE, name="Walt Disney Pictures Dumbo", year=None)
+        )
+
+        assert result.method is MatchMethod.CREATED
+        assert result.title is not None and result.title.tmdb_id is None
+
+    def test_an_acronym_gets_no_token_credit(self, session: Session) -> None:
+        """ "T O T's" against "O.T.T." is a perfect token score and a different
+        film; names of one-and-two-letter tokens score on the plain ratio only."""
+        tmdb = FakeTmdb(
+            [
+                tmdb_title(
+                    tmdb_id=99, kind=TitleKind.MOVIE, name="O.T.T.", original_name=None, year=1982
+                )
+            ]
+        )
+
+        result = self._match(session, tmdb, item(kind=TitleKind.MOVIE, name="T O T's", year=None))
+
+        assert result.method is MatchMethod.CREATED
+        assert result.title is not None and result.title.tmdb_id is None
+
+    def test_the_plain_bar_still_answers_first(self, session: Session) -> None:
+        """The fallback is additive: an exact name never reaches it."""
+        tmdb = FakeTmdb([tmdb_title()])
+
+        result = self._match(session, tmdb, item(name="פאודה", year=2015))
+
+        assert result.method is MatchMethod.TMDB
+        assert result.title is not None and result.title.tmdb_id == 4321

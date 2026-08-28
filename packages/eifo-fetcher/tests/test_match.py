@@ -610,11 +610,24 @@ class TestStats:
 
 
 class TestTmdbDuplicatesItsOwnRecords:
-    """TMDB carries the same work twice, and offers both ids every night."""
+    """TMDB does carry the same work twice - and a name is not how you tell.
 
-    def test_a_second_record_of_a_title_we_hold_is_not_a_new_title(self, session: Session) -> None:
-        """The Pacific arrived twice from one source, twenty-four seconds apart."""
-        held = Title(type=TitleKind.SERIES, name_en="The Pacific", year=2010, tmdb_id=16997)
+    This used to fold an unowned id into any stored title whose name matched
+    after normalise(), which strips the leading article: "The Strays" and
+    "Strays" are one string, and so are "An Intrusion" and "Intrusion". Sampled
+    against IMDb ids, 39 of 40 aliases the rule had written joined two
+    genuinely different films. The offer went to the wrong title with them, and
+    an alias is permanent - the id resolves there every night afterwards.
+
+    So the fold now needs the candidate to hold no id of its own, which is the
+    rule the TMDB-search path a few lines below already applies. Two records
+    that really are one work still merge; they merge in dedupe, which weighs
+    more than a name and writes the alias itself as part of the merge.
+    """
+
+    def test_a_second_record_folds_into_a_title_holding_no_id(self, session: Session) -> None:
+        """The case the alias was built for: we hold the work, TMDB named it twice."""
+        held = Title(type=TitleKind.SERIES, name_en="The Pacific", year=2010)
         session.add(held)
         session.flush()
 
@@ -626,7 +639,7 @@ class TestTmdbDuplicatesItsOwnRecords:
 
     def test_the_losing_id_is_remembered(self, session: Session) -> None:
         """Or the merge undoes itself: the feed offers that id again tomorrow."""
-        held = Title(type=TitleKind.SERIES, name_en="The Pacific", year=2010, tmdb_id=16997)
+        held = Title(type=TitleKind.SERIES, name_en="The Pacific", year=2010)
         session.add(held)
         session.flush()
         TitleMatcher(session).match(item(name="The Pacific", year=2010, tmdb_id=327352))
@@ -635,7 +648,7 @@ class TestTmdbDuplicatesItsOwnRecords:
         assert alias is not None and alias.title_id == held.id
 
     def test_the_alias_resolves_on_the_next_sync(self, session: Session) -> None:
-        held = Title(type=TitleKind.SERIES, name_en="The Pacific", year=2010, tmdb_id=16997)
+        held = Title(type=TitleKind.SERIES, name_en="The Pacific", year=2010)
         session.add(held)
         session.flush()
         matcher = TitleMatcher(session)
@@ -647,15 +660,35 @@ class TestTmdbDuplicatesItsOwnRecords:
         assert again.method is MatchMethod.ALIAS
         assert len(session.scalars(select(Title)).all()) == 1
 
-    def test_a_year_apart_is_still_the_same_record(self, session: Session) -> None:
-        """Hunters was 2020 under one id and 2021 under the other."""
-        held = Title(type=TitleKind.SERIES, name_en="Hunters", year=2020, tmdb_id=79622)
+    def test_a_title_that_already_has_an_id_is_not_folded_into(self, session: Session) -> None:
+        """Two ids on two records is TMDB saying these are two works.
+
+        "The Strays" (2023) was folded into "Strays" (2023) - a British thriller
+        into a talking-dog comedy - because the article is what normalise()
+        throws away.
+        """
+        comedy = Title(type=TitleKind.MOVIE, name_en="Strays", year=2023, tmdb_id=912908)
+        session.add(comedy)
+        session.flush()
+
+        result = TitleMatcher(session).match(
+            item(kind=TitleKind.MOVIE, name="The Strays", year=2023, tmdb_id=1063422)
+        )
+
+        assert result.title is not comedy
+        assert result.method is MatchMethod.TMDB
+        assert session.scalars(select(TmdbAlias)).all() == []
+
+    def test_the_same_id_arriving_again_is_not_an_alias_of_itself(self, session: Session) -> None:
+        """A title already holding the id is matched by it, not folded into."""
+        held = Title(type=TitleKind.SERIES, name_en="The Pacific", year=2010, tmdb_id=16997)
         session.add(held)
         session.flush()
 
-        result = TitleMatcher(session).match(item(name="Hunters", year=2021, tmdb_id=126679))
+        result = TitleMatcher(session).match(item(name="The Pacific", year=2010, tmdb_id=16997))
 
-        assert result.method is MatchMethod.ALIAS
+        assert result.title is held
+        assert result.method is MatchMethod.EXTERNAL_ID
 
     def test_a_merely_similar_name_is_left_as_its_own_title(self, session: Session) -> None:
         """An item carrying its own id is asserting an identity, and TMDB is usually right."""

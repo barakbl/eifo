@@ -691,6 +691,47 @@ class TestSuggest:
 
         assert "Fauda" in [item["name_en"] for item in body["titles"]]
 
+    def test_a_suggestion_is_narrowed_the_way_the_grid_is(
+        self, client: TestClient, catalog: Seeded
+    ) -> None:
+        """A suggestion is a preview of a result, so it takes the same filters.
+
+        Offered without them, the list advertised titles the grid then said did
+        not exist: "batman" with one service selected suggested seven of them
+        over an empty catalog.
+        """
+        wide = client.get("/api/v1/suggest", params={"q": "fau"}).json()
+        assert "Fauda" in [item["name_en"] for item in wide["titles"]]
+
+        narrow = client.get(
+            "/api/v1/suggest", params={"q": "fau", "sources": "no_such_service"}
+        ).json()
+
+        assert narrow["titles"] == []
+
+    def test_the_two_agree_under_the_same_filter(self, client: TestClient, catalog: Seeded) -> None:
+        """Whatever the filter, the dropdown cannot offer what the grid denies."""
+        params = {"q": "fau", "sources": "no_such_service"}
+
+        listed = client.get("/api/v1/titles", params=params).json()
+        suggested = client.get("/api/v1/suggest", params=params).json()
+
+        assert listed["total"] == 0
+        assert suggested["titles"] == []
+
+    def test_people_are_not_narrowed_by_a_service(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """A director is not on a streaming service; filtering them by one would
+        answer a different question from the one being asked."""
+        self._people(session_factory, catalog)
+
+        body = client.get(
+            "/api/v1/suggest", params={"q": "gal", "sources": "no_such_service"}
+        ).json()
+
+        assert body["people"]
+
     def test_people_can_be_found_at_all(
         self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
     ) -> None:

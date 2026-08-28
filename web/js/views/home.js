@@ -158,7 +158,13 @@ export function createHomeView({ mount, app, router, items }) {
     }
 
     async function load({ reset = false } = {}) {
-      if (state.loading || (state.done && !reset)) return;
+      // A new search always goes, even with one in flight. It used to be turned
+      // away for exactly as long as a request took, while apply() had already
+      // cleared the results, changed the filters and rewritten the URL - so the
+      // address bar said one thing, the grid showed another, and nothing was
+      // pending to reconcile them. Only scrolling for the next page defers,
+      // which is what state.loading is really guarding.
+      if (!reset && (state.loading || state.done)) return;
 
       state.loading = true;
       state.error = null;

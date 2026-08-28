@@ -5,6 +5,8 @@
  * strings, rejected promises and undefined.
  */
 
+import { filtersToParams } from "./format.js";
+
 const BASE = "/api/v1";
 const CSRF_HEADER = "X-CSRF-Token";
 
@@ -112,8 +114,20 @@ export function getPerson(personId, options) {
   return request(`/people/${encodeURIComponent(personId)}`, options);
 }
 
-export function suggest(q, options) {
-  return request(`/suggest?q=${encodeURIComponent(q)}`, options);
+/**
+ * Search-as-you-type, narrowed the way the grid behind it is narrowed.
+ *
+ * A suggestion is a preview of a result, so it takes the same filters. Asked
+ * without them the list offered titles the grid then reported did not exist -
+ * "batman" with one service selected suggested seven of them above an empty
+ * catalog. `q` comes from the box rather than the filters, which hold whatever
+ * the last search wrote.
+ */
+export function suggest(q, filters, options) {
+  const params = filtersToParams({ ...(filters ?? {}), q: "" });
+  params.delete("q");
+  params.set("q", q);
+  return request(`/suggest?${params}`, options);
 }
 
 export function listGenres(options) {

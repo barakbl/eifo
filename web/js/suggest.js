@@ -6,6 +6,8 @@
  */
 
 import { suggest as fetchSuggestions } from "./api.js";
+import { paramsToFilters } from "./format.js";
+import { parseHash } from "./router.js";
 import { el, replace } from "./ui.js";
 
 /**
@@ -111,7 +113,11 @@ export function createSuggest({ input, router, app }) {
     inFlight = new AbortController();
 
     try {
-      const payload = await fetchSuggestions(query, { signal: inFlight.signal });
+      // The filters live in the URL, which the grid keeps current - so this
+      // reads them there rather than being handed them, and the two cannot
+      // drift into suggesting titles the grid would not show.
+      const filters = paramsToFilters(parseHash(window.location.hash).search);
+      const payload = await fetchSuggestions(query, filters, { signal: inFlight.signal });
       // Keystrokes outrun round trips: an answer to a question that has since
       // changed would replace a newer one.
       if (payload.query !== input.value.trim()) return;

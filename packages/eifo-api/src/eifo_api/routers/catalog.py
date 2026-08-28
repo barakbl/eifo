@@ -215,11 +215,25 @@ def list_sources(session: SessionDep) -> list[SourceOut]:
 SUGGEST_TITLES = 7
 SUGGEST_PEOPLE = 3
 
+#: How many ranked rowids to read before narrowing to the filtered catalog, as
+#: a multiple of the number wanted, and the ceiling on that. Enough that a
+#: filter as narrow as one service still fills the list, small enough that the
+#: read stays a dropdown's worth of work.
+SUGGEST_OVERREAD = 40
+SUGGEST_MAX_SCANNED = 400
+
 
 @router.get("/suggest", response_model=Suggestions, summary="Search-as-you-type")
 def suggest(
     session: SessionDep,
     q: Annotated[str, Query(min_length=1, max_length=100)],
+    sources: Annotated[str | None, Query(description="Comma-separated source keys")] = None,
+    available: Annotated[AvailabilityFilter, Query()] = AvailabilityFilter.CURRENT,
+    type: Annotated[TitleKind | None, Query()] = None,
+    genres: Annotated[str | None, Query(description="Comma-separated genre ids")] = None,
+    year_min: Annotated[int | None, Query(ge=1880, le=2200)] = None,
+    year_max: Annotated[int | None, Query(ge=1880, le=2200)] = None,
+    score_min: Annotated[int | None, Query(ge=0, le=100)] = None,
     limit: Annotated[int, Query(ge=1, le=20)] = SUGGEST_TITLES + SUGGEST_PEOPLE,
 ) -> Suggestions:
     """Titles and people whose names start with what has been typed.
@@ -227,25 +241,65 @@ def suggest(
     People are here because there was no other way to reach them: thirty
     thousand of them, every one findable only by already being on a title they
     worked on. "What else has she been in" was answerable; "find her" was not.
+
+    Titles take the same filters the grid does, because a suggestion is a
+    preview of a result. Offered without them, the list advertised titles the
+    grid would then say do not exist - search "batman" with one service
+    selected and seven of them appeared above an empty catalog. People are not
+    filtered: a director is not on a streaming service, and narrowing them by
+    one would be answering a different question from the one being asked.
     """
     titles = max(1, round(limit * SUGGEST_TITLES / (SUGGEST_TITLES + SUGGEST_PEOPLE)))
     return Suggestions(
         query=q,
-        titles=_suggest_titles(session, q, limit=titles),
+        titles=_suggest_titles(
+            session,
+            q,
+            limit=titles,
+            within=_filtered_ids(
+                session,
+                q=None,
+                source_keys=_csv(sources),
+                available=available,
+                kind=type,
+                genre_ids=_int_csv(genres),
+                year_min=year_min,
+                year_max=year_max,
+                score_min=score_min,
+            ),
+        ),
         people=_suggest_people(session, q, limit=max(1, limit - titles)),
     )
 
 
-def _suggest_titles(session: Session, query: str, *, limit: int) -> list[TitleSuggestion]:
+def _suggest_titles(
+    session: Session,
+    query: str,
+    *,
+    limit: int,
+    within: Select[tuple[int]] | None = None,
+) -> list[TitleSuggestion]:
     match = name_match(TITLES.columns[:2], query)
     if match is None:
         return []
 
+    # Ranked wider than asked for, then narrowed to what the grid would show.
+    # The other way round - filter first, rank second - would mean handing the
+    # whole filtered catalog to the FTS query, and the ranking is the reason
+    # this is a useful list at all. The over-read is bounded: a dropdown asks
+    # for seven, so this reads a few hundred rowids and keeps the first seven
+    # that survive.
+    depth = limit if within is None else min(limit * SUGGEST_OVERREAD, SUGGEST_MAX_SCANNED)
     ranked = text(
         f"SELECT rowid FROM {TITLES.name} WHERE {TITLES.name} MATCH :fts "
         f"ORDER BY bm25({TITLES.name}, 10.0, 10.0, 1.0, 1.0) LIMIT :limit"
-    ).bindparams(fts=match, limit=limit)
+    ).bindparams(fts=match, limit=depth)
     ids = [row[0] for row in session.execute(ranked).all()]
+
+    if within is not None and ids:
+        allowed = set(session.scalars(within.where(Title.id.in_(ids))).all())
+        ids = [title_id for title_id in ids if title_id in allowed][:limit]
+
     if not ids:
         return []
 

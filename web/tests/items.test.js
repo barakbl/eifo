@@ -2,12 +2,18 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  RATING_MAX,
+  RATING_MIN,
+  STARS,
   WANT_TO_WATCH,
   WATCHED,
   createItemStore,
+  fillPercent,
   isEmptyEntry,
-  toggleList,
   normalizeRating,
+  ratingFromFraction,
+  ratingInStars,
+  toggleList,
 } from "../js/items.js";
 import { myItemsQuery } from "../js/api.js";
 
@@ -32,6 +38,45 @@ describe("toggleList", () => {
     const entry = { [WANT_TO_WATCH]: true, [WATCHED]: true };
     assert.equal(entry[WANT_TO_WATCH] && entry[WATCHED], true);
     assert.deepEqual(toggleList(entry, WATCHED), { [WATCHED]: false });
+  });
+});
+
+describe("five stars over a ten point scale", () => {
+  /* The wire scale stays 1-10: that is what providers report and what the
+   * aggregate is computed in. Half a star is one point, which is the whole
+   * reason the halves are worth having. */
+
+  it("reads four and a half stars as nine", () => {
+    assert.equal(ratingFromFraction(0.9), 9);
+    assert.equal(ratingInStars(9), 4.5);
+  });
+
+  it("fills nine tenths of the row for a nine", () => {
+    assert.equal(fillPercent(9), 90);
+  });
+
+  it("gives the left half of a star to that star's half", () => {
+    /* Landing anywhere in the first star's left half means half a star, and
+     * its right half means the whole one - the way every site does it. */
+    assert.equal(ratingFromFraction(0.05), 1);
+    assert.equal(ratingFromFraction(0.15), 2);
+  });
+
+  it("cannot be dragged below half a star", () => {
+    /* Clearing is its own gesture, not the far end of this one. */
+    assert.equal(ratingFromFraction(0), RATING_MIN);
+    assert.equal(ratingFromFraction(-1), RATING_MIN);
+  });
+
+  it("stops at five stars", () => {
+    assert.equal(ratingFromFraction(1), RATING_MAX);
+    assert.equal(ratingFromFraction(2), RATING_MAX);
+    assert.equal(ratingInStars(RATING_MAX), STARS);
+  });
+
+  it("shows nothing for a title nobody has rated", () => {
+    assert.equal(fillPercent(null), 0);
+    assert.equal(ratingInStars(null), null);
   });
 });
 

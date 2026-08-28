@@ -35,6 +35,40 @@ export function toggleList(entry, list) {
   return { [list]: !entry?.[list] };
 }
 
+/**
+ * Five stars, each worth two points of the stored ten.
+ *
+ * The scale on the wire stays 1-10 because that is what every provider reports
+ * and what the aggregate is computed in; the stars are how a person says it.
+ * Half a star is one point, which is why the halves are worth having - without
+ * them the control could only say even numbers.
+ */
+export const STARS = 5;
+
+/**
+ * The rating a click at this fraction across the stars means.
+ *
+ * Rounds up, so the left half of a star is that star's half and the right half
+ * is the whole of it - the way every site that does this behaves. A click at
+ * the very start is still half a star rather than nothing: clearing is its own
+ * gesture, not the far end of this one.
+ */
+export function ratingFromFraction(fraction) {
+  const clamped = Math.min(1, Math.max(0, fraction));
+  return Math.max(RATING_MIN, Math.ceil(clamped * RATING_MAX));
+}
+
+/** How much of the row of stars a rating fills, as a percentage. */
+export function fillPercent(rating) {
+  if (rating == null) return 0;
+  return (Math.min(RATING_MAX, Math.max(0, rating)) / RATING_MAX) * 100;
+}
+
+/** A rating in stars, for saying it out loud: 9 is "4.5". */
+export function ratingInStars(rating) {
+  return rating == null ? null : rating / 2;
+}
+
 /** Clamp a rating to the range the server will accept, or null to clear it. */
 export function normalizeRating(value) {
   if (value === null || value === undefined || value === "") return null;

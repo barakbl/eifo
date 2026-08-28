@@ -43,7 +43,9 @@ admin_emails = []
 # empty forever. See docs.internal/03-sources.md.
 [sources.netflix_il]
 enabled = true
-# max_pages = 50   # pages per media type; raise for a fuller catalog
+# max_pages = 500  # pages per media type; lower to bound a run you cannot afford.
+#                  The default reaches TMDB's ceiling, and a listing costs only
+#                  the pages the catalog actually has.
 
 [sources.prime_video_il]
 enabled = true
@@ -60,9 +62,8 @@ enabled = true
 # both is then asked per title. About 18,700 requests and eighteen minutes for
 # the whole store, which reaches 17,770 of its 17,799 films.
 #
-# max_pages here bounds one release year rather than the whole catalog, and
-# defaults high enough to finish the biggest of them (about a thousand films).
-# Lower it for a quick trial: 1 reads twenty films per year.
+# max_pages here bounds one release year rather than the whole catalog. Lower it
+# for a quick trial: 1 reads twenty films per year.
 [sources.apple_tv_store]
 enabled = false
 # max_pages = 500

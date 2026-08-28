@@ -118,9 +118,6 @@ PROVIDER_SOURCES: tuple[ProviderSource, ...] = (
         provider_names=("Apple TV Store",),
         verified_offer_types=(OfferType.RENT, OfferType.BUY),
         walk_by_year=True,
-        # Enough to finish the biggest year, which is a little over a thousand
-        # films; the cap is per slice, and no slice comes near this.
-        default_max_pages=MAX_PAGE,
         # Opt-in: a full sync costs a request per film on top of the listing,
         # and nobody upgrading should discover that by watching their nightly
         # run get longer. One toggle in the Manage tab turns it on.
@@ -149,9 +146,19 @@ PROVIDER_SOURCES: tuple[ProviderSource, ...] = (
     ),
 )
 
-#: Pages per provider per media type. 500 pages is TMDB's ceiling; the default
-#: keeps a full sync to a sane number of requests and is raised in config.
-DEFAULT_MAX_PAGES = 50
+#: Pages per provider per media type, defaulting to TMDB's own ceiling.
+#:
+#: It was 50 - 1,000 titles - on the reasoning that a cap keeps a full sync to a
+#: sane number of requests. It does not: the listing walk stops at the catalog's
+#: own ``total_pages``, so a service with 300 films costs 15 pages whatever this
+#: says. All the cap bought was silence about the ones it cut off. Netflix
+#: reports 4,240 films and 2,693 series for Israel; the catalog held 1,000 of
+#: each and said so once a night in a log nobody reads.
+#:
+#: Lowering it in config is still how a deployment bounds a run it cannot
+#: afford. A catalog past 10,000 needs slicing rather than a bigger number,
+#: which is what ``walk_by_year`` is for.
+DEFAULT_MAX_PAGES = MAX_PAGE
 
 
 class TmdbProvidersPlugin(SourcePlugin):

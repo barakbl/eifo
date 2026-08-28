@@ -273,6 +273,55 @@ class TestProviderHarvester:
 
         assert route.call_count == 2
 
+    @respx.mock
+    def test_a_catalog_larger_than_a_thousand_titles_is_read_whole(self, http: HttpClient) -> None:
+        """Netflix reports 4,240 films for Israel and the catalog held 1,000.
+
+        The old default stopped at 50 pages on the reasoning that a cap keeps a
+        sync sane. It never did: the walk stops at the catalog's own total_pages
+        either way, so all the cap bounded was how much of a big service went
+        missing without anybody being told twice.
+        """
+        respx.get(f"{BASE_URL}/watch/providers/movie").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"provider_id": 8, "provider_name": "Netflix"}]}
+            )
+        )
+        respx.get(f"{BASE_URL}/watch/providers/tv").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+        route = respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200,
+                json={"total_pages": 212, "total_results": 4240, "results": [movie_result(1, "A")]},
+            )
+        )
+
+        list(TmdbProvidersPlugin().fetch(self._ctx(http, "netflix_il")))
+
+        assert route.call_count == 212
+
+    @respx.mock
+    def test_a_small_catalog_costs_only_the_pages_it_has(self, http: HttpClient) -> None:
+        """Which is why raising the ceiling is free for everybody else."""
+        respx.get(f"{BASE_URL}/watch/providers/movie").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"provider_id": 8, "provider_name": "Netflix"}]}
+            )
+        )
+        respx.get(f"{BASE_URL}/watch/providers/tv").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+        route = respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200, json={"total_pages": 3, "total_results": 60, "results": [movie_result(1, "A")]}
+            )
+        )
+
+        list(TmdbProvidersPlugin().fetch(self._ctx(http, "netflix_il")))
+
+        assert route.call_count == 3
+
     def test_a_missing_api_key_fails_fast(self, http: HttpClient) -> None:
         ctx = FetchContext(source_key="netflix_il", http=http, settings=Settings(_env_file=None))
 

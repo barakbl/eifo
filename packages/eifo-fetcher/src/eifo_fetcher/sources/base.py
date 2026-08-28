@@ -79,6 +79,10 @@ class RawItem:
     tmdb_id: int | None = None
     imdb_id: str | None = None
     deep_link_url: str | None = None
+    #: The source's own id for this listing, when it publishes one. What makes
+    #: a listing the same listing tomorrow, and the only way to tell two works
+    #: apart when a catalogue names them identically.
+    source_ref: str | None = None
     poster_url: str | None = None
     #: What the offer costs, in the currency's minor unit (1990 = 19.90 ILS),
     #: with its ISO-4217 code. Only a source that charges per title sets these.

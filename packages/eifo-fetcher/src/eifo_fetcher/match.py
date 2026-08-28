@@ -27,7 +27,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from eifo_core.enums import MatchDecision, TitleKind
-from eifo_core.models import MatchReview, Title, TmdbAlias
+from eifo_core.models import Availability, MatchReview, Source, Title, TmdbAlias
 from eifo_core.naming import is_hebrew, latin_script, split_by_script
 from eifo_fetcher.sources.base import RawItem, plausible_year
 from eifo_fetcher.tmdb import TmdbClient, TmdbTitle
@@ -45,6 +45,13 @@ SIMILARITY_THRESHOLD = 90.0
 #: not free - a parked item is not in the catalog at all - so the band has to be
 #: narrow enough that being asked means something.
 AMBIGUOUS_THRESHOLD = 85.0
+
+#: Recorded against a listing parked because another already claims the title.
+#:
+#: Not a similarity at all - the names are usually identical, which is the whole
+#: problem - so it is stated as certainty about the conflict rather than about
+#: the match, and keeps the column meaning "how sure was the machine".
+DUPLICATE_CLAIM_SCORE = 100.0
 #: A release year may disagree by this much across catalogs.
 YEAR_TOLERANCE = 1
 #: The bar for deciding that two TMDB ids name one work.
@@ -293,7 +300,21 @@ class TitleMatcher:
 
     def match(self, item: RawItem) -> MatchResult:
         """Resolve one item, creating or parking it when nothing matches."""
-        result = self._by_external_id(item) or self._by_tmdb(item) or self._by_local_fuzzy(item)
+        # Before anything else: a listing this source has already been bound to
+        # a title stays bound to it. Nothing about a name can overrule the
+        # source's own id for the thing.
+        result = self._by_source_ref(item)
+        if result is None:
+            result = self._by_external_id(item) or self._by_tmdb(item) or self._by_local_fuzzy(item)
+            if result is not None and self._claimed_by_another_listing(item, result.title):
+                # Two listings from one source, both landing on one title: at
+                # most one of them is right, and the data cannot say which.
+                # Taking it would leave the other title unseen and retiring as
+                # though it had left the service, which is how Beauty and the
+                # Beast (1991) went missing while its sing-along stayed.
+                self._park_for_review(item, candidate=result.title, score=DUPLICATE_CLAIM_SCORE)
+                self.stats.record(MatchMethod.REVIEW)
+                return MatchResult(title=None, method=MatchMethod.REVIEW)
         if result is not None:
             self.stats.record(result.method)
             return result
@@ -365,6 +386,48 @@ class TitleMatcher:
         return MatchResult(title=title, method=MatchMethod.RESOLVED)
 
     # -- strategies -------------------------------------------------------
+
+    def _by_source_ref(self, item: RawItem) -> MatchResult | None:
+        """The title this source's own id for the listing is already bound to.
+
+        The binding lives on the offer, because "this source offers this title"
+        is what an availability row says. Once made it is the most reliable
+        thing there is: it is the catalogue's own answer, not an inference from
+        a name it may reuse.
+        """
+        if not item.source_ref:
+            return None
+
+        availability = self._session.scalar(
+            select(Availability)
+            .join(Source, Source.id == Availability.source_id)
+            .where(Source.key == item.source_key, Availability.source_ref == item.source_ref)
+            .limit(1)
+        )
+        if availability is None:
+            return None
+        title = self._session.get(Title, availability.title_id)
+        return None if title is None else MatchResult(title=title, method=MatchMethod.EXTERNAL_ID)
+
+    def _claimed_by_another_listing(self, item: RawItem, title: Title | None) -> bool:
+        """Whether this source already offers that title under a different id."""
+        if title is None or not item.source_ref:
+            return False
+
+        return (
+            self._session.scalar(
+                select(Availability.id)
+                .join(Source, Source.id == Availability.source_id)
+                .where(
+                    Source.key == item.source_key,
+                    Availability.title_id == title.id,
+                    Availability.source_ref.is_not(None),
+                    Availability.source_ref != item.source_ref,
+                )
+                .limit(1)
+            )
+            is not None
+        )
 
     def _by_external_id(self, item: RawItem) -> MatchResult | None:
         if item.tmdb_id is not None:

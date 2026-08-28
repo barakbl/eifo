@@ -271,6 +271,7 @@ def upsert_availability(
         offer=Offer(
             offer_type=item.offer_type,
             deep_link_url=item.deep_link_url,
+            source_ref=item.source_ref,
             price_minor=item.price_minor,
             price_currency=item.price_currency,
         ),

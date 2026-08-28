@@ -8,8 +8,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from eifo_core.enums import TitleKind
-from eifo_core.models import MatchReview, Title, TmdbAlias
+from eifo_core.enums import OfferType, SourceKind, TitleKind
+from eifo_core.models import Availability, MatchReview, Source, Title, TmdbAlias
 from eifo_core.types import utcnow
 from eifo_fetcher.match import (
     REVIEW_YEAR_TOLERANCE,
@@ -145,6 +145,99 @@ class TestNamesOf:
     def test_detects_hebrew(self) -> None:
         assert is_hebrew("פאודה")
         assert not is_hebrew("Fauda")
+
+
+class TestASourcesOwnIdForAListing:
+    """Disney+ lists both Beauty and the Beast films as "Beauty And The Beast".
+
+    No year, no id the matcher used, and the same slug. Matched on the name
+    alone both listings landed on whichever title was reached first; the other
+    was never seen and retired two syncs later as though it had left Disney+.
+    The 1991 film went missing while its sing-along cut stayed.
+    """
+
+    def _bind(
+        self,
+        session: Session,
+        title: Title,
+        ref: str,
+        *,
+        source_key: str = "disney_plus_il",
+    ) -> None:
+        source = session.scalar(select(Source).where(Source.key == source_key))
+        if source is None:
+            source = Source(
+                key=source_key,
+                name=source_key,
+                kind=SourceKind.SUBSCRIPTION,
+                website_url=f"https://{source_key}.example",
+            )
+            session.add(source)
+            session.flush()
+        session.add(
+            Availability(
+                title_id=title.id,
+                source_id=source.id,
+                offer_type=OfferType.STREAM,
+                source_ref=ref,
+            )
+        )
+        session.flush()
+
+    def _listing(self, ref: str) -> RawItem:
+        """As Disney+ presents it: a slug-derived name, no year, and an id."""
+        return item(
+            source_key="disney_plus_il",
+            kind=TitleKind.MOVIE,
+            name="Beauty And The Beast",
+            year=None,
+            source_ref=ref,
+        )
+
+    def test_a_bound_listing_stays_bound(self, session: Session) -> None:
+        """No name can overrule the catalogue's own answer about what a thing is."""
+        film = Title(type=TitleKind.MOVIE, name_en="Beauty And The Beast", year=1991)
+        session.add(film)
+        session.flush()
+        self._bind(session, film, "1260017283")
+
+        result = TitleMatcher(session).match(self._listing("1260017283"))
+
+        assert result.title is film
+
+    def test_a_second_listing_does_not_take_the_first_ones_title(self, session: Session) -> None:
+        """The bug: both landed on one title and the other retired unseen."""
+        remake = Title(type=TitleKind.MOVIE, name_en="Beauty And The Beast", year=2017)
+        session.add(remake)
+        session.flush()
+        self._bind(session, remake, "1260018151")
+
+        result = TitleMatcher(session).match(self._listing("1260017283"))
+
+        assert result.title is not remake
+
+    def test_the_conflict_is_parked_rather_than_guessed(self, session: Session) -> None:
+        """At most one of the two is right and the data cannot say which."""
+        remake = Title(type=TitleKind.MOVIE, name_en="Beauty And The Beast", year=2017)
+        session.add(remake)
+        session.flush()
+        self._bind(session, remake, "1260018151")
+
+        TitleMatcher(session).match(self._listing("1260017283"))
+
+        parked = session.scalars(select(MatchReview)).all()
+        assert len(parked) == 1
+        assert parked[0].raw_payload["name"] == "Beauty And The Beast"
+
+    def test_a_source_publishing_no_id_is_unaffected(self, session: Session) -> None:
+        """Most listings carry nothing to bind, and must match as they always did."""
+        held = Title(type=TitleKind.SERIES, name_en="Fauda", tmdb_id=99, year=2015)
+        session.add(held)
+        session.flush()
+
+        result = TitleMatcher(session).match(item(tmdb_id=99))
+
+        assert result.title is held
 
 
 class TestExternalId:

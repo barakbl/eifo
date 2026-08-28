@@ -35,6 +35,8 @@ class Offer:
     deep_link_url: str | None = None
     price_minor: int | None = None
     price_currency: str | None = None
+    #: The source's own id for the listing, when it publishes one.
+    source_ref: str | None = None
 
 
 #: Rows created earlier in the same run, keyed by the unique triple.
@@ -78,6 +80,7 @@ def record_offer(
             source_id=source.id,
             offer_type=offer.offer_type,
             deep_link_url=offer.deep_link_url,
+            source_ref=offer.source_ref,
             price_minor=offer.price_minor,
             price_currency=offer.price_currency,
             first_seen=seen_at,
@@ -96,6 +99,8 @@ def record_offer(
     availability.gone_since = None
     if offer.deep_link_url:
         availability.deep_link_url = offer.deep_link_url
+    if offer.source_ref:
+        availability.source_ref = offer.source_ref
     if offer.price_minor is not None:
         # A price that moved is news; a source that stopped quoting one keeps
         # the last figure rather than silently showing an offer as free.

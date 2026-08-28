@@ -460,8 +460,25 @@ class TitleMatcher:
             # An id no title owns. Before taking it at face value, ask whether
             # this is a work we already hold - TMDB duplicates its own records,
             # and both ids come round again every night.
+            #
+            # Only onto a title holding no id of its own. A candidate that has
+            # one is TMDB saying these are two records of two works, and it is
+            # right far more often than a name is: normalise() strips the
+            # leading article, so "The Strays" and "Strays" are one string and
+            # score 100, and so are "An Intrusion" and "Intrusion". Sampled
+            # against IMDb ids, 39 of 40 aliases this rule had written joined
+            # two genuinely different films - and an alias is permanent, taking
+            # the offer to the wrong title with it every night after. Two
+            # records that really are one work still merge, in dedupe, which
+            # weighs more than a name and writes the alias as part of merging.
+            # The TMDB-search path below already refuses this for the same
+            # reason.
             best, score = self._best_local_candidate(item)
-            if best is not None and score >= ALIAS_SIMILARITY_THRESHOLD:
+            if (
+                best is not None
+                and best.tmdb_id in (None, item.tmdb_id)
+                and score >= ALIAS_SIMILARITY_THRESHOLD
+            ):
                 self._remember_alias(item.tmdb_id, best)
                 return MatchResult(title=best, method=MatchMethod.ALIAS)
             return MatchResult(title=self._create_title(item), method=MatchMethod.TMDB)

@@ -160,6 +160,10 @@ def to_item(location: str, kind: TitleKind) -> RawItem | None:
         name=name,
         offer_type=OfferType.STREAM,
         deep_link_url=location,
+        # The slug alone does not identify a work: both Beauty and the Beast
+        # films are /movies/beauty-and-the-beast/, and the listing carries no
+        # year. The content id is what tells them apart.
+        source_ref=match.group("content_id"),
         extra={"content_id": match.group("content_id"), "slug": match.group("slug")},
     )
 

@@ -326,6 +326,7 @@ class Availability(Base):
     __table_args__ = (
         UniqueConstraint("title_id", "source_id", "offer_type", name="uq_availability_offer"),
         Index("ix_availability_source_current", "source_id", "is_current"),
+        Index("ix_availability_source_ref", "source_id", "source_ref"),
         Index("ix_availability_title_current", "title_id", "is_current"),
     )
 
@@ -335,6 +336,17 @@ class Availability(Base):
 
     deep_link_url: Mapped[str | None] = mapped_column(String(1000))
     offer_type: Mapped[OfferType] = mapped_column(_enum(OfferType, "offer_type"))
+
+    #: The source's own id for this listing, when it publishes one.
+    #:
+    #: What makes a listing the same listing tomorrow. A catalogue that names
+    #: two different works identically - Disney+ lists both Beauty and the Beast
+    #: films as "Beauty And The Beast", with no year - is otherwise matched by
+    #: name alone, and both listings land on whichever title the matcher reaches
+    #: first. The other is then never seen and retires as though it had left the
+    #: service. Held here because "this source offers this title" is exactly
+    #: what this row says, so the source's name for that offer belongs on it.
+    source_ref: Mapped[str | None] = mapped_column(String(200))
 
     #: What the offer costs, in the currency's minor unit (1990 = 19.90 ILS) -
     #: integer, because money in a float rounds where nobody is looking. Only a

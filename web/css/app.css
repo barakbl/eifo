@@ -1391,6 +1391,88 @@ img {
   color: var(--accent);
 }
 
+/* -- where a list can be watched ------------------------------------------ */
+
+.where {
+  margin-block-end: var(--space-5);
+}
+
+.where__title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg-muted);
+  margin-block: 0 var(--space-3);
+}
+
+.where__list {
+  display: grid;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  /* A summary, not a chart of the page: past this the bars say nothing more
+     and the eye has to travel the whole width to read a number. */
+  max-inline-size: 34rem;
+}
+
+/* One row per service: its colour, its name, how much of the list it carries,
+   and the count. The name column is fixed so the bars share a baseline and can
+   be read against each other rather than one at a time. */
+.where__row {
+  display: grid;
+  grid-template-columns: auto minmax(6rem, 10rem) 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.where__dot {
+  inline-size: 0.55rem;
+  block-size: 0.55rem;
+  border-radius: 50%;
+  background: var(--source-color, var(--fg-faint));
+}
+
+.where__name {
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Of the whole list, not of the biggest service - so a service carrying half
+   of it looks like half of it rather than like the winner. */
+.where__bar {
+  block-size: 0.4rem;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    to var(--bar-end, right),
+    var(--source-color, var(--accent)) var(--fill, 0%),
+    var(--surface-sunken) var(--fill, 0%)
+  );
+}
+
+[dir="rtl"] .where__bar {
+  --bar-end: left;
+}
+
+.where__count {
+  font-family: var(--font-data);
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+  white-space: nowrap;
+}
+
+@media (max-width: 40rem) {
+  /* The bar is the first thing to go: the number says it too. */
+  .where__row {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  .where__bar {
+    display: none;
+  }
+}
+
 /* -- stars ---------------------------------------------------------------- */
 
 /* Two rows of the same five glyphs, the filled one laid over the empty one and

@@ -200,6 +200,20 @@ export function myItemsQuery(
   return params.toString();
 }
 
+/**
+ * How much of one of your lists each service carries, most first.
+ *
+ * Counted by the server over the whole list rather than by the grid over a
+ * page of it: the question is which subscription would clear the watchlist,
+ * and twenty-four of them cannot answer that.
+ */
+export function myListServices(filters, options) {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.rated) params.set("rated", "true");
+  return request(`/me/items/services?${params}`, options);
+}
+
 export function listMyItems(filters, paging, options) {
   return request(`/me/items?${myItemsQuery(filters, paging)}`, options);
 }

@@ -159,6 +159,8 @@ const STRINGS = {
     "mylist.empty": "עדיין אין כאן כלום",
     "mylist.emptyBody": "סמנו כותרים כ״לצפייה בהמשך״ והם יופיעו כאן.",
     "mylist.browse": "לקטלוג",
+    "mylist.where": "איפה אפשר לראות את אלה",
+    "mylist.whereOf": "{count} מתוך {total}",
 
     "settings.title": "הגדרות",
     "settings.services": "השירותים שלי",
@@ -410,6 +412,8 @@ const STRINGS = {
     "mylist.empty": "Nothing here yet",
     "mylist.emptyBody": "Mark titles as want-to-watch and they show up here.",
     "mylist.browse": "Browse the catalog",
+    "mylist.where": "Where you could watch these",
+    "mylist.whereOf": "{count} of {total}",
 
     "settings.title": "Settings",
     "settings.services": "My services",

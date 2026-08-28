@@ -69,8 +69,9 @@ people actually trust, and puts a search box in front of it.
 - **It remembers what left.** A title that vanished from a service is badged, not deleted -
   and a service Eifo no longer tracks is badged differently, because "it's gone" and "we
   can't vouch for this any more" are different facts.
-- **Personal lists.** Sign in with Google or X to keep watched / want-to-watch lists, rate
-  1-10, and write private notes. Notes are private always, including on a public profile.
+- **Personal lists.** Sign in with Google or X to keep watched and want-to-watch lists -
+  a title can be on both - rate in stars and halves, and write private notes. Notes are
+  private always, including on a public profile.
 - **Private by default.** New accounts are invisible. Going public is an explicit choice
   with copy that spells out exactly what becomes visible - and your email, sign-in identity,
   notes and chosen services never do.
@@ -98,16 +99,28 @@ everyone with no sign-in at all.
     </td>
     <td width="50%" valign="top">
       <img src="docs/screenshots/my-list.jpg" alt="A personal list showing rated titles" />
-      <br /><sub><b>Keep watched / want-to-watch lists and rate 1-10.</b></sub>
+      <br /><sub><b>Keep watched and want-to-watch lists, with your own rating on each.</b></sub>
     </td>
   </tr>
 </table>
 
 <br />
 
-<img src="docs/screenshots/title.jpg" width="90%" alt="A title page with ratings from several providers, a private note and where to watch it" />
+<img src="docs/screenshots/suggest.jpg" width="45%" alt="The search box open, suggesting five titles and a person, each with its poster and year" />
+
+<sub><b>Search as you type, across both languages - and the people who made them, who are otherwise reachable only through a title they worked on.</b></sub>
+
+<br /><br />
+
+<img src="docs/screenshots/title.jpg" width="90%" alt="A title page: ratings from IMDb, Rotten Tomatoes and TMDB side by side, a star rating, watched and want-to-watch buttons, and where to watch it" />
 
 <sub><b>Every title: its ratings side by side, a private note, and where to watch it in Israel.</b></sub>
+
+<br /><br />
+
+<img src="docs/screenshots/manage.jpg" width="90%" alt="The Manage tab: completeness percentages across the catalog, and a table of every source with its coverage, last sync and on-off switch" />
+
+<sub><b>The operator's tab, for anyone running their own: how complete the catalog is, and one row per service - coverage, last sync, and the switch that turns it on.</b></sub>
 
 </div>
 

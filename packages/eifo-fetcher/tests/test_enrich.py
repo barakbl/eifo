@@ -719,6 +719,50 @@ class TestExternalIdCollisions:
 
         assert title.tmdb_id == 12345
 
+    def test_a_series_holding_the_number_does_not_take_a_films_id(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """TMDB numbers films and series separately, and the schema keys them
+        as (type, tmdb_id) - so movie 105 is free while series 105 is taken.
+
+        Compared without the kind, Back to the Future was refused its own id
+        because Sex and the City is series 105. Fourteen films in one run.
+        """
+        add_title(session, type=TitleKind.SERIES, name_en="Sex and the City", tmdb_id=105)
+        film = add_title(
+            session, type=TitleKind.MOVIE, name_en="Back to the Future", year=1985, tmdb_id=None
+        )
+        enricher = FakeEnricher(EnrichResult(metadata_patch={"tmdb_id": 105}))
+
+        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+
+        assert film.tmdb_id == 105
+
+    def test_the_same_kind_holding_it_still_blocks(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """The guard narrows; it does not go away. Two films cannot share one."""
+        owner = add_title(session, type=TitleKind.MOVIE, name_en="Held", tmdb_id=105)
+        other = add_title(session, type=TitleKind.MOVIE, name_en="Other", tmdb_id=None)
+        enricher = FakeEnricher(EnrichResult(metadata_patch={"tmdb_id": 105}))
+
+        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+
+        assert other.tmdb_id is None
+        assert owner.tmdb_id == 105
+
+    def test_an_imdb_id_is_global_whatever_the_kind(
+        self, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """IMDb numbers everything once, so the kind must not narrow that one."""
+        add_title(session, type=TitleKind.SERIES, name_en="Held", imdb_id="tt0088763")
+        film = add_title(session, type=TitleKind.MOVIE, name_en="Other", imdb_id=None)
+        enricher = FakeEnricher(EnrichResult(metadata_patch={"imdb_id": "tt0088763"}))
+
+        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+
+        assert film.imdb_id is None
+
 
 class TestCorrectingAMislabelledName:
     """A name in the wrong script is not a name we have; it is one we mislabelled."""

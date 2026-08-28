@@ -437,14 +437,24 @@ def _may_write(title: Title, field_name: str, value: Any) -> bool:
 def _already_taken(session: Session, field_name: str, value: Any, title: Title) -> bool:
     """Whether another title already holds this external id.
 
-    Both id columns are unique, so writing one another title owns raises on the
-    next flush and takes the whole run's remaining work with it. It also means
-    something worth knowing: two titles the enricher believes are the same work.
-    Recording that is the dedupe tool's job, so this only declines to write and
-    says so.
+    Writing one another title owns raises on the next flush and takes the whole
+    run's remaining work with it. It also means something worth knowing: two
+    titles the enricher believes are the same work. Recording that is the dedupe
+    tool's job, so this only declines to write and says so.
+
+    A TMDB id is only taken by a title of the same kind. TMDB numbers films and
+    series separately, so movie 105 and series 105 are two works that share a
+    number and the schema keys them as ``(type, tmdb_id)``. Compared without the
+    kind, every film whose number some unrelated series already held was refused
+    its own id - Back to the Future turned away because Sex and the City is
+    series 105. IMDb ids need no such qualifier; those really are global.
     """
     column = getattr(Title, field_name)
-    owner = session.scalar(select(Title.id).where(column == value, Title.id != title.id))
+    taken = select(Title.id).where(column == value, Title.id != title.id)
+    if field_name == "tmdb_id":
+        taken = taken.where(Title.type == title.type)
+
+    owner = session.scalar(taken)
     if owner is None:
         return False
 

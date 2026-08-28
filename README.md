@@ -12,7 +12,7 @@ worth your evening.
 For the pedants: **EIFO Indexes Films Online**.</sub>
 
 [![CI](https://github.com/barakbl/eifo/actions/workflows/ci.yml/badge.svg)](https://github.com/barakbl/eifo/actions/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-1401%20passing-brightgreen)](https://github.com/barakbl/eifo/actions/workflows/ci.yml)
+[![tests](https://img.shields.io/badge/tests-1407%20passing-brightgreen)](https://github.com/barakbl/eifo/actions/workflows/ci.yml)
 [![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 

@@ -1391,8 +1391,53 @@ img {
   color: var(--accent);
 }
 
-.rating-select {
-  min-inline-size: 9rem;
+/* -- stars ---------------------------------------------------------------- */
+
+/* Two rows of the same five glyphs, the filled one laid over the empty one and
+   clipped to a percentage. Half a star is then a number rather than a second
+   set of characters - and so would a quarter be. */
+.stars {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  line-height: 1;
+}
+
+.stars:hover {
+  border-color: var(--line);
+}
+
+.stars__track {
+  position: relative;
+  font-size: var(--text-lg);
+  letter-spacing: 0.1em;
+}
+
+.stars__off {
+  color: var(--line-strong);
+}
+
+/* Clipped from the reading start, so in Hebrew it fills from the right and the
+   first star is the rightmost one - which is what the click maths assumes. */
+.stars__on {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  inline-size: var(--fill, 0%);
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--accent);
+  transition: inline-size var(--duration) var(--ease);
+}
+
+/* Nothing said yet: dimmer than a rating of nothing, which is not a thing. */
+.stars--empty .stars__off {
+  color: var(--line);
 }
 
 .mine {

@@ -10,14 +10,36 @@ import {
   NOTE_MAX_LENGTH,
   RATING_MAX,
   RATING_MIN,
+  STARS,
   WANT_TO_WATCH,
   WATCHED,
+  fillPercent,
   normalizeRating,
+  ratingFromFraction,
   toggleList,
 } from "./items.js";
 import { el, icon } from "./ui.js";
 
-const RATINGS = Array.from({ length: RATING_MAX - RATING_MIN + 1 }, (_, i) => RATING_MIN + i);
+/** The glyph the catalog already rates with; see the my-list cards. */
+const STAR = "\u2605";
+
+/**
+ * What each key does to a rating. A number is a step, null clears.
+ *
+ * Left and right rather than the reading direction's own: a slider's arrows
+ * are about the track, and the browser flips them in RTL on its own.
+ */
+const KEY_STEPS = {
+  ArrowRight: 1,
+  ArrowUp: 1,
+  ArrowLeft: -1,
+  ArrowDown: -1,
+  Home: RATING_MIN,
+  End: RATING_MAX,
+  Delete: null,
+  Backspace: null,
+  "0": null,
+};
 
 /** The header's account area: sign-in choices, or the user's own menu. */
 export function accountMenu({ user, providers, t, onSignOut }) {
@@ -250,26 +272,88 @@ function statusButton(list, key, iconName, entry, t, commit) {
   );
 }
 
+/**
+ * Five stars, clickable by halves, the way every catalogue does it.
+ *
+ * A slider rather than ten radios or a listbox: the value is one number on a
+ * range, which is what a slider is for, and it gets arrow keys, Home and End
+ * from the role without any of it being written here. The stored scale is
+ * still 1-10 - that is what providers report and what the aggregate is
+ * computed in - so aria carries the number out of ten while the eye gets the
+ * stars.
+ *
+ * Two layers, not five glyphs with three states. The filled row is laid over
+ * the empty one and clipped to a percentage, so half a star costs a number
+ * rather than a second set of characters, and any future quarter would too.
+ */
 function ratingControl(entry, t, commit) {
-  const select = el(
-    "select",
-    {
-      class: "control rating-select",
-      "aria-label": t("item.rating"),
-      onChange: (event) => commit({ rating: normalizeRating(event.currentTarget.value) }),
-    },
-    [
-      el("option", { value: "", text: `${t("item.rating")} -` }),
-      ...RATINGS.map((value) =>
-        el("option", {
-          value: String(value),
-          text: String(value),
-          "aria-label": t("item.rate", { value }),
-        }),
-      ),
-    ],
-  );
+  const rating = entry?.rating ?? null;
 
-  select.value = entry?.rating == null ? "" : String(entry.rating);
-  return select;
+  const filled = el("span", { class: "stars__on", "aria-hidden": "true", text: STAR.repeat(STARS) });
+  const track = el("span", { class: "stars__track" }, [
+    el("span", { class: "stars__off", "aria-hidden": "true", text: STAR.repeat(STARS) }),
+    filled,
+  ]);
+
+  const stars = el("div", {
+    class: "stars",
+    role: "slider",
+    tabindex: "0",
+    "aria-label": t("item.rating"),
+    "aria-valuemin": "0",
+    "aria-valuemax": String(RATING_MAX),
+  });
+
+  // What the pointer is promising, kept apart from what is stored: leaving
+  // without clicking has to put the real value back, not the last one hovered.
+  let preview = null;
+
+  function show(value) {
+    const shown = value ?? rating;
+    filled.style.setProperty("--fill", `${fillPercent(shown)}%`);
+    stars.classList.toggle("stars--empty", shown == null);
+    stars.setAttribute("aria-valuenow", String(shown ?? 0));
+    stars.setAttribute(
+      "aria-valuetext",
+      shown == null ? t("item.ratingNone") : t("item.rate", { value: shown }),
+    );
+    stars.title = shown == null ? t("item.rating") : t("item.rate", { value: shown });
+  }
+
+  /** Where along the row a pointer is, reading from the start edge. */
+  function fractionAt(event) {
+    const box = track.getBoundingClientRect();
+    if (!box.width) return 0;
+    const from = event.clientX - box.left;
+    // Logical, not physical: in Hebrew the first star is the rightmost one.
+    const rtl = getComputedStyle(stars).direction === "rtl";
+    return (rtl ? box.width - from : from) / box.width;
+  }
+
+  track.addEventListener("pointermove", (event) => {
+    preview = ratingFromFraction(fractionAt(event));
+    show(preview);
+  });
+  stars.addEventListener("pointerleave", () => {
+    preview = null;
+    show(null);
+  });
+  track.addEventListener("click", (event) => {
+    const value = ratingFromFraction(fractionAt(event));
+    // Pressing the rating it already has takes it off, which is the only way
+    // to clear one without a second control standing beside it.
+    commit({ rating: value === rating ? null : value });
+  });
+
+  stars.addEventListener("keydown", (event) => {
+    const step = KEY_STEPS[event.key];
+    if (step === undefined) return;
+    event.preventDefault();
+    const next = typeof step === "number" ? (rating ?? 0) + step : step;
+    commit({ rating: next === null || next < RATING_MIN ? null : normalizeRating(next) });
+  });
+
+  show(null);
+  stars.append(track);
+  return stars;
 }

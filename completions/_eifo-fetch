@@ -1,0 +1,165 @@
+#compdef eifo-fetch
+#
+# Zsh completions for eifo-fetch.
+#
+# Install:  put this directory on $fpath before compinit, e.g. in ~/.zshrc
+#
+#     fpath=(/path/to/eifo/completions $fpath)
+#     autoload -Uz compinit && compinit
+#
+# Source keys are completed from the configuration file, not from the database:
+# a completion runs on every keystroke and must never be the reason a shell
+# pauses.
+
+_eifo_config_file() {
+  if [[ -n $EIFO_CONFIG_FILE ]]; then
+    print -r -- $EIFO_CONFIG_FILE
+  elif [[ -f config/eifo.toml ]]; then
+    print -r -- config/eifo.toml
+  elif [[ -f config/eifo.example.toml ]]; then
+    print -r -- config/eifo.example.toml
+  fi
+}
+
+_eifo_sources() {
+  local file keys
+  file=$(_eifo_config_file)
+  [[ -n $file && -r $file ]] || return 0
+  keys=(${(f)"$(sed -n 's/^\[sources\.\([a-z0-9_]*\)\].*/\1/p' $file)"})
+  _describe -t sources 'source' keys
+}
+
+_eifo_enrichers() {
+  local -a keys
+  keys=(
+    'rt:Rotten Tomatoes - scraped, and by far the slowest'
+    'tmdb:TMDB ratings and metadata'
+    'seret:Seret - Israeli ratings'
+    'imdb:the IMDb dataset download'
+  )
+  _describe -t enrichers 'enricher' keys
+}
+
+_eifo_review() {
+  local -a subs
+  subs=(
+    'list:show unresolved items'
+    'resolve:attach an item to a title'
+    'skip:not that title - give it one of its own'
+    'dismiss:not a title at all - never offer it again'
+    'auto:clear the part of the queue that is not in doubt'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe -t commands 'review command' subs
+    return
+  fi
+
+  case $words[2] in
+    list)
+      _arguments \
+        '--source=[limit to one source]:source:_eifo_sources' \
+        '--limit=[how many to show]:count:'
+      ;;
+    resolve)
+      _arguments \
+        '--title-id=[the title to attach it to]:title id:' \
+        '1:review id:'
+      ;;
+    skip|dismiss) _arguments '1:review id:' ;;
+    auto) _arguments '--apply[act on it; without this the plan is only counted]' ;;
+  esac
+}
+
+_eifo_db() {
+  local -a subs
+  subs=(
+    'upgrade:apply migrations (creates the schema)'
+    'downgrade:revert migrations'
+    'current:show the applied migration revision'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe -t commands 'db command' subs
+    return
+  fi
+
+  case $words[2] in
+    upgrade|downgrade) _arguments '1:revision:' ;;
+  esac
+}
+
+_eifo-fetch() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+
+  local -a commands
+  commands=(
+    'sync:pull catalogs and update availability'
+    'enrich:refresh ratings and metadata'
+    'images:download missing artwork'
+    'all:sync, enrich, then fetch artwork - the nightly run'
+    'repair-names:re-ask TMDB for names stored in the wrong script'
+    'rematch:give titles that never matched TMDB another, smarter try'
+    'dedupe:merge titles the catalog holds twice'
+    'sources:inspect configured sources'
+    'review:work through unresolved matches'
+    'daemon:run phases on the configured schedule'
+    'db:database maintenance'
+  )
+
+  _arguments -C \
+    '(- *)'{-h,--help}'[show help and exit]' \
+    '(- *)--version[show the version and exit]' \
+    '(-v --verbose)'{-v,--verbose}'[log at DEBUG level]' \
+    '1: :->command' \
+    '*:: :->argument' && return
+
+  case $state in
+    command)
+      _describe -t commands 'eifo-fetch command' commands
+      ;;
+    argument)
+      case $words[1] in
+        sync)
+          _arguments '*--source=[limit to this source; repeatable]:source:_eifo_sources'
+          ;;
+        enrich)
+          _arguments \
+            '--force[re-enrich regardless of how fresh the ratings are]' \
+            '--limit=[stop after N titles]:count:' \
+            '--skip-imdb[skip the IMDb dataset download (tens of megabytes)]' \
+            '*--skip=[skip one enricher for this run; repeatable]:enricher:_eifo_enrichers'
+          ;;
+        images)
+          _arguments \
+            '--force[re-download existing artwork]' \
+            '--limit=[stop after N titles]:count:'
+          ;;
+        repair-names)
+          _arguments '--limit=[stop after N titles]:count:'
+          ;;
+        rematch)
+          _arguments \
+            '--apply[write the matches; without it the plan is only printed]' \
+            '--limit=[stop after N titles]:count:'
+          ;;
+        dedupe)
+          _arguments '--apply[perform the merges; without it the plan is only printed]'
+          ;;
+        sources)
+          local -a subs
+          subs=('list:show every source with its last run')
+          _describe -t commands 'sources command' subs
+          ;;
+        review) _eifo_review ;;
+        db) _eifo_db ;;
+        daemon)
+          _arguments '--once[run every scheduled phase immediately, then exit]'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_eifo-fetch "$@"

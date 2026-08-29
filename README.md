@@ -209,6 +209,27 @@ step and nothing to compile. Skipping the `playwright install` line costs you Ka
 Reshet 13 and nothing else: without a browser each fails its own sync with a clear error
 while every other source proceeds.
 
+### Shell completions
+
+`eifo-fetch` has eleven commands and several of them take a source key, so there are
+completions for fish and zsh in [`completions/`](completions). Each one describes what a
+command is for as it offers it, and completes source and enricher keys from your
+configuration file - never from the database, because a completion runs on every keystroke
+and should not be the reason a shell pauses.
+
+```bash
+# fish
+ln -s "$PWD/completions/eifo-fetch.fish" ~/.config/fish/completions/
+
+# zsh - put the directory on fpath before compinit, in ~/.zshrc
+fpath=(/path/to/eifo/completions $fpath)
+autoload -Uz compinit && compinit
+```
+
+They read `config/eifo.toml`, or whatever `EIFO_CONFIG_FILE` points at, falling back to
+the example config - so `eifo-fetch sync --source <TAB>` offers the services this
+deployment actually declares.
+
 ### With an AI assistant
 
 If you would rather not read the two sections above, hand this to Claude Code, Codex,

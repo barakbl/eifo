@@ -87,3 +87,41 @@ def tally(**counts: int) -> str:
     """
     parts = [f"{value:,} {name.replace('_', ' ')}" for name, value in counts.items() if value]
     return ", ".join(parts) if parts else "nothing yet"
+
+
+def position(done: int, total: int | None) -> str:
+    """ "1,200 of 5,000 (24%)", or just the count when nothing knows the total.
+
+    A sync cannot know - a catalog is however long it turns out to be - but
+    enrichment is handed a batch and rescoring a list, and there the share is
+    the whole point: it is the difference between a number going up and a
+    number going up *towards something*.
+    """
+    if not total or total <= 0:
+        return f"{done:,}"
+    return f"{done:,} of {total:,} ({round(done / total * 100)}%)"
+
+
+def remaining(done: int, total: int | None, elapsed_seconds: float) -> str | None:
+    """ "about 8 minutes left", or None when it cannot honestly say.
+
+    Straight-line from the rate so far, which is the right model for these
+    loops: every title costs about one round of the same provider calls. It is
+    wrong early and wrong at the tail, which is why it says "about" and why the
+    count beside it is the number to trust.
+
+    None rather than a guess when there is nothing to extrapolate from - no
+    total, no time passed, nothing done - because "0 seconds left" on a run that
+    has barely started is worse than saying nothing.
+    """
+    if not total or total <= 0 or done <= 0 or elapsed_seconds <= 0 or done >= total:
+        return None
+
+    left = (total - done) * (elapsed_seconds / done)
+    if left < 60:
+        # To the nearest five: a run this close to done does not need the
+        # precision, and "about 37 seconds left" claims one it does not have.
+        return f"about {max(5, round(left / 5) * 5)} seconds left"
+    if left < 90 * 60:
+        return f"about {round(left / 60)} minutes left"
+    return f"about {left / 3600:.1f} hours left"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from typing import Any
 
 from sqlalchemy import select
@@ -832,3 +833,133 @@ class TestFindingTheMislabelled:
             add_title(session, name_en=f"千と千尋{index}", tmdb_id=100 + index)
 
         assert len(mislabelled_names(session, limit=2)) == 2
+
+
+class TestSayingHowFarThroughTheBatchItIs:
+    """An enrich run is the longest thing the fetcher does and used to say
+    nothing at all between "enriching with: tmdb, rt" and the tally at the end.
+    Unlike a sync it knows how much it was given, so it can say what is left."""
+
+    def _ctx(self, http: Any, settings: Settings) -> FetchContext:
+        return FetchContext(source_key="enrich", http=http, settings=settings)
+
+    def _log(self, session: Session) -> str:
+        run = session.scalars(
+            select(FetchRun).where(FetchRun.phase == FetchPhase.ENRICH).order_by(FetchRun.id.desc())
+        ).first()
+        assert run is not None
+        return run.log or ""
+
+    def test_it_says_how_much_there_is_before_it_starts(
+        self,
+        session: Session,
+        settings: Settings,
+        http: Any,
+        fetcher_logs_at_info: None,
+    ) -> None:
+        """The number that decides whether to wait for this or go to bed."""
+        for index in range(12):
+            add_title(session, name_he=f"סדרה {index}")
+
+        enrich_titles(session, [FakeEnricher(EnrichResult())], self._ctx(http, settings), settings)
+
+        assert "12 title(s) due for enrichment" in self._log(session)
+
+    def test_it_reports_its_position_in_the_batch(
+        self,
+        session: Session,
+        settings: Settings,
+        http: Any,
+        fetcher_logs_at_info: None,
+    ) -> None:
+        for index in range(12):
+            add_title(session, name_he=f"סדרה {index}")
+
+        enrich_titles(session, [FakeEnricher(EnrichResult())], self._ctx(http, settings), settings)
+
+        # Of twelve, not just "10" - the share is the part that says whether to
+        # wait, and a bare count never does.
+        assert "enrich: 10 of 12 (83%)" in self._log(session)
+
+    def test_it_says_what_it_is_finding_as_well_as_where_it_is(
+        self,
+        session: Session,
+        settings: Settings,
+        http: Any,
+        fetcher_logs_at_info: None,
+    ) -> None:
+        """A run a third of the way through that has written nothing is a run
+        worth interrupting, and the position alone would not say so."""
+        for index in range(12):
+            add_title(session, name_he=f"סדרה {index}")
+        enricher = FakeEnricher(
+            EnrichResult(
+                ratings=[
+                    Rating(provider=RatingProvider.SERET_VIEWERS, score_raw=8.0, vote_count=900)
+                ]
+            )
+        )
+
+        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+
+        assert "10 ratings" in self._log(session)
+
+    def test_a_batch_too_short_to_report_on_still_works(
+        self,
+        session: Session,
+        settings: Settings,
+        http: Any,
+        fetcher_logs_at_info: None,
+    ) -> None:
+        """Nothing to say is not the same as something going wrong."""
+        add_title(session)
+
+        tally = enrich_titles(
+            session, [FakeEnricher(EnrichResult())], self._ctx(http, settings), settings
+        )
+
+        assert tally.titles_seen == 1
+        assert "1 title(s) due for enrichment" in self._log(session)
+
+    def test_every_title_is_named_for_anybody_watching_it_work(
+        self, session: Session, settings: Settings, http: Any, caplog: Any
+    ) -> None:
+        """At DEBUG - `eifo-fetch -v`. A batch of five thousand at INFO would
+        bury the progress lines and spend the run row's whole log budget on a
+        list of titles."""
+        add_title(session, name_en="Fauda")
+
+        with caplog.at_level(logging.DEBUG, logger="eifo.fetch.enrich"):
+            enrich_titles(
+                session, [FakeEnricher(EnrichResult())], self._ctx(http, settings), settings
+            )
+
+        said = caplog.text
+        assert "enriching 'Fauda'" in said
+        assert "rating(s) written" in said
+
+
+class TestSayingHowFarThroughTheRescoreItIs:
+    def test_it_says_how_many_it_is_about_to_rescore(
+        self,
+        session: Session,
+        settings: Settings,
+        caplog: Any,
+    ) -> None:
+        """The last minutes of an hour-long phase are exactly when somebody is
+        wondering whether to kill it."""
+        title = add_title(session)
+        session.add(
+            ExternalRating(
+                title_id=title.id,
+                provider=RatingProvider.IMDB,
+                score_raw=8.0,
+                score_normalized=80,
+            )
+        )
+        session.commit()
+
+        with caplog.at_level(logging.INFO, logger="eifo.fetch.enrich"):
+            recompute_all_aggregates(session, settings)
+
+        assert "rescoring 1 rated title(s)" in caplog.text

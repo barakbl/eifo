@@ -26,7 +26,14 @@ from eifo_core.enums import RatingProvider
 from eifo_core.models import ExternalRating, Title
 from eifo_core.types import utcnow
 from eifo_fetcher.http import HttpClient
+from eifo_fetcher.progress import ProgressTicker
 from eifo_fetcher.scores import normalise
+
+#: Dataset rows between progress lines. The file has over a million of them
+#: and they cost nothing each, so the sync loops' hundred would be noise.
+PROGRESS_EVERY_ROWS = 250_000
+#: The first line, early enough to prove the parse started at all.
+PROGRESS_FIRST_ROWS = 50_000
 
 logger = logging.getLogger("eifo.fetch.enrich.imdb")
 
@@ -111,18 +118,31 @@ class ImdbDatasetLoader:
 
         logger.info("downloading %s for %d titles", url, len(wanted))
         data = self._http.get(url).content
+        logger.info("downloaded %.1fMB; joining it against the catalog", len(data) / 1_000_000)
 
         existing = _ratings_by_title_id(session)
         now = utcnow()
+        # The dataset runs to well over a million rows and none of them are
+        # slow, so this reports on a far coarser scale than the loops that make
+        # network calls - often enough to prove the pass is moving, rarely
+        # enough that it does not drown the run it belongs to.
+        ticker = ProgressTicker(every=PROGRESS_EVERY_ROWS, first=PROGRESS_FIRST_ROWS)
 
         for rating in parse_ratings(data):
             result.rows_read += 1
             title_id = wanted.get(rating.imdb_id)
-            if title_id is None:
-                continue
+            if title_id is not None:
+                result.matched += 1
+                _apply(session, existing, title_id, rating, now, result)
 
-            result.matched += 1
-            _apply(session, existing, title_id, rating, now, result)
+            # Outside the match, so a stretch of rows this catalog holds nothing
+            # for still counts as progress - which is most of the dataset.
+            if ticker.due(result.rows_read):
+                logger.info(
+                    "imdb: %s rows read, %s matched",
+                    f"{result.rows_read:,}",
+                    f"{result.matched:,}",
+                )
 
         session.commit()
         logger.info(

@@ -1989,6 +1989,38 @@ img {
   color: var(--fg-faint);
 }
 
+/* A note under a panel heading, saying what the table below it means. A share
+   of a weighted sum is not self-explanatory the way a coverage column is. */
+.panel__note {
+  max-inline-size: 46rem;
+  margin-block: calc(var(--space-2) * -1) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+
+/* The share bar under a rater's percentage.
+ *
+ * Scaled against the largest share on the table rather than against 100%: the
+ * biggest contributor is rarely near a hundred, and bars measured against a
+ * bound nothing reaches are all stub length. The number above it is the real
+ * share, so the bar compares and the number states. */
+.mix__bar {
+  display: block;
+  block-size: 0.3rem;
+  margin-block-start: var(--space-1);
+  min-inline-size: 4rem;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    to var(--bar-end, right),
+    var(--accent) var(--fill, 0%),
+    var(--surface-sunken) var(--fill, 0%)
+  );
+}
+
+[dir="rtl"] .mix__bar {
+  --bar-end: left;
+}
+
 /* The count the share was taken from, tucked under it. */
 .pct__of {
   display: block;

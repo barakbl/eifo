@@ -3,7 +3,9 @@ import { describe, it } from "node:test";
 
 import { reviewsQuery, runsQuery } from "../js/api.js";
 import {
+  barWidth,
   formatPercent,
+  mixIsEmpty,
   percentBand,
   share,
   statEntries,
@@ -181,5 +183,56 @@ describe("formatPercent", () => {
   it("reaches 0% only when there is nothing at all", () => {
     assert.equal(formatPercent((1 / 34024) * 100), "<0.1%");
     assert.equal(formatPercent(0), "0%");
+  });
+});
+
+
+/* The scoring panel: which rater actually decided the catalog's scores.
+ *
+ * The arithmetic is the server's - it is the only thing that knows the weights
+ * and how often each rater managed to rate anything. What is worth testing here
+ * is the two judgements the panel makes on its own: telling "not scored yet"
+ * apart from "scored, and this rater contributed nothing", and drawing a bar
+ * that can be compared by eye. */
+
+describe("mixIsEmpty", () => {
+  it("an unenriched catalog has no mix, not a mix of nothing", () => {
+    assert.equal(mixIsEmpty([{ share: null }, { share: null }]), true);
+  });
+
+  it("a catalog with nothing in it at all is the same answer", () => {
+    assert.equal(mixIsEmpty([]), true);
+    assert.equal(mixIsEmpty(undefined), true);
+  });
+
+  it("one rater contributing is a mix", () => {
+    assert.equal(mixIsEmpty([{ share: 100 }, { share: null }]), false);
+  });
+
+  it("a rater that contributed nothing is still a real answer", () => {
+    // Zero and null are different claims: nobody scored anything, versus this
+    // rater was in the running and supplied none of it.
+    assert.equal(mixIsEmpty([{ share: 0 }]), false);
+  });
+});
+
+describe("barWidth", () => {
+  it("the largest share fills its bar", () => {
+    // Against the largest, not against 100: nothing reaches a hundred, and
+    // bars measured against a bound nothing reaches are all stub length.
+    assert.equal(barWidth(46, 46), 100);
+  });
+
+  it("half of the largest is half a bar", () => {
+    assert.equal(barWidth(23, 46), 50);
+  });
+
+  it("a rater that contributed nothing draws no bar", () => {
+    assert.equal(barWidth(0, 46), 0);
+  });
+
+  it("nothing to compare against draws nothing rather than dividing by zero", () => {
+    assert.equal(barWidth(10, 0), 0);
+    assert.equal(barWidth(null, 46), 0);
   });
 });

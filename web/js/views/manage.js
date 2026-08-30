@@ -147,7 +147,14 @@ async function overviewPanel(panel, { t, app }) {
   }
 
   const { language } = app.get();
-  replace(panel, [statStrip(stats, { t }), sourcesTable(sources, { t, language })]);
+  replace(panel, [
+    statStrip(stats, { t }),
+    sourcesTable(sources, { t, language }),
+    // Last, because it is the least urgent thing on the page. The dials and the
+    // sources answer "is anything wrong right now"; this answers "where do the
+    // scores come from", which is worth knowing and rarely worth hurrying to.
+    scoringTable(stats.scoring ?? [], { t, titleCount: stats.title_count }),
+  ]);
   return null;
 }
 
@@ -227,6 +234,115 @@ function statTile(tile) {
       tile.count ? el("span", { class: "stat__count", text: tile.count }) : null,
     ],
   );
+}
+
+/**
+ * Whether a scoring mix has any scoring in it.
+ *
+ * A catalog nobody has enriched yet returns every rater with a null share,
+ * which as a table is a column of dashes that looks like a broken panel rather
+ * than an empty one. Told apart because the two want different words.
+ */
+export function mixIsEmpty(scoring) {
+  return !scoring?.length || scoring.every((row) => row.share === null || row.share === undefined);
+}
+
+/** How wide a share bar is drawn, as a share of the largest one on the table.
+ *
+ * Of the largest rather than of the whole: the biggest contributor is rarely
+ * near 100%, and bars measured against a bound nothing reaches are all stub
+ * length, which is the one thing a bar is there to avoid. The number beside it
+ * is still the real share, so nothing is being overstated - the bar is the
+ * comparison and the number is the fact.
+ */
+export function barWidth(share, largest) {
+  if (share === null || share === undefined || !largest) return 0;
+  return (share / largest) * 100;
+}
+
+function scoringTable(scoring, { t, titleCount }) {
+  const heading = el("h2", { class: "panel__title", text: t("manage.scoring") });
+
+  if (mixIsEmpty(scoring)) {
+    return el("section", { class: "panel" }, [
+      heading,
+      el("p", { class: "muted", text: t("manage.scoring.empty") }),
+    ]);
+  }
+
+  const largest = Math.max(...scoring.map((row) => row.share ?? 0));
+  const columns = [
+    t("manage.col.provider"),
+    t("manage.col.share"),
+    t("manage.col.weight"),
+    t("manage.col.covered"),
+  ];
+
+  return el("section", { class: "panel" }, [
+    heading,
+    el("p", { class: "panel__note", text: t("manage.scoring.blurb") }),
+    el(
+      "div",
+      { class: "table-scroll" },
+      el("table", { class: "sources scoring" }, [
+        el(
+          "thead",
+          {},
+          el(
+            "tr",
+            {},
+            columns.map((name, index) =>
+              el("th", { scope: "col", class: index === 0 ? "" : "num", text: name }),
+            ),
+          ),
+        ),
+        el(
+          "tbody",
+          {},
+          scoring.map((row) => scoringRow(row, { t, titleCount, largest })),
+        ),
+      ]),
+    ),
+  ]);
+}
+
+function scoringRow(row, { t, titleCount, largest }) {
+  return el("tr", {}, [
+    el("td", {}, [
+      el("span", { class: "source__name", text: row.provider_name }),
+      el("span", { class: "source__key", text: row.provider }),
+      row.is_israeli ? el("span", { class: "badge", text: t("manage.scoring.israeli") }) : null,
+      row.titles_rated === 0
+        ? el("span", { class: "badge badge--warn", text: t("manage.scoring.unused") })
+        : null,
+    ]),
+    // First of the numbers, because it is the answer and the weight beside it
+    // is only one of the two inputs to it - and on a narrow screen the leading
+    // columns are the ones that survive.
+    //
+    // Deliberately not banded like the completeness columns are. A share is not
+    // a score out of a hundred - 8% is not "bad", it is how much of the answer
+    // this rater supplied - and colouring it red would be an opinion the data
+    // does not support.
+    el("td", { class: "num" }, [
+      el("span", { class: "pct", text: formatPercent(row.share) }),
+      el("span", {
+        class: "mix__bar",
+        "aria-hidden": "true",
+        style: { "--fill": `${barWidth(row.share, largest)}%` },
+      }),
+    ]),
+    // The weight as it is written in the configuration file. Not a percentage
+    // of anything: the weights are relative to each other and need not add up.
+    el("td", { class: "num" }, el("span", { class: "pct", text: formatWeight(row.weight) })),
+    percentCell(row.titles_rated, titleCount),
+  ]);
+}
+
+/** A weight as the configuration file writes it: 3, not 3.0, but 1.5 stays 1.5. */
+function formatWeight(weight) {
+  if (weight === null || weight === undefined) return "—";
+  return Number.isInteger(weight) ? String(weight) : String(Number(weight.toFixed(2)));
 }
 
 function sourcesTable(sources, { t, language }) {

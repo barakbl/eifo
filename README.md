@@ -56,7 +56,9 @@ people actually trust, and puts a search box in front of it.
   faith. Israeli titles get a separate Israeli score, because local critics and global
   audiences rarely rate the same film the same way.
 - **Bilingual search that actually works.** Hebrew and English over one FTS5 index, with
-  prefix matching as you type. "פאודה" and "Fauda" find the same series.
+  prefix matching as you type. "פאודה" and "Fauda" find the same series. The suggestions
+  come from the same set as the results, filters and all - a dropdown that offers titles
+  the grid then says do not exist is worse than no dropdown.
 - **Who made it, and what else they made.** Every title page carries a metadata panel:
   director, cinematographer and cast, alongside language, country and running time. Every
   name links to that person's page, which lists everything the catalog credits them with,
@@ -70,8 +72,13 @@ people actually trust, and puts a search box in front of it.
   and a service Eifo no longer tracks is badged differently, because "it's gone" and "we
   can't vouch for this any more" are different facts.
 - **Personal lists.** Sign in with Google or X to keep watched and want-to-watch lists -
-  a title can be on both - rate in stars and halves, and write private notes. Notes are
+  a title can be on both, because something seen and worth seeing again is not a
+  contradiction - rate in five stars and their halves, and write private notes. Notes are
   private always, including on a public profile.
+- **Filed from the grid, not from a page each.** Both list buttons sit on the poster in the
+  catalog, so a page of results can be worked through without opening any of it - and
+  because the state is drawn on every card, what you have already seen reads across the
+  whole grid at once.
 - **Private by default.** New accounts are invisible. Going public is an explicit choice
   with copy that spells out exactly what becomes visible - and your email, sign-in identity,
   notes and chosen services never do.
@@ -463,8 +470,8 @@ Three panels:
 
 | Panel | Answers |
 |---|---|
-| **Overview** | Is the catalog alright - titles, how many carry a score, how many still have no artwork, what is available right now. The review queue and the stale-source count turn amber when they mean work. |
-| **Sources** | Is *this* source alright - coverage, when it last synced, how much of its output is stuck in the review queue, and a switch. |
+| **Overview** | Is the catalog alright. The three figures that are really shares - with a score, with a poster, review queue cleared - lead with the percentage, green above 95, amber above 75, red below, with the count they were taken from underneath. Everything is stated so that more is better, which is what lets one colour scale read the same across all of them. |
+| **Sources** | Is *this* source alright - a row each, with the share of its titles that carry a poster, a score, an enrichment attempt and a cleared queue, when it last synced, and a switch. |
 | **Runs** | What happened last night - every fetcher run with what it counted, and the tail of what it said while it ran. |
 
 **The run log is the part worth knowing about.** Runs were always recorded - when they
@@ -475,8 +482,14 @@ nothing this time".
 
 **The source switch is an override, not a copy of your config file.** Left alone it means
 "whatever `[sources]` says", so switching one source off does not quietly freeze the other
-twelve at whatever the file happened to say that day. It applies on the fetcher's next run;
-nothing needs restarting.
+twelve at whatever the file happened to say that day. Nothing needs restarting.
+
+**Switching one on also fetches it.** Permission and intent are the same gesture here:
+nobody turns a service on to look at an empty row until the small hours. The API cannot
+call the fetcher - the database is all the two share - so the ask is recorded on the source
+and the daemon picks it up within half a minute, syncing that source alone. The row says
+"sync queued" until it has. Switching off withdraws a pending ask. Without the daemon
+running the ask simply keeps until the next sync by any route, including a hand-run one.
 
 **The review queue** is where listings the matcher could not place get ruled on. A parked
 listing is not in the catalog at all - no title, nothing to search for - so a queue that

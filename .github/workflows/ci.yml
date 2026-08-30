@@ -93,25 +93,56 @@ jobs:
 
       # What follows is deliberately not pytest. The `import fcntl` that made
       # every eifo-fetch command unrunnable was invisible to a test suite that
-      # imports the module rather than starts the program, and each of these
-      # runs a real process end to end. PowerShell only fails a step on its
-      # last command's exit code, so they are steps rather than lines.
+      # imports the module rather than starts the program, and it is what
+      # somebody on Windows meets first. So every subcommand starts a real
+      # process here, and between them they import every source plugin, every
+      # enricher, Pillow, APScheduler and Alembic.
+      #
+      # One command per step, because PowerShell fails a step on its last
+      # command's exit code alone and would shrug at anything before it - which
+      # is exactly the shape of a broken import in one command out of ten.
       - name: The CLI starts
         run: uv run eifo-fetch --version
 
-      - name: It can create a database and read the revision back
-        run: |
-          uv run eifo-fetch db upgrade
-          uv run eifo-fetch db current
+      - name: db upgrade
+        run: uv run eifo-fetch db upgrade
 
-      - name: It can take the fetcher lock
+      - name: db current
+        run: uv run eifo-fetch db current
+
+      - name: sources list
+        run: uv run eifo-fetch sources list
+
+      - name: sync (imports every source plugin)
+        run: uv run eifo-fetch sync --source no-such-source
+
+      - name: enrich (imports every enricher)
+        run: uv run eifo-fetch enrich --limit 0 --skip-imdb
+
+      - name: images (imports Pillow)
+        run: uv run eifo-fetch images --limit 0
+
+      - name: repair-names
+        run: uv run eifo-fetch repair-names --limit 0
+
+      - name: review list
+        run: uv run eifo-fetch review list
+
+      - name: review auto
+        run: uv run eifo-fetch review auto
+
+      - name: dedupe (takes the fetcher lock)
         # msvcrt.locking is the half of lock.py no other platform executes a
         # line of, and a lock that never locks looks exactly like one that does
         # until two fetchers run at once.
         run: uv run eifo-fetch dedupe
 
-      - name: It can print a table
-        run: uv run eifo-fetch sources list
+      - name: The daemon module imports
+        # `daemon --help` does not reach it: the import is inside the command,
+        # so argparse answers and APScheduler is never touched. On Windows that
+        # import is the one that needs tzdata, which arrives only as a marker
+        # dependency of tzlocal.
+        run: uv run python -c "import eifo_fetcher.daemon"
 
   privacy:
     # Its own job so a privacy regression is named on the pull request rather

@@ -34,6 +34,7 @@ from eifo_fetcher.pipeline import (
     register_declared_sources,
     sync_source,
 )
+from eifo_fetcher.prefetch import FetchUnit, Prefetcher
 from eifo_fetcher.registry import (
     declared_sources,
     discover_plugins,
@@ -41,7 +42,7 @@ from eifo_fetcher.registry import (
     plugins_for,
     source_overrides,
 )
-from eifo_fetcher.runs import capture_log, close_run, open_run
+from eifo_fetcher.runs import capture_log, close_run, new_capture, open_run
 from eifo_fetcher.sources.base import FetchContext, SourcePlugin
 from eifo_fetcher.tmdb import IMAGE_HOST, TmdbClient
 
@@ -111,21 +112,61 @@ def sync_all(
     report = SyncReport()
     tmdb = _tmdb_client(http, settings)
 
-    for plugin, owned in plugins_for(plugins, wanted):
-        for info in owned:
-            with session_factory() as session:
-                ctx = FetchContext(source_key=info.key, http=http, settings=settings)
-                logger.info("syncing %s", info.key)
-                result = sync_source(session, plugin, info, ctx, tmdb=tmdb)
-            report.results.append(result)
+    # Flat, and in the order the catalogs will be written: the prefetcher reads
+    # them in this same order, which is what keeps the reader ahead of the
+    # writer instead of the two waiting on each other.
+    units = [
+        FetchUnit(
+            plugin=plugin,
+            info=info,
+            ctx=FetchContext(source_key=info.key, http=http, settings=settings),
+            # Opened here rather than inside the sync, so that the lines a
+            # plugin logs while its catalog is being read - which for a
+            # prefetched source is most of what it has to say, and all of it
+            # said before its row exists - land on that source's row.
+            capture=new_capture(),
+        )
+        for plugin, owned in plugins_for(plugins, wanted)
+        for info in owned
+    ]
+
+    if units:
+        with Prefetcher(
+            units,
+            concurrency=settings.fetch.concurrency,
+            buffer_size=settings.fetch.buffer_size,
+        ) as prefetcher:
             logger.info(
-                "%s: %s, %d items, %d new titles, %d retired",
-                info.key,
-                result.status.value,
-                result.items_seen,
-                result.titles_created,
-                result.retired,
+                "syncing %d source(s), reading %d catalog(s) at a time",
+                len(units),
+                prefetcher.concurrency,
             )
+            for unit in units:
+                with session_factory() as session:
+                    logger.info("syncing %s", unit.info.key)
+                    result = sync_source(
+                        session,
+                        unit.plugin,
+                        unit.info,
+                        unit.ctx,
+                        tmdb=tmdb,
+                        items=prefetcher.items(unit),
+                        capture=unit.capture,
+                    )
+                # Whatever is left of this source's stream is nobody's business
+                # now. Said out loud because a sync that stopped early leaves a
+                # reader parked on a queue, and every later source from the same
+                # plugin would queue behind it.
+                prefetcher.done(unit)
+                report.results.append(result)
+                logger.info(
+                    "%s: %s, %d items, %d new titles, %d retired",
+                    unit.info.key,
+                    result.status.value,
+                    result.items_seen,
+                    result.titles_created,
+                    result.retired,
+                )
 
     # An operator's ask is answered by having tried, not by having succeeded: a
     # source whose sync failed has a run in the Runs tab saying so, and leaving

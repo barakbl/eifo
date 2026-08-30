@@ -71,6 +71,17 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="KEY",
         help="limit to this source; repeatable",
     )
+    sync.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "how many catalogs to read at once, overriding [fetch] concurrency; "
+            "1 reads them one after another. Only the reading is parallel - "
+            "what each source reads is still written one source at a time"
+        ),
+    )
 
     enrich = subcommands.add_parser("enrich", help="refresh ratings and metadata")
     enrich.add_argument(
@@ -218,6 +229,14 @@ def _cmd_db(args: argparse.Namespace, settings: Settings) -> int:
 
 
 def _cmd_sync(args: argparse.Namespace, settings: Settings) -> int:
+    if args.concurrency is not None:
+        if args.concurrency < 1:
+            logger.error("--concurrency must be at least 1")
+            return EXIT_FATAL
+        settings = settings.model_copy(
+            update={"fetch": settings.fetch.model_copy(update={"concurrency": args.concurrency})}
+        )
+
     with single_flight(settings), _database(settings) as session_factory, HttpClient() as http:
         report = sync_all(session_factory, settings, http=http, only=args.sources)
 

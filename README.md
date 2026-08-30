@@ -400,6 +400,30 @@ uv run eifo-fetch sources list                      # state, title count, last s
 uv run eifo-fetch review list                       # listings no title could be matched to
 ```
 
+A sync reads several catalogs at once and writes them one at a time. Nearly all of a run
+is spent waiting on other people's servers, so reading four sites side by side is most of
+a night's wall-clock; the writing stays serial because SQLite takes a single writer, and
+two syncs writing at once is not a faster night but a `database is locked`. The unit is
+the plugin rather than the source - a plugin owning a dozen services reads them in turn,
+because they come from one upstream API on one rate limit - and no site is asked for more
+per second than before, since the per-host limit is unchanged and shared.
+
+```bash
+uv run eifo-fetch sync --concurrency 1   # one catalog after another, as it used to
+uv run eifo-fetch sync --concurrency 8   # or set [fetch] concurrency in the config
+```
+
+Every source says where it has got to as it goes, on the round hundreds and at least
+every fifteen seconds, so a long scrape is visibly working rather than possibly hung:
+
+```
+eifo.fetch.source.freetv  read 400 listings so far
+eifo.fetch.pipeline       freetv: 400 listings in - 12 new titles, 12 new offers, 388 already listed
+```
+
+Those lines are on the source's own run row in the Runs tab, including the ones logged
+while its catalog was still being read.
+
 Enrichment can leave parts out for one run, which is what a catch-up over a large backlog
 usually wants. The enrichers are not equally priced: TMDB is an API and answers at twenty
 requests a second, while `rt` is scraped and runs at a rate chosen to be polite to

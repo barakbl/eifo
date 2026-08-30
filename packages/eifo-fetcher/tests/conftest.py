@@ -6,6 +6,7 @@ respx or served from a recorded fixture.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from eifo_core.db import create_engine_from_settings, make_session_factory
 from eifo_core.models import Base
 from eifo_core.settings import Settings
 from eifo_fetcher.http import HttpClient, RateLimiter
+from eifo_fetcher.runs import FETCHER_LOGGER
 from eifo_fetcher.sources.base import FetchContext
 
 
@@ -59,3 +61,13 @@ def http() -> Iterator[HttpClient]:
 @pytest.fixture
 def ctx(http: HttpClient, settings: Settings) -> FetchContext:
     return FetchContext(source_key="test_source", http=http, settings=settings)
+
+
+@pytest.fixture
+def fetcher_logs_at_info() -> Iterator[None]:
+    """What ``eifo-fetch`` configures for itself; the capture takes what it finds."""
+    target = logging.getLogger(FETCHER_LOGGER)
+    previous = target.level
+    target.setLevel(logging.INFO)
+    yield
+    target.setLevel(previous)

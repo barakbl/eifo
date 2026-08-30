@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from eifo_core.settings import (
     MissingSettingsError,
@@ -242,3 +242,22 @@ class TestTheExampleConfig:
 
         for name in ("secret_key", "tmdb_api_key", "google_client_secret", "x_client_secret"):
             assert name not in example
+
+
+class TestFetchConfig:
+    """How much of the sync phase runs at once (``eifo_fetcher.prefetch``)."""
+
+    def test_it_reads_several_catalogs_at_once_by_default(self) -> None:
+        assert Settings(_env_file=None).fetch.concurrency > 1
+
+    def test_the_serial_run_is_still_available(self) -> None:
+        assert Settings(_env_file=None, fetch={"concurrency": 1}).fetch.concurrency == 1
+
+    def test_no_readers_at_all_is_refused(self) -> None:
+        """A run that reads nothing is not a slower run, it is no run."""
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, fetch={"concurrency": 0})
+
+    def test_a_buffer_with_no_room_is_refused(self) -> None:
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None, fetch={"buffer_size": 0})

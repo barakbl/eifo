@@ -94,6 +94,45 @@ class EnrichConfig(BaseModel):
     enabled: list[str] = Field(default_factory=list)
 
 
+class FetchConfig(BaseModel):
+    """How the sync phase spends its time.
+
+    See ``eifo_fetcher.prefetch`` for why only the reading is parallel and the
+    writing is not.
+    """
+
+    #: How many plugins may be reading their catalogs at the same time.
+    #:
+    #: Plugins, not sources: a plugin owning several services fetches them one
+    #: after another, because those services share an upstream API and the rate
+    #: limit that goes with it. Raising this buys wall-clock on a run whose time
+    #: goes on waiting for other people's servers, which is nearly all of it;
+    #: it does not make any single site be asked for more per second, which the
+    #: per-host rate limiter still governs. 1 restores the old serial run.
+    concurrency: int = 4
+    #: Listings held per source while the ingester is busy with another one.
+    #:
+    #: The whole point of the buffer: a plugin that has finished reading its
+    #: catalog releases its worker for the next plugin instead of waiting its
+    #: turn at the database. Big enough that most catalogs fit entirely, small
+    #: enough that several at once are megabytes rather than hundreds of them.
+    buffer_size: int = 2000
+
+    @field_validator("concurrency")
+    @classmethod
+    def _at_least_one(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("fetch.concurrency must be at least 1")
+        return value
+
+    @field_validator("buffer_size")
+    @classmethod
+    def _room_for_something(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("fetch.buffer_size must be at least 1")
+        return value
+
+
 class TmdbConfig(BaseModel):
     """How hard to lean on the TMDB API.
 
@@ -179,6 +218,7 @@ class Settings(BaseSettings):
 
     sources: dict[str, SourceConfig] = Field(default_factory=dict)
     scores: ScoresConfig = Field(default_factory=ScoresConfig)
+    fetch: FetchConfig = Field(default_factory=FetchConfig)
     tmdb: TmdbConfig = Field(default_factory=TmdbConfig)
     enrich: EnrichConfig = Field(default_factory=EnrichConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)

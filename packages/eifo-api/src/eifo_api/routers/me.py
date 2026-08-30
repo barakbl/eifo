@@ -16,6 +16,7 @@ from eifo_api.converters import hydrate_titles, to_user, to_user_item
 from eifo_api.deps import CsrfDep, PrincipalDep, SessionDep
 from eifo_api.schemas import (
     ItemUpsert,
+    ListService,
     MeResponse,
     Page,
     ProfilePatch,
@@ -23,7 +24,7 @@ from eifo_api.schemas import (
     UserOut,
 )
 from eifo_core.enums import ItemStatus
-from eifo_core.models import Source, Title, User, UserItem
+from eifo_core.models import Availability, Source, Title, User, UserItem
 from eifo_core.types import utcnow
 
 router = APIRouter(tags=["user"])
@@ -131,6 +132,55 @@ def list_my_items(
         page_size=page_size,
         total=total,
     )
+
+
+@router.get(
+    "/me/items/services",
+    response_model=list[ListService],
+    summary="Where your list can be watched",
+)
+def my_list_services(
+    principal: PrincipalDep,
+    session: SessionDep,
+    status: Annotated[ItemStatus | None, Query()] = None,
+    rated: Annotated[bool | None, Query(description="Only titles you have rated")] = None,
+) -> list[ListService]:
+    """How much of your list each service carries, most first.
+
+    The question behind a watchlist is which subscription would actually clear
+    it, and that is not answerable from a page of it: the answer has to count
+    the whole list, so the server counts rather than the grid.
+
+    Only services still being collected. A retired one is not something anybody
+    can go and subscribe to, and offering it as an answer would be advice that
+    cannot be taken.
+
+    Declared before ``/me/items/{title_id}`` so "services" is read as itself
+    rather than as a title id.
+    """
+    wanted = select(UserItem.title_id).where(UserItem.user_id == principal.user.id)
+    if status is not None:
+        column = UserItem.watched if status is ItemStatus.WATCHED else UserItem.want_to_watch
+        wanted = wanted.where(column)
+    if rated:
+        wanted = wanted.where(UserItem.rating.is_not(None))
+
+    counted = func.count(func.distinct(Availability.title_id))
+    rows = session.execute(
+        select(Source.key, Source.name, counted)
+        .join(Availability, Availability.source_id == Source.id)
+        .where(
+            Source.active.is_(True),
+            Availability.is_current.is_(True),
+            Availability.title_id.in_(wanted),
+        )
+        .group_by(Source.id)
+        # Name breaks the tie so two services with the same count do not swap
+        # places between requests for no reason anybody could see.
+        .order_by(counted.desc(), Source.name)
+    ).all()
+
+    return [ListService(key=key, name=name, title_count=count) for key, name, count in rows]
 
 
 @router.put("/me/items/{title_id}", response_model=UserItemOut, summary="Add or update an entry")

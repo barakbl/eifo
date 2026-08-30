@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_api.security import CSRF_HEADER
 from eifo_core.enums import AuthProvider
-from eifo_core.models import User, UserItem, UserSession
+from eifo_core.models import Availability, User, UserItem, UserSession
 
 
 @pytest.fixture
@@ -384,6 +384,112 @@ class TestMyList:
         sign_in(AuthProvider.X)
 
         assert client.get("/api/v1/me/items").json()["total"] == 0
+
+
+class TestWhereAListCanBeWatched:
+    """The question behind a watchlist is which subscription would clear it.
+
+    The seed puts Fauda on Netflix and on Mako, and Foxtrot on Netflix with the
+    offer no longer current - so counting has to mean "currently carries", and a
+    title on two services counts once for each.
+    """
+
+    @pytest.fixture
+    def wanted(
+        self,
+        client: TestClient,
+        headers: dict[str, str],
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+    ) -> Seeded:
+        """Fauda and Foxtrot on the watchlist, both currently offered."""
+        with session_factory() as session:
+            gone = session.scalars(
+                select(Availability).where(
+                    Availability.title_id == catalog.foxtrot,
+                    Availability.is_current.is_(False),
+                )
+            ).one()
+            gone.is_current = True
+            session.commit()
+
+        for title_id in (catalog.fauda, catalog.foxtrot):
+            client.put(
+                f"/api/v1/me/items/{title_id}", json={"want_to_watch": True}, headers=headers
+            )
+        return catalog
+
+    def test_it_counts_what_each_service_currently_carries(
+        self, client: TestClient, wanted: Seeded
+    ) -> None:
+        body = client.get("/api/v1/me/items/services", params={"status": "want_to_watch"}).json()
+
+        counts = {row["key"]: row["title_count"] for row in body}
+        # Netflix has both; Mako has only Fauda.
+        assert counts == {"netflix_il": 2, "mako": 1}
+
+    def test_the_fullest_service_comes_first(self, client: TestClient, wanted: Seeded) -> None:
+        """Which is the whole point: the top row is the subscription to get."""
+        body = client.get("/api/v1/me/items/services", params={"status": "want_to_watch"}).json()
+
+        assert [row["key"] for row in body] == ["netflix_il", "mako"]
+
+    def test_an_offer_that_is_no_longer_current_is_not_somewhere_to_watch_it(
+        self, client: TestClient, headers: dict[str, str], catalog: Seeded
+    ) -> None:
+        """Foxtrot's Netflix offer has ended, so Netflix does not carry it."""
+        client.put(
+            f"/api/v1/me/items/{catalog.foxtrot}", json={"want_to_watch": True}, headers=headers
+        )
+
+        body = client.get("/api/v1/me/items/services", params={"status": "want_to_watch"}).json()
+
+        assert body == []
+
+    def test_it_answers_for_one_list_at_a_time(
+        self, client: TestClient, headers: dict[str, str], wanted: Seeded
+    ) -> None:
+        want = client.get("/api/v1/me/items/services", params={"status": "want_to_watch"}).json()
+        seen = client.get("/api/v1/me/items/services", params={"status": "watched"}).json()
+
+        assert want
+        assert seen == []
+
+    def test_a_retired_service_is_not_offered_as_an_answer(
+        self,
+        client: TestClient,
+        headers: dict[str, str],
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Shtisel is only on the retired service. Nobody can go and subscribe
+        to it, so offering it would be advice that cannot be taken."""
+        client.put(
+            f"/api/v1/me/items/{catalog.shtisel}", json={"want_to_watch": True}, headers=headers
+        )
+
+        body = client.get("/api/v1/me/items/services", params={"status": "want_to_watch"}).json()
+
+        assert body == []
+
+    def test_an_empty_list_has_nowhere_to_watch_it(
+        self, client: TestClient, headers: dict[str, str], catalog: Seeded
+    ) -> None:
+        assert client.get("/api/v1/me/items/services").json() == []
+
+    def test_it_is_not_read_as_a_title_id(
+        self, client: TestClient, headers: dict[str, str], catalog: Seeded
+    ) -> None:
+        """The route sits beside /me/items/{title_id} and must win."""
+        assert client.get("/api/v1/me/items/services").status_code == 200
+
+    def test_somebody_elses_list_is_not_counted(
+        self, client: TestClient, wanted: Seeded, sign_in: SignIn
+    ) -> None:
+        client.cookies.clear()
+        sign_in(AuthProvider.X)
+
+        assert client.get("/api/v1/me/items/services").json() == []
 
 
 class TestAccountDeletion:

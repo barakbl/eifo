@@ -325,6 +325,16 @@ class UserItemOut(BaseModel):
     title: TitleCard | None = None
 
 
+class ListService(BaseModel):
+    """One service, and how much of a user's list it carries."""
+
+    key: str
+    name: str
+    #: Titles on the list this service currently offers. Distinct titles, not
+    #: offers: a film that can be rented or bought is one thing to watch.
+    title_count: int
+
+
 class ProfilePatch(BaseModel):
     """A partial profile update; absent fields are left alone."""
 

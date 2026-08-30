@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -30,6 +31,8 @@ from eifo_core.types import utcnow
 from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
 from eifo_fetcher.match import is_hebrew, latin_script
 from eifo_fetcher.people import apply_credits
+from eifo_fetcher.progress import ProgressTicker, position, remaining
+from eifo_fetcher.progress import tally as tally_of
 from eifo_fetcher.runs import capture_log, close_run, open_run
 from eifo_fetcher.scores import RatingInput, aggregate, normalise
 from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError, plausible_year
@@ -262,9 +265,21 @@ def enrich_titles(
                 if titles is not None
                 else titles_due(session, settings, force=force, limit=limit)
             )
+            # Said before the first title, because it is the number that decides
+            # whether to wait for this or go to bed: a run with nine titles due
+            # and a run with five thousand look identical until it is over.
+            logger.info("%d title(s) due for enrichment", len(due))
+            ticker = ProgressTicker()
+            began = time.monotonic()
+
             for index, title in enumerate(due, 1):
                 tally.titles_seen += 1
                 view = _view_of(title)
+                # Every title by name, for anybody who wants to watch it work or
+                # to find which one a provider choked on. At DEBUG because a
+                # batch of five thousand would otherwise bury the progress lines
+                # and spend the run row's whole log budget on a list of titles.
+                logger.debug("enriching %s", _describe(title))
                 written = 0
                 errored = False
                 for enricher in enrichers:
@@ -286,6 +301,10 @@ def enrich_titles(
                 session.flush()
                 if index % COMMIT_EVERY == 0:
                     session.commit()
+
+                logger.debug("%s: %d rating(s) written", _describe(title), written)
+                if ticker.due(index):
+                    logger.info("%s", _progress(tally, index, len(due), began))
         except TooManyErrorsError as exc:
             logger.error("%s", exc)
             status = FetchStatus.FAILED
@@ -574,6 +593,12 @@ def recompute_all_aggregates(session: Session, settings: Settings) -> int:
         title_id
         for (title_id,) in session.execute(select(ExternalRating.title_id).distinct()).all()
     ]
+    # Cheap per row and there are tens of thousands of them, so this is minutes
+    # of a phase that has already run for an hour - and the last minutes of a
+    # long run are exactly when somebody is wondering whether to kill it.
+    logger.info("rescoring %d rated title(s)", len(rated_ids))
+    ticker = ProgressTicker()
+    began = time.monotonic()
 
     for index, title_id in enumerate(rated_ids, 1):
         title = session.get(Title, title_id)
@@ -583,9 +608,44 @@ def recompute_all_aggregates(session: Session, settings: Settings) -> int:
         # as the enrich loop, just after the IMDb pass rather than during it.
         if index % AGGREGATE_COMMIT_EVERY == 0:
             session.commit()
+        if ticker.due(index):
+            logger.info(
+                "rescoring: %s%s",
+                position(index, len(rated_ids)),
+                _tail(remaining(index, len(rated_ids), time.monotonic() - began)),
+            )
 
     session.commit()
     return tally.aggregates_computed
+
+
+def _progress(tally: EnrichResultTally, done: int, total: int, began: float) -> str:
+    """One line saying how far into the batch this is, and to what effect.
+
+    The position answers "should I wait for this"; the tally answers "is it
+    doing anything" - a run that is a third of the way through and has written
+    no ratings at all is a run worth interrupting.
+    """
+    return "enrich: {}{} - {}".format(
+        position(done, total),
+        _tail(remaining(done, total, time.monotonic() - began)),
+        tally_of(
+            ratings=tally.ratings_written,
+            metadata_updated=tally.metadata_updated,
+            errors=len(tally.errors),
+        ),
+    )
+
+
+def _tail(estimate: str | None) -> str:
+    """An estimate as a clause, or nothing at all when there is none to give."""
+    return f", {estimate}" if estimate else ""
+
+
+def _describe(title: Title) -> str:
+    """A title as a person would recognise it, with the id to look it up by."""
+    name = title.name_en or title.name_he or "untitled"
+    return f"{name!r} (id {title.id})"
 
 
 def _view_of(title: Title) -> TitleView:

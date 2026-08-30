@@ -413,13 +413,19 @@ uv run eifo-fetch sync --concurrency 1   # one catalog after another, as it used
 uv run eifo-fetch sync --concurrency 8   # or set [fetch] concurrency in the config
 ```
 
-Every source says where it has got to as it goes, on the round hundreds and at least
-every fifteen seconds, so a long scrape is visibly working rather than possibly hung:
+Every long phase says where it has got to as it goes, on the round hundreds and at least
+every fifteen seconds, so a slow one is visibly working rather than possibly hung:
 
 ```
 eifo.fetch.source.freetv  read 400 listings so far
 eifo.fetch.pipeline       freetv: 400 listings in - 12 new titles, 12 new offers, 388 already listed
+eifo.fetch.enrich         enrich: 1,200 of 5,000 (24%), about 8 minutes left - 3,410 ratings
+eifo.fetch.enrich         rescoring: 12,000 of 27,973 (43%), about 2 minutes left
 ```
+
+A sync cannot say what is left - a catalog is however long it turns out to be - but enrich
+is handed a batch and rescoring a list, so both say how far through they are and roughly
+how long the rest will take. `-v` adds a line per title, naming each one as it goes.
 
 Those lines are on the source's own run row in the Runs tab, including the ones logged
 while its catalog was still being read.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import io
+import logging
 from typing import Any
 
 import httpx
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from eifo_core.enums import RatingProvider, TitleKind
 from eifo_core.models import ExternalRating, Title
+from eifo_fetcher.enrichers import imdb as imdb_module
 from eifo_fetcher.enrichers.imdb import (
     DATASET_URL,
     ImdbDatasetLoader,
@@ -160,3 +162,58 @@ class TestBulkJoin:
 
         assert route.call_count == 0
         assert result.rows_read == 0
+
+
+class TestSayingItIsStillGoing:
+    """A million-row join that says nothing looks exactly like a hung one, and
+    this one runs inside the longest phase the fetcher has."""
+
+    @respx.mock
+    def test_it_says_what_it_downloaded_before_joining_it(
+        self, session: Session, http: HttpClient, caplog: Any
+    ) -> None:
+        add_title(session, "tt4565380")
+        respx.get(DATASET_URL).mock(
+            return_value=httpx.Response(200, content=dataset("tt4565380\t8.3\t45123"))
+        )
+
+        with caplog.at_level(logging.INFO, logger="eifo.fetch.enrich.imdb"):
+            ImdbDatasetLoader(http).run(session)
+
+        assert "joining it against the catalog" in caplog.text
+
+    @respx.mock
+    def test_it_reports_as_it_reads(
+        self, session: Session, http: HttpClient, caplog: Any, monkeypatch: Any
+    ) -> None:
+        """Scaled down, because the real thresholds are a quarter of a million
+        rows apart and a test should not have to build that."""
+        monkeypatch.setattr(imdb_module, "PROGRESS_EVERY_ROWS", 5)
+        monkeypatch.setattr(imdb_module, "PROGRESS_FIRST_ROWS", 2)
+        add_title(session, "tt0000001")
+        rows = [f"tt{index:07d}\t7.0\t900" for index in range(1, 13)]
+        respx.get(DATASET_URL).mock(return_value=httpx.Response(200, content=dataset(*rows)))
+
+        with caplog.at_level(logging.INFO, logger="eifo.fetch.enrich.imdb"):
+            result = ImdbDatasetLoader(http).run(session)
+
+        assert result.rows_read == 12
+        assert "imdb: 5 rows read" in caplog.text
+        assert "imdb: 10 rows read" in caplog.text
+
+    @respx.mock
+    def test_rows_this_catalog_holds_nothing_for_still_count_as_progress(
+        self, session: Session, http: HttpClient, caplog: Any, monkeypatch: Any
+    ) -> None:
+        """Which is most of the dataset: a million rows about films nobody here
+        carries is still a million rows of work being got through."""
+        monkeypatch.setattr(imdb_module, "PROGRESS_EVERY_ROWS", 5)
+        monkeypatch.setattr(imdb_module, "PROGRESS_FIRST_ROWS", 2)
+        add_title(session, "tt9999999")
+        rows = [f"tt{index:07d}\t7.0\t900" for index in range(1, 13)]
+        respx.get(DATASET_URL).mock(return_value=httpx.Response(200, content=dataset(*rows)))
+
+        with caplog.at_level(logging.INFO, logger="eifo.fetch.enrich.imdb"):
+            ImdbDatasetLoader(http).run(session)
+
+        assert "imdb: 10 rows read, 0 matched" in caplog.text

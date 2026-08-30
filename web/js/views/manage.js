@@ -149,11 +149,11 @@ async function overviewPanel(panel, { t, app }) {
   const { language } = app.get();
   replace(panel, [
     statStrip(stats, { t }),
-    // Between the dials and the sources, because it explains one of the dials:
-    // "scored" says how much of the catalog carries a score, and this says who
-    // decided it.
-    scoringTable(stats.scoring ?? [], { t, titleCount: stats.title_count }),
     sourcesTable(sources, { t, language }),
+    // Last, because it is the least urgent thing on the page. The dials and the
+    // sources answer "is anything wrong right now"; this answers "where do the
+    // scores come from", which is worth knowing and rarely worth hurrying to.
+    scoringTable(stats.scoring ?? [], { t, titleCount: stats.title_count }),
   ]);
   return null;
 }

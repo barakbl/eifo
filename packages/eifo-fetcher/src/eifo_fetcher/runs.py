@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import threading
 from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -90,9 +91,85 @@ class RunLogCapture(logging.Handler):
         return body
 
 
+#: Which capture each thread's records belong to, by thread identity.
+#:
+#: Routed rather than broadcast because the sync phase reads several catalogs at
+#: once (``eifo_fetcher.prefetch``). One handler collecting everything the
+#: fetcher said would put Kan's fetch lines in FreeTV's run row - and, worse,
+#: would drop the lines a plugin logged before its own row was opened, which for
+#: a prefetched source is most of what it had to say.
+_ROUTES: dict[int, RunLogCapture] = {}
+_ROUTES_LOCK = threading.Lock()
+_ROUTER: _RunLogRouter | None = None
+
+
+class _RunLogRouter(logging.Handler):
+    """Hands each record to the capture belonging to the thread that emitted it.
+
+    One handler on the ``eifo`` logger however many runs are open, so the two
+    tests that count handlers still describe what happens: a run attaches
+    something, and nothing is left behind when it ends.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        # An unlocked read: CPython's dict lookup is atomic, and taking the lock
+        # here would put every log line in the process through one mutex for the
+        # sake of a race whose worst outcome is a line landing in the run that
+        # was current a microsecond ago.
+        capture = _ROUTES.get(threading.get_ident())
+        if capture is not None:
+            # handle() rather than emit(): it applies the capture's own level
+            # and takes its lock, which matters because a source's producer
+            # thread and the ingesting thread write to one capture at once.
+            capture.handle(record)
+
+
+@contextmanager
+def capturing(capture: RunLogCapture) -> Iterator[RunLogCapture]:
+    """Send this thread's fetcher log records to ``capture`` for the duration.
+
+    Nestable and restoring: a thread that moves on to another source puts its
+    previous route back, so an inner run cannot swallow an outer one's tail.
+    """
+    ident = threading.get_ident()
+    global _ROUTER
+    with _ROUTES_LOCK:
+        if _ROUTER is None:
+            _ROUTER = _RunLogRouter()
+            logging.getLogger(FETCHER_LOGGER).addHandler(_ROUTER)
+        previous = _ROUTES.get(ident)
+        _ROUTES[ident] = capture
+    try:
+        yield capture
+    finally:
+        with _ROUTES_LOCK:
+            if previous is None:
+                _ROUTES.pop(ident, None)
+            else:
+                _ROUTES[ident] = previous
+            if not _ROUTES and _ROUTER is not None:
+                # Nothing is being recorded, so nothing should be attached: a
+                # handler left on the logger would go on collecting into a row
+                # that has already been written.
+                logging.getLogger(FETCHER_LOGGER).removeHandler(_ROUTER)
+                _ROUTER = None
+
+
+def new_capture(level: int = logging.INFO) -> RunLogCapture:
+    """A capture that is not collecting yet.
+
+    Made before the work starts and routed later, which is what lets a source's
+    row hold the lines its plugin logged while it was being prefetched - long
+    before anything opened a row for it.
+    """
+    capture = RunLogCapture()
+    capture.setLevel(level)
+    return capture
+
+
 @contextmanager
 def capture_log(level: int = logging.INFO) -> Iterator[RunLogCapture]:
-    """Collect the fetcher's log records for the duration of a run.
+    """Collect this thread's fetcher log records for the duration of a run.
 
     Attached to the ``eifo`` logger rather than the root, so somebody else's
     library chatter stays out of the row, and removed again on the way out
@@ -105,15 +182,12 @@ def capture_log(level: int = logging.INFO) -> Iterator[RunLogCapture]:
     who has deliberately quietened the fetcher gets a row as quiet as the
     console they asked for, which is the honest reading of "what the run said".
     """
-    handler = RunLogCapture()
-    handler.setLevel(level)
-    target = logging.getLogger(FETCHER_LOGGER)
-    target.addHandler(handler)
+    capture = new_capture(level)
     try:
-        yield handler
+        with capturing(capture):
+            yield capture
     finally:
-        target.removeHandler(handler)
-        handler.close()
+        capture.close()
 
 
 def open_run(

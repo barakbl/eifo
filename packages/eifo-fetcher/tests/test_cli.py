@@ -322,6 +322,10 @@ class TestSyncCommand:
     def test_images_with_nothing_to_do_succeeds(self, migrated: Path) -> None:
         assert main(["images"]) == EXIT_OK
 
+    def test_concurrency_below_one_is_refused(self, migrated: Path) -> None:
+        """Zero readers would be a run that quietly does nothing at all."""
+        assert main(["sync", "--concurrency", "0"]) == EXIT_FATAL
+
 
 class TestParser:
     def test_requires_a_subcommand(self) -> None:
@@ -335,6 +339,12 @@ class TestParser:
 
     def test_sync_defaults_to_every_source(self) -> None:
         assert build_parser().parse_args(["sync"]).sources is None
+
+    def test_sync_takes_a_concurrency(self) -> None:
+        assert build_parser().parse_args(["sync", "--concurrency", "2"]).concurrency == 2
+
+    def test_sync_leaves_concurrency_to_the_configuration(self) -> None:
+        assert build_parser().parse_args(["sync"]).concurrency is None
 
     def test_images_flags(self) -> None:
         args = build_parser().parse_args(["images", "--force", "--limit", "5"])

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 from typing import Any
 
@@ -609,3 +610,104 @@ class TestASourceExistsBeforeItHasRun:
 
         assert register_declared_sources(session, self._declared(), enabled=["on_one"]) == []
         assert len(session.scalars(select(Source)).all()) == 2
+
+
+LETTERS = "אבגדהוזחטיכלמנסעפצקרשת"
+
+
+def unrelated_name(n: int) -> str:
+    """A name nothing else this generates is near enough to be mistaken for.
+
+    ``סדרה 1`` and ``סדרה 2`` are one character apart, which is well inside what
+    the matcher treats as the same title under two spellings - so a list of them
+    is a list of near-duplicates, and says nothing about counting.
+    """
+    digest = hashlib.sha1(str(n).encode()).hexdigest()[:10]
+    return "".join(LETTERS[int(char, 16) % len(LETTERS)] for char in digest)
+
+
+def latest_log(session: Session) -> str:
+    run = session.scalars(select(FetchRun).order_by(FetchRun.id.desc())).first()
+    assert run is not None
+    return run.log or ""
+
+
+class TestSayingHowFarItHasGot:
+    """A catalog of twenty thousand listings is twenty minutes in which the only
+    thing telling a working sync apart from a hung one is that it keeps saying
+    where it has got to."""
+
+    def test_a_long_sync_reports_on_the_way_through(
+        self,
+        session: Session,
+        settings: Settings,
+        sync_ctx: FetchContext,
+        fetcher_logs_at_info: None,
+    ) -> None:
+        result = run_sync(
+            session, settings, sync_ctx, [item(unrelated_name(n)) for n in range(250)]
+        )
+
+        said = latest_log(session)
+        assert result.items_seen == 250
+        assert "100 listings in" in said
+        assert "200 listings in" in said
+
+    def test_it_says_what_it_is_finding_and_not_only_how_much(
+        self,
+        session: Session,
+        settings: Settings,
+        sync_ctx: FetchContext,
+        fetcher_logs_at_info: None,
+    ) -> None:
+        """Whether any of it is new is the question somebody is watching to answer."""
+        run_sync(session, settings, sync_ctx, [item(unrelated_name(n)) for n in range(120)])
+
+        assert "100 listings in - 100 new titles, 100 new offers" in latest_log(session)
+
+    def test_a_second_run_says_it_found_nothing_new(
+        self,
+        session: Session,
+        settings: Settings,
+        sync_ctx: FetchContext,
+        fetcher_logs_at_info: None,
+    ) -> None:
+        listings = [item(unrelated_name(n)) for n in range(120)]
+        run_sync(session, settings, sync_ctx, listings)
+        run_sync(session, settings, sync_ctx, listings)
+
+        assert "100 listings in - 100 already listed" in latest_log(session)
+
+    def test_a_short_sync_still_proves_itself_alive(
+        self,
+        session: Session,
+        settings: Settings,
+        sync_ctx: FetchContext,
+        fetcher_logs_at_info: None,
+    ) -> None:
+        """The early line, so a slow source is visibly working within seconds."""
+        run_sync(session, settings, sync_ctx, [item(unrelated_name(n)) for n in range(12)])
+
+        assert "10 listings in - 10 new titles" in latest_log(session)
+
+    def test_a_stretch_of_parked_listings_does_not_silence_it(
+        self,
+        session: Session,
+        settings: Settings,
+        sync_ctx: FetchContext,
+        fetcher_logs_at_info: None,
+    ) -> None:
+        """An unmatched item leaves the loop early, and used to take the progress
+        line and the commit with it - so the run that most looks stuck, one
+        parking listing after listing, was the one that said least."""
+        # Near-identical names and a different year each: the matcher can neither
+        # dismiss the resemblance nor accept it, which is what parking is for.
+        listings = [item(f"סדרה {n}", year=1900 + n) for n in range(250)]
+
+        result = run_sync(session, settings, sync_ctx, listings)
+
+        said = latest_log(session)
+        assert result.matched_by.get("review", 0) > 100
+        assert "100 listings in" in said
+        assert "200 listings in" in said
+        assert "parked for review" in said

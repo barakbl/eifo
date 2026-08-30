@@ -62,8 +62,9 @@ class RetryableStatusError(httpx.HTTPError):
 class RateLimiter:
     """Per-host minimum spacing between requests.
 
-    Thread-safe because a future stage may fetch sources concurrently; the
-    fetcher is single-threaded today and this costs nothing.
+    Thread-safe, and now actually threaded: the sync phase reads several
+    catalogs at once (``eifo_fetcher.prefetch``), so the spacing this enforces is
+    what keeps that from becoming several times the traffic at one host.
     """
 
     def __init__(self, default_rps: float = DEFAULT_RATE_LIMIT_RPS) -> None:
@@ -74,9 +75,11 @@ class RateLimiter:
 
     def set_host_rate(self, host: str, rps: float) -> None:
         """Override the rate for one host. ``rps <= 0`` disables limiting."""
-        self._overrides[host] = rps
+        with self._lock:
+            self._overrides[host] = rps
 
     def _interval(self, host: str) -> float:
+        # Called with the lock held.
         rps = self._overrides.get(host, self._default_rps)
         return 0.0 if rps <= 0 else 1.0 / rps
 
@@ -86,11 +89,10 @@ class RateLimiter:
         Returns the number of seconds actually waited, which the tests assert on
         instead of measuring wall-clock time.
         """
-        interval = self._interval(host)
-        if interval <= 0:
-            return 0.0
-
         with self._lock:
+            interval = self._interval(host)
+            if interval <= 0:
+                return 0.0
             current = now()
             earliest = self._next_allowed.get(host, 0.0)
             delay = max(0.0, earliest - current)

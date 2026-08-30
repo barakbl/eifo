@@ -143,6 +143,33 @@ enabled = false
 # Score aggregation - see docs.internal/06-enrichment.md
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# The sync phase
+# ---------------------------------------------------------------------------
+
+[fetch]
+# How many catalogs to read at the same time.
+#
+# Plugins, not sources: a plugin that owns several services (the tmdb-providers
+# harvester owns a dozen) reads them one after another, because they come from
+# one upstream API on one rate limit and asking for them at once buys nothing.
+#
+# Only the reading is parallel. What each source says is still written one
+# source at a time - SQLite takes a single writer, and two syncs writing at once
+# is not a faster night, it is "database is locked". Nearly all of a run is
+# spent waiting on other people's servers, so this is where the wall-clock is.
+#
+# This does not make any one site be asked for more per second: the per-host
+# rate limit still governs that, and every source keeps the pace set for it.
+# Set 1 to read them one after another, as the fetcher used to.
+concurrency = 4
+
+# Listings held per source while the writer is busy with another one. A plugin
+# that has read its whole catalog into the buffer releases its worker for the
+# next plugin instead of waiting its turn; one whose buffer fills up waits,
+# which is what keeps a large catalog from becoming a large list in memory.
+buffer_size = 2000
+
 # How often ratings are refreshed, and which providers are switched on.
 [tmdb]
 # Requests per second to the TMDB API and its image CDN. TMDB is an API built

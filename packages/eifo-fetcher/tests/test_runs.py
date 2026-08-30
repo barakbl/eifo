@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from collections.abc import Iterator
 
 import pytest
 from sqlalchemy import select
@@ -139,16 +138,6 @@ class TestPhasesThatUsedToRecordNothing:
         assert run.phase is FetchPhase.ENRICH
         assert run.status is FetchStatus.OK
         assert "rows_read" in run.stats
-
-
-@pytest.fixture
-def fetcher_logs_at_info() -> Iterator[None]:
-    """What ``eifo-fetch`` configures for itself; the capture takes what it finds."""
-    target = logging.getLogger(FETCHER_LOGGER)
-    previous = target.level
-    target.setLevel(logging.INFO)
-    yield
-    target.setLevel(previous)
 
 
 class TestWhatARunSaid:

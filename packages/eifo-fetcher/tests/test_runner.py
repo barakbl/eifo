@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -11,8 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_core.db import create_engine_from_settings
-from eifo_core.enums import FetchStatus, SourceKind, TitleKind
-from eifo_core.models import Base, Source
+from eifo_core.enums import FetchPhase, FetchStatus, SourceKind, TitleKind
+from eifo_core.models import Base, FetchRun, Source
 from eifo_core.settings import Settings, SourceConfig
 from eifo_core.types import utcnow
 from eifo_fetcher.daemon import _parse_time, run_backfills, run_daemon, run_nightly, run_once
@@ -30,6 +32,69 @@ def info(key: str) -> SourceInfo:
         kind=SourceKind.SUBSCRIPTION,
         website_url=f"https://{key}.example",
     )
+
+
+class OneSourcePlugin(SourcePlugin):
+    def __init__(self, key: str) -> None:
+        self._key = key
+
+    def sources(self) -> list[SourceInfo]:
+        return [info(self._key)]
+
+    def fetch(self, ctx: FetchContext) -> Iterator[RawItem]:
+        yield RawItem(source_key=ctx.source_key, kind=TitleKind.MOVIE, name=f"סרט {ctx.source_key}")
+
+
+class MeetingPlugin(SourcePlugin):
+    """Cannot finish reading until another plugin is reading too."""
+
+    def __init__(self, key: str, met: threading.Barrier) -> None:
+        self._key = key
+        self._met = met
+
+    def sources(self) -> list[SourceInfo]:
+        return [info(self._key)]
+
+    def fetch(self, ctx: FetchContext) -> Iterator[RawItem]:
+        self._met.wait(timeout=10)
+        yield RawItem(source_key=ctx.source_key, kind=TitleKind.MOVIE, name=f"סרט {ctx.source_key}")
+
+
+class OverlapWatchingPlugin(SourcePlugin):
+    """Owns two sources and notices if it is ever asked for both at once."""
+
+    def __init__(self) -> None:
+        self.overlapped = threading.Event()
+        self._running: list[str] = []
+
+    def sources(self) -> list[SourceInfo]:
+        return [info("alpha"), info("beta")]
+
+    def fetch(self, ctx: FetchContext) -> Iterator[RawItem]:
+        if self._running:
+            self.overlapped.set()
+        self._running.append(ctx.source_key)
+        try:
+            time.sleep(0.05)
+            yield RawItem(
+                source_key=ctx.source_key, kind=TitleKind.MOVIE, name=f"סרט {ctx.source_key}"
+            )
+        finally:
+            self._running.remove(ctx.source_key)
+
+
+class TalkativePlugin(SourcePlugin):
+    """Says something while reading, which is when a prefetched source speaks."""
+
+    def __init__(self, key: str) -> None:
+        self._key = key
+
+    def sources(self) -> list[SourceInfo]:
+        return [info(self._key)]
+
+    def fetch(self, ctx: FetchContext) -> Iterator[RawItem]:
+        ctx.logger.info("a word from %s", ctx.source_key)
+        yield RawItem(source_key=ctx.source_key, kind=TitleKind.MOVIE, name=f"סרט {ctx.source_key}")
 
 
 class TwoSourcePlugin(SourcePlugin):
@@ -50,6 +115,116 @@ class TwoSourcePlugin(SourcePlugin):
             name=f"תוכנית {ctx.source_key}",
             year=2020,
         )
+
+
+def reading(settings: Settings, *, at_once: int) -> Settings:
+    """The same settings, with a different number of catalogs read at a time."""
+    return settings.model_copy(
+        update={"fetch": settings.fetch.model_copy(update={"concurrency": at_once})}
+    )
+
+
+class TestReadingSeveralAtOnce:
+    """Reading is what runs in parallel; writing is still one source at a time.
+
+    See ``eifo_fetcher.prefetch`` for why that split rather than the obvious one:
+    SQLite takes a single writer, and two syncs writing at once end as
+    ``database is locked`` rather than as a faster night.
+    """
+
+    def test_it_finds_exactly_what_the_serial_run_finds(
+        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+    ) -> None:
+        serial = sync_all(
+            session_factory,
+            reading(settings, at_once=1),
+            http=http,
+            plugins=[TwoSourcePlugin()],
+        )
+        assert [(r.source_key, r.status, r.items_seen) for r in serial.results] == [
+            ("alpha", FetchStatus.OK, 1),
+            ("beta", FetchStatus.OK, 1),
+        ]
+
+    def test_the_parallel_run_agrees_with_it(
+        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+    ) -> None:
+        report = sync_all(
+            session_factory,
+            reading(settings, at_once=4),
+            http=http,
+            plugins=[TwoSourcePlugin(), OneSourcePlugin("gamma")],
+        )
+
+        assert [(r.source_key, r.status, r.items_seen) for r in report.results] == [
+            ("alpha", FetchStatus.OK, 1),
+            ("beta", FetchStatus.OK, 1),
+            ("gamma", FetchStatus.OK, 1),
+        ]
+
+    def test_two_plugins_really_do_read_at_once(
+        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+    ) -> None:
+        """A barrier neither plugin can pass alone, so a serial run cannot pass it."""
+        met = threading.Barrier(2)
+        plugins = [MeetingPlugin("alpha", met), MeetingPlugin("beta", met)]
+
+        report = sync_all(session_factory, reading(settings, at_once=2), http=http, plugins=plugins)
+
+        assert report.failed == []
+        assert report.items_seen == 2
+
+    def test_one_plugin_still_reads_its_own_sources_in_turn(
+        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+    ) -> None:
+        """Two services on one upstream API and one rate limit; asked for in turn."""
+        plugin = OverlapWatchingPlugin()
+
+        sync_all(session_factory, reading(settings, at_once=4), http=http, plugins=[plugin])
+
+        assert not plugin.overlapped.is_set()
+
+    def test_a_failing_source_still_fails_only_itself(
+        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+    ) -> None:
+        """The fetch now raises on another thread; it must still land on its row."""
+        report = sync_all(
+            session_factory,
+            reading(settings, at_once=4),
+            http=http,
+            plugins=[TwoSourcePlugin(failing="alpha")],
+        )
+
+        statuses = {result.source_key: result.status for result in report.results}
+        assert statuses == {"alpha": FetchStatus.FAILED, "beta": FetchStatus.OK}
+        failure = next(r for r in report.results if r.source_key == "alpha")
+        assert any("alpha is down" in error for error in failure.errors)
+
+    def test_what_a_plugin_said_while_reading_is_on_its_own_row(
+        self,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
+        fetcher_logs_at_info: None,
+    ) -> None:
+        """Read in the background, long before anything opened a row for it."""
+        sync_all(
+            session_factory,
+            reading(settings, at_once=2),
+            http=http,
+            plugins=[TalkativePlugin("alpha"), TalkativePlugin("beta")],
+        )
+
+        with session_factory() as session:
+            logs = {
+                run.source_key: run.log or ""
+                for run in session.scalars(select(FetchRun)).all()
+                if run.phase is FetchPhase.SYNC
+            }
+
+        assert "a word from alpha" in logs["alpha"]
+        assert "a word from alpha" not in logs["beta"]
+        assert "a word from beta" in logs["beta"]
 
 
 class TestSyncAll:

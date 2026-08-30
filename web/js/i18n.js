@@ -212,6 +212,18 @@ const STRINGS = {
     "manage.stat.never": "מעולם",
     "manage.staleOf": "{stale} מתוך {total}",
 
+    "manage.scoring": "מרכיבי הציון",
+    "manage.scoring.blurb":
+      "כמה כל מדרג באמת שקל בציונים שבקטלוג: המשקל שלו, כפול מספר הכותרים "
+      + "המדורגים שהספיק לדרג. דירוג עם מעט מצביעים נספר חצי, בדיוק כמו בחישוב עצמו.",
+    "manage.scoring.empty": "עוד אין ציון לאף כותר, אז אין ממה לגזור חלקים.",
+    "manage.scoring.israeli": "ציון ישראלי",
+    "manage.col.provider": "מדרג",
+    "manage.col.weight": "משקל",
+    "manage.col.share": "חלק בציון",
+    "manage.col.covered": "כיסוי הקטלוג",
+    "manage.scoring.unused": "לא דירג כלום",
+
     "manage.sources": "מקורות",
     "manage.source.coverage": "כיסוי",
     "manage.source.lastSync": "סנכרון אחרון",
@@ -464,6 +476,19 @@ const STRINGS = {
     "manage.stat.stale": "Stale sources",
     "manage.stat.never": "Never",
     "manage.staleOf": "{stale} of {total}",
+
+    "manage.scoring": "What the score is made of",
+    "manage.scoring.blurb":
+      "How much each rater actually weighed in the catalog's scores: its weight, "
+      + "times the number of scored titles it has managed to rate. A thinly voted "
+      + "rating counts half, exactly as it does in the sum itself.",
+    "manage.scoring.empty": "Nothing has been scored yet, so there is no whole to take a share of.",
+    "manage.scoring.israeli": "Israeli score",
+    "manage.col.provider": "Rater",
+    "manage.col.weight": "Weight",
+    "manage.col.share": "Share of the score",
+    "manage.col.covered": "Catalog rated",
+    "manage.scoring.unused": "Has rated nothing",
 
     "manage.sources": "Sources",
     "manage.source.coverage": "Coverage",

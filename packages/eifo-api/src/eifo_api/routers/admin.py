@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import Select, case, func, select
 from sqlalchemy.orm import Session
 
+from eifo_api.converters import PROVIDER_NAMES
 from eifo_api.deps import AdminDep, CsrfDep, SessionDep, SettingsDep
 from eifo_api.schemas import (
     AdminSource,
@@ -27,13 +28,15 @@ from eifo_api.schemas import (
     Page,
     RunDetail,
     RunOut,
+    ScoringProvider,
     SourceToggle,
 )
-from eifo_core.enums import EnrichOutcome, FetchPhase, FetchStatus
+from eifo_core.enums import EnrichOutcome, FetchPhase, FetchStatus, RatingProvider
 from eifo_core.models import (
     AggregateScore,
     Availability,
     EnrichAttempt,
+    ExternalRating,
     FetchRun,
     MatchReview,
     Person,
@@ -198,10 +201,80 @@ def get_stats(_admin: AdminDep, session: SessionDep, settings: SettingsDep) -> A
         sources_stale=stale,
         last_run_at=session.scalar(select(func.max(FetchRun.finished_at))),
         stale_after_hours=settings.stale_after_hours,
+        scoring=_scoring_mix(session, settings),
     )
 
 
 # -- helpers ----------------------------------------------------------------
+
+
+def _scoring_mix(session: Session, settings: Settings) -> list[ScoringProvider]:
+    """Every rating provider's part in the catalog's scores, heaviest first.
+
+    The weights in the configuration file say what each provider is *meant* to
+    count for, and on their own they are misleading: a provider weighted
+    heaviest that has rated a tenth of the catalog is not the one deciding its
+    scores. So the share here is the weight that actually went in - each
+    provider's weight counted once per scored title it has rated, over the same
+    total across every provider.
+
+    Halved for a thinly-voted rating, exactly as :mod:`eifo_fetcher.scores`
+    halves it, so the number here is the one the aggregates were built from
+    rather than a second opinion about them.
+
+    Every provider appears, including the ones that have rated nothing. A
+    provider contributing zero is the single most useful row on the table:
+    it means an enricher is off, or blocked, or quietly failing.
+    """
+    thin = settings.scores.low_vote_threshold
+    # A rating with no vote count is not a thin one - it is a provider that does
+    # not publish counts, and treating "unknown" as "hardly anybody" would halve
+    # every score Rotten Tomatoes ever contributed.
+    units = case(
+        (ExternalRating.vote_count.is_not(None) & (ExternalRating.vote_count < thin), 0.5),
+        else_=1.0,
+    )
+    # Two different denominators, on purpose: the share is about the titles that
+    # ended up with a score, and the count is about the catalog. Left join so a
+    # rating on a title nothing could score still counts as a rating.
+    scored = AggregateScore.score.is_not(None)
+    rows = session.execute(
+        select(
+            ExternalRating.provider,
+            func.count().label("rated"),
+            func.coalesce(func.sum(case((scored, units), else_=0.0)), 0.0).label("units"),
+        )
+        .outerjoin(AggregateScore, AggregateScore.title_id == ExternalRating.title_id)
+        .group_by(ExternalRating.provider)
+    ).all()
+    counted = {RatingProvider(provider): (rated, units) for provider, rated, units in rows}
+
+    weights = settings.scores.weights
+    weighted = {
+        provider: counted.get(provider, (0, 0.0))[1] * getattr(weights, provider.value, 0.0)
+        for provider in RatingProvider
+    }
+    total = sum(weighted.values())
+
+    mix = [
+        ScoringProvider(
+            provider=provider,
+            provider_name=PROVIDER_NAMES.get(provider, provider.value),
+            weight=getattr(weights, provider.value, 0.0),
+            # None rather than 0 on a catalog with nothing scored yet: there is
+            # no whole to take a share of, and a column of zeroes would read as
+            # "every provider contributed nothing" to a catalog that has simply
+            # not been enriched.
+            share=(weighted[provider] / total) * 100 if total > 0 else None,
+            titles_rated=counted.get(provider, (0, 0.0))[0],
+            is_israeli=provider.is_israeli,
+        )
+        for provider in RatingProvider
+    ]
+    # Heaviest contributor first, then by weight, so a table of nothing-yet rows
+    # still reads in the order the configuration intends.
+    mix.sort(key=lambda row: (row.share or 0.0, row.weight), reverse=True)
+    return mix
 
 
 def _runs_query(

@@ -9,6 +9,7 @@ this is the first surface in the product where being signed in is not enough.
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -24,14 +25,18 @@ from eifo_core.enums import (
     FetchPhase,
     FetchStatus,
     OfferType,
+    RatingProvider,
     SourceKind,
 )
 from eifo_core.models import (
+    AggregateScore,
     Availability,
     EnrichAttempt,
+    ExternalRating,
     FetchRun,
     MatchReview,
     Source,
+    Title,
 )
 from eifo_core.settings import SourceConfig
 
@@ -374,6 +379,156 @@ class TestStats:
             session.commit()
 
         assert client.get("/api/v1/admin/stats").json()["pending_reviews"] == 1
+
+
+class TestWhatTheScoreIsMadeOf:
+    """Which rater actually decided the catalog's scores.
+
+    The weights alone do not answer that. A rater weighted heaviest that has
+    rated a tenth of the catalog is not the one deciding it, and a panel showing
+    only the configured weights would say it was.
+    """
+
+    def mix(self, client: TestClient) -> dict[str, dict[str, Any]]:
+        rows = client.get("/api/v1/admin/stats").json()["scoring"]
+        return {row["provider"]: row for row in rows}
+
+    def test_every_rater_appears_even_the_ones_that_rated_nothing(
+        self, client: TestClient, admin: dict[str, str], catalog: Seeded
+    ) -> None:
+        """A rater contributing zero is the most useful row on the table: it
+        means an enricher is off, blocked, or quietly failing."""
+        assert set(self.mix(client)) == {provider.value for provider in RatingProvider}
+
+    def test_the_shares_are_the_weight_that_actually_went_in(
+        self, client: TestClient, admin: dict[str, str], catalog: Seeded
+    ) -> None:
+        # The seeded catalog scores two titles between three raters, one rating
+        # each: IMDb at 3.0, RT critics at 2.0, Seret viewers at 1.5 - so 6.5 of
+        # weight, and each rater's share is its own part of it.
+        mix = self.mix(client)
+
+        assert mix["imdb"]["share"] == pytest.approx(3.0 / 6.5 * 100)
+        assert mix["rt_critics"]["share"] == pytest.approx(2.0 / 6.5 * 100)
+        assert mix["seret_viewers"]["share"] == pytest.approx(1.5 / 6.5 * 100)
+
+    def test_they_add_up_to_the_whole_score(
+        self, client: TestClient, admin: dict[str, str], catalog: Seeded
+    ) -> None:
+        shares = [row["share"] for row in self.mix(client).values()]
+
+        assert sum(shares) == pytest.approx(100.0)
+
+    def test_a_rater_nobody_has_used_still_shows_its_weight(
+        self, client: TestClient, admin: dict[str, str], catalog: Seeded
+    ) -> None:
+        """Its weight is what it *would* count for, which is why it is worth
+        seeing next to the nothing it has actually contributed."""
+        tmdb = self.mix(client)["tmdb"]
+
+        assert tmdb["weight"] == 1.0
+        assert tmdb["share"] == 0.0
+        assert tmdb["titles_rated"] == 0
+
+    def test_it_says_which_raters_feed_the_israeli_score(
+        self, client: TestClient, admin: dict[str, str], catalog: Seeded
+    ) -> None:
+        mix = self.mix(client)
+
+        assert mix["seret_viewers"]["is_israeli"] is True
+        assert mix["imdb"]["is_israeli"] is False
+
+    def test_the_heaviest_contributor_comes_first(
+        self, client: TestClient, admin: dict[str, str], catalog: Seeded
+    ) -> None:
+        rows = client.get("/api/v1/admin/stats").json()["scoring"]
+
+        assert [row["provider"] for row in rows][:3] == ["imdb", "rt_critics", "seret_viewers"]
+
+    def test_a_thinly_voted_rating_counts_half_here_too(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Because the aggregate it went into counted it half. A share computed
+        any other way would be a second opinion about the scores rather than a
+        description of them."""
+        with session_factory() as session:
+            session.add(
+                ExternalRating(
+                    title_id=catalog.foxtrot,
+                    provider=RatingProvider.TMDB,
+                    score_raw=7.0,
+                    score_normalized=70,
+                    vote_count=3,
+                )
+            )
+            session.commit()
+
+        # TMDB weighs 1.0, halved to 0.5 for three votes, against the 6.5 that
+        # was already there.
+        assert self.mix(client)["tmdb"]["share"] == pytest.approx(0.5 / 7.0 * 100)
+
+    def test_a_rating_with_no_vote_count_is_not_a_thin_one(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """ "Unknown" is not "hardly anybody". Treating it as thin would halve
+        every score a provider that publishes no counts ever contributed."""
+        with session_factory() as session:
+            session.add(
+                ExternalRating(
+                    title_id=catalog.foxtrot,
+                    provider=RatingProvider.TMDB,
+                    score_raw=7.0,
+                    score_normalized=70,
+                    vote_count=None,
+                )
+            )
+            session.commit()
+
+        assert self.mix(client)["tmdb"]["share"] == pytest.approx(1.0 / 7.5 * 100)
+
+    def test_a_rating_on_a_title_nothing_could_score_is_still_a_rating(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """It counts toward what the rater has covered, and toward no share -
+        a score it was not part of is not a score it decided."""
+        with session_factory() as session:
+            unscored = session.scalars(
+                select(Title).where(~Title.id.in_(select(AggregateScore.title_id)))
+            ).first()
+            assert unscored is not None
+            session.add(
+                ExternalRating(
+                    title_id=unscored.id,
+                    provider=RatingProvider.TMDB,
+                    score_raw=7.0,
+                    score_normalized=70,
+                    vote_count=900,
+                )
+            )
+            session.commit()
+
+        tmdb = self.mix(client)["tmdb"]
+        assert tmdb["titles_rated"] == 1
+        assert tmdb["share"] == 0.0
+
+    def test_a_catalog_with_no_scores_has_no_shares_rather_than_zeroes(
+        self, client: TestClient, admin: dict[str, str]
+    ) -> None:
+        """Null and zero are different claims. A column of zeroes would read as
+        "every rater contributed nothing" about a catalog nobody has enriched."""
+        assert all(row["share"] is None for row in self.mix(client).values())
 
 
 class TestNothingHereIsCached:

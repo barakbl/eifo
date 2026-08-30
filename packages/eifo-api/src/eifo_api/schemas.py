@@ -431,6 +431,35 @@ class RunDetail(RunOut):
     log: str | None = None
 
 
+class ScoringProvider(BaseModel):
+    """One rating provider's part in the catalog's aggregate scores.
+
+    Two different questions, deliberately side by side: how much a provider is
+    *meant* to count, which is a line in the configuration file, and how much it
+    *actually* counted, which depends on how much of the catalog it has managed
+    to rate. A provider weighted heaviest and reaching a tenth of the titles is
+    not the one deciding the scores, and only the second number says so.
+    """
+
+    provider: RatingProvider
+    #: How the provider is credited in the UI, the same string a title page uses.
+    provider_name: str
+    #: Its weight from ``[scores.weights]``. Not a percentage of anything: the
+    #: weights are relative to each other and need not add up to anything.
+    weight: float
+    #: The share of the weight actually behind the catalog's scores, 0-100.
+    #:
+    #: Each provider's weight counted once per scored title it has rated, over
+    #: the same total across every provider - so a heavy weight that rated
+    #: little lands where it belongs. Null when nothing has been scored yet,
+    #: which is not a zero: it is a catalog with no scores in it.
+    share: float | None = None
+    #: Titles this provider has rated, whether or not they ended up scored.
+    titles_rated: int = 0
+    #: Whether it feeds the separate Israeli aggregate.
+    is_israeli: bool = False
+
+
 class AdminStats(BaseModel):
     """The numbers an operator checks first."""
 
@@ -457,6 +486,11 @@ class AdminStats(BaseModel):
     #: Hours after which a source counts as stale, so the client bands the
     #: freshness figures the same way the server does.
     stale_after_hours: int
+    #: Every rating provider, heaviest contributor first. Here rather than on
+    #: its own endpoint because it answers the same question the rest of this
+    #: does - is the catalog alright - and the panel that shows it is already
+    #: waiting on this call.
+    scoring: list[ScoringProvider] = Field(default_factory=list)
 
 
 class ReviewCandidate(BaseModel):

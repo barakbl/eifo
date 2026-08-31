@@ -14,10 +14,13 @@ use chrono::Local;
 use crate::config::Config;
 use crate::health::{self, Health, Status};
 use crate::procs::{self, FetcherState, Phase, Server};
-use crate::schedule;
+use crate::{platform, schedule, update};
 
 /// How often to ask the API how it is.
 const POLL_EVERY: Duration = Duration::from_secs(20);
+/// How often to ask GitHub whether there is a newer release. Twice a day: an
+/// update is not urgent, and a menu-bar app that hammers an API is a bad guest.
+const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(12 * 60 * 60);
 /// How long to leave a restarted server before believing the next reading.
 /// Uvicorn needs a moment to bind; without this the restart looks like a
 /// failure and triggers another one.
@@ -45,6 +48,30 @@ pub enum Command {
     SetKeepServerUp(bool),
     SetStartServerOnOpen(bool),
     SetScheduleEnabled(bool),
+    /// Ask GitHub now, rather than waiting for the twice-a-day check.
+    CheckUpdate,
+    /// Move the checkout to the newer release and relaunch.
+    RunUpdate,
+}
+
+/// What the menu's update line says and offers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum UpdateView {
+    /// Not checked yet this session.
+    #[default]
+    Unknown,
+    UpToDate {
+        version: String,
+    },
+    Checking,
+    Available {
+        tag: String,
+    },
+    Installing {
+        tag: String,
+    },
+    /// The last attempt failed; the reason is on the detail line.
+    Failed,
 }
 
 /// The finished picture the menu renders.
@@ -70,6 +97,11 @@ pub struct Snapshot {
     pub restarts_given_up: bool,
     /// Problems with the configured directory itself, which outrank everything.
     pub setup_problems: Vec<String>,
+    /// Whether a newer release exists, and how far along installing it is.
+    pub update: UpdateView,
+    /// Set once, when an update has been built and the app must relaunch to
+    /// finish it. The main thread reads this and quits into the new bundle.
+    pub relaunch: bool,
 }
 
 pub fn spawn(
@@ -95,6 +127,12 @@ struct Worker {
     restart_attempt: usize,
     restarts_given_up: bool,
     quiet_until: Option<Instant>,
+    update: UpdateView,
+    /// The release the Available/Installing states refer to.
+    pending_update: Option<update::Release>,
+    update_job: Option<procs::Job>,
+    last_update_check: Option<Instant>,
+    relaunch: bool,
 }
 
 impl Worker {
@@ -110,6 +148,11 @@ impl Worker {
             restart_attempt: 0,
             restarts_given_up: false,
             quiet_until: None,
+            update: UpdateView::Unknown,
+            pending_update: None,
+            update_job: None,
+            last_update_check: None,
+            relaunch: false,
         }
     }
 
@@ -130,7 +173,7 @@ impl Worker {
             // A running fetch is watched more closely than the API is polled:
             // the point of the Stop item is that it takes effect promptly, and
             // a finished run should show its result without a twenty-second wait.
-            let wait = if self.fetch.is_some() {
+            let wait = if self.fetch.is_some() || self.update_job.is_some() {
                 Duration::from_secs(3)
             } else {
                 POLL_EVERY
@@ -198,6 +241,8 @@ impl Worker {
                 self.config.schedule_enabled = on;
                 let _ = self.config.save();
             }
+            Command::CheckUpdate => self.check_update(),
+            Command::RunUpdate => self.run_update(),
             Command::Shutdown(_) => {}
         }
     }
@@ -205,6 +250,15 @@ impl Worker {
     /// One turn of the loop: is it time to run, and is the server still there.
     fn tick(&mut self) {
         self.reap_fetch();
+        self.reap_update();
+        self.maybe_check_update();
+
+        // While an update runs, the checkout is being rewritten and the server
+        // is deliberately down. Nothing else should start a fetch or resurrect
+        // the server on top of that.
+        if self.update_job.is_some() {
+            return;
+        }
 
         if self.fetch.is_none() && self.config.schedule_enabled {
             if let Some(at) = schedule::parse_time(&self.config.nightly) {
@@ -292,7 +346,7 @@ impl Worker {
 
     /// Start a fetcher phase. It runs in its own process; the loop watches it.
     fn start_phase(&mut self, phase: Phase) {
-        if self.fetch.is_some() {
+        if self.fetch.is_some() || self.update_job.is_some() {
             return;
         }
         self.last_result = None;
@@ -335,6 +389,122 @@ impl Worker {
             self.last_result = Some("stopped the running fetch".into());
             self.poll();
         }
+    }
+
+    /// Ask GitHub about the newest release once the interval is up - or once on
+    /// the first tick after launch, so a stale checkout is flagged promptly.
+    ///
+    /// Runs even when the folder has problems: knowing a fix is out is worth
+    /// more then, not less. Only a job already in flight defers it.
+    fn maybe_check_update(&mut self) {
+        if self.update_job.is_some() || self.fetch.is_some() {
+            return;
+        }
+        let due = match self.last_update_check {
+            None => true,
+            Some(at) => at.elapsed() >= UPDATE_CHECK_EVERY,
+        };
+        if due {
+            self.check_update();
+        }
+    }
+
+    /// One check: the tag the checkout is on against GitHub's latest release.
+    fn check_update(&mut self) {
+        self.last_update_check = Some(Instant::now());
+        self.update = UpdateView::Checking;
+        self.publish();
+
+        let current = update::current_version(&self.config.app_dir);
+        match update::latest_release() {
+            Some(release) if release.version > current => {
+                let tag = release.tag.clone();
+                // Notify once per version, not once per check.
+                if self.config.update_notified_version.as_deref() != Some(&tag) {
+                    platform::notify(
+                        &format!("Eifo {tag} is available"),
+                        "Open the menu-bar menu and choose Update.",
+                    );
+                    self.config.update_notified_version = Some(tag.clone());
+                    let _ = self.config.save();
+                }
+                self.pending_update = Some(release);
+                self.update = UpdateView::Available { tag };
+            }
+            Some(_) => {
+                self.pending_update = None;
+                self.update = UpdateView::UpToDate {
+                    version: version_string(current),
+                };
+            }
+            // A check that could not reach GitHub is not news; keep whatever the
+            // menu last said rather than claiming anything.
+            None => {
+                self.update = match &self.pending_update {
+                    Some(release) => UpdateView::Available {
+                        tag: release.tag.clone(),
+                    },
+                    None => UpdateView::Unknown,
+                };
+            }
+        }
+    }
+
+    /// Start the update script for the pending release.
+    ///
+    /// The server is stopped first: the script re-syncs the environment, moves
+    /// the source files and runs migrations, and none of that should happen
+    /// under a live server holding the database open. The relaunch brings a
+    /// fresh one up on the new code.
+    fn run_update(&mut self) {
+        let Some(release) = self.pending_update.clone() else {
+            return;
+        };
+        if self.update_job.is_some() || self.fetch.is_some() {
+            return;
+        }
+        self.last_result = None;
+        self.server.stop();
+        self.health = Health::unknown("updating Eifo");
+        match procs::start_update(&self.config.app_dir, &release.tag) {
+            Ok(job) => {
+                self.update_job = Some(job);
+                self.update = UpdateView::Installing { tag: release.tag };
+            }
+            Err(err) => {
+                self.last_result = Some(format!("update failed: {err}"));
+                self.update = UpdateView::Failed;
+            }
+        }
+    }
+
+    /// If the update script has finished, relaunch on success or say why not.
+    fn reap_update(&mut self) {
+        let Some(job) = self.update_job.as_mut() else {
+            return;
+        };
+        let Some(outcome) = job.poll() else {
+            return;
+        };
+        self.update_job = None;
+        match outcome {
+            Ok(()) => self.finish_update(),
+            Err(err) => {
+                self.last_result = Some(format!("update failed: {err}"));
+                self.update = UpdateView::Failed;
+                // It may be half-applied; the next check re-reads the checkout.
+                self.pending_update = None;
+            }
+        }
+    }
+
+    /// The update is built. Stop our server, arrange for the new bundle to open
+    /// once we have exited, and ask the main thread to quit into it.
+    fn finish_update(&mut self) {
+        self.server.stop();
+        let app = self.config.app_dir.join("sidecar/target/Eifo.app");
+        spawn_relauncher(&app);
+        self.relaunch = true;
     }
 
     fn publish(&mut self) {
@@ -381,10 +551,31 @@ impl Worker {
             next_run,
             restarts_given_up: self.restarts_given_up,
             setup_problems,
+            update: self.update.clone(),
+            relaunch: self.relaunch,
         };
         let _ = self.updates.send(snapshot);
         (self.wake)();
     }
+}
+
+/// `(0, 3, 0)` as `v0.3.0`, the way the menu and the tags say it.
+fn version_string(version: update::Version) -> String {
+    format!("v{}.{}.{}", version.0, version.1, version.2)
+}
+
+/// Spawn a detached shell that waits for this process to exit, then opens the
+/// freshly built bundle. Detached on purpose: it has to outlive us.
+fn spawn_relauncher(app: &std::path::Path) {
+    let pid = std::process::id();
+    let path = app.display().to_string().replace('\'', r"'\''");
+    let _ = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "i=0; while kill -0 {pid} 2>/dev/null && [ $i -lt 240 ]; do sleep 0.5; i=$((i+1)); done; \
+             sleep 1; open '{path}'"
+        ))
+        .spawn();
 }
 
 fn capitalise(text: &str) -> String {

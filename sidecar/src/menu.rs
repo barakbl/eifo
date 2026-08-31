@@ -7,7 +7,7 @@
 use muda::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 
 use crate::health::Status;
-use crate::worker::Snapshot;
+use crate::worker::{Snapshot, UpdateView};
 
 /// Every item the app keeps a handle on, so their labels can change.
 pub struct Items {
@@ -29,6 +29,7 @@ pub struct Items {
     pub next_run: MenuItem,
     pub open_app: MenuItem,
     pub open_manage: MenuItem,
+    pub update: MenuItem,
     pub choose_folder: MenuItem,
     pub login_item: CheckMenuItem,
     pub about: MenuItem,
@@ -63,6 +64,7 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
 
     let open_app = MenuItem::new("Open Eifo", true, None);
     let open_manage = MenuItem::new("Open Manage", true, None);
+    let update = MenuItem::new("Check for updates", true, None);
     let choose_folder = MenuItem::new("Choose Eifo folder…", true, None);
     let login_item = CheckMenuItem::new("Open at login", true, login_enabled, None);
     let about = MenuItem::new("About Eifo", true, None);
@@ -93,6 +95,8 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         &open_app,
         &open_manage,
         &separator(),
+        &update,
+        &separator(),
         &choose_folder,
         &login_item,
         &about,
@@ -119,6 +123,7 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         next_run,
         open_app,
         open_manage,
+        update,
         choose_folder,
         login_item,
         about,
@@ -129,6 +134,9 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
 
 /// The headline line, which is the one thing read at a glance.
 pub fn headline(snapshot: &Snapshot) -> String {
+    if let UpdateView::Installing { tag } = &snapshot.update {
+        return format!("Updating to {tag}…");
+    }
     if !snapshot.setup_problems.is_empty() {
         return snapshot.setup_problems[0].clone();
     }
@@ -213,6 +221,17 @@ pub fn server_line(snapshot: &Snapshot) -> String {
     }
 }
 
+/// The update line: what it says, and whether clicking it does anything.
+pub fn update_line(update: &UpdateView) -> (String, bool) {
+    match update {
+        UpdateView::Unknown | UpdateView::Failed => ("Check for updates".into(), true),
+        UpdateView::UpToDate { version } => (format!("Up to date · {version}"), true),
+        UpdateView::Checking => ("Checking for updates…".into(), false),
+        UpdateView::Available { tag } => (format!("Update to {tag}…"), true),
+        UpdateView::Installing { tag } => (format!("Updating to {tag}…"), false),
+    }
+}
+
 /// What hovering the dot says: the headline, without the menu around it.
 pub fn tooltip(snapshot: &Snapshot) -> String {
     format!("Eifo — {}", headline(snapshot))
@@ -227,7 +246,7 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
 
     items.fetch_state.set_text(fetch_line(snapshot));
 
-    let busy = snapshot.fetch_running;
+    let busy = snapshot.fetch_running || matches!(snapshot.update, UpdateView::Installing { .. });
     items.run_sync.set_enabled(!busy);
     items.run_enrich.set_enabled(!busy);
     items.run_all.set_enabled(!busy);
@@ -251,6 +270,10 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
         .start_on_open
         .set_checked(snapshot.start_server_on_open);
     items.keep_up.set_checked(snapshot.keep_server_up);
+
+    let (update_text, update_enabled) = update_line(&snapshot.update);
+    items.update.set_text(update_text);
+    items.update.set_enabled(update_enabled);
 }
 
 #[cfg(test)]
@@ -274,6 +297,8 @@ mod tests {
             next_run: "tomorrow at 03:00".into(),
             restarts_given_up: false,
             setup_problems: Vec::new(),
+            update: UpdateView::Unknown,
+            relaunch: false,
         }
     }
 
@@ -311,10 +336,38 @@ mod tests {
     }
 
     #[test]
+    fn the_update_line_offers_the_new_version_and_disables_while_it_installs() {
+        let (text, enabled) = update_line(&UpdateView::Available {
+            tag: "v0.3.0".into(),
+        });
+        assert_eq!(text, "Update to v0.3.0…");
+        assert!(enabled, "an available update must be clickable");
+
+        let (text, enabled) = update_line(&UpdateView::Installing {
+            tag: "v0.3.0".into(),
+        });
+        assert_eq!(text, "Updating to v0.3.0…");
+        assert!(!enabled, "no second click while it installs");
+
+        assert_eq!(update_line(&UpdateView::Unknown).0, "Check for updates");
+    }
+
+    #[test]
     fn a_broken_folder_outranks_everything() {
         let mut s = snapshot();
         s.setup_problems = vec!["/nope is not an Eifo checkout".into()];
         assert!(headline(&s).contains("not an Eifo checkout"));
+    }
+
+    #[test]
+    fn an_update_in_progress_is_the_headline() {
+        // It outranks even a broken folder: the update is what will fix it.
+        let mut s = snapshot();
+        s.setup_problems = vec!["something is wrong".into()];
+        s.update = UpdateView::Installing {
+            tag: "v0.3.0".into(),
+        };
+        assert_eq!(headline(&s), "Updating to v0.3.0…");
     }
 
     #[test]

@@ -312,6 +312,59 @@ pub fn start_phase(config: &Config, phase: Phase) -> Result<Fetch, String> {
     Ok(Fetch { child, phase })
 }
 
+/// A long job this app started and is watching - the self-update.
+///
+/// Its output goes to a file rather than a pipe: the build alone prints more
+/// than a pipe buffer holds, and a full pipe would wedge the job halfway. On a
+/// failure the last few lines of that file are what the menu shows.
+pub struct Job {
+    child: Child,
+    log: std::path::PathBuf,
+}
+
+impl Job {
+    /// `None` while it runs; the outcome once it is over. The error is the tail
+    /// of the log, so "update failed" comes with a reason.
+    pub fn poll(&mut self) -> Option<Result<(), String>> {
+        match self.child.try_wait() {
+            Ok(None) => None,
+            Ok(Some(status)) if status.success() => Some(Ok(())),
+            Ok(Some(_)) => Some(Err(self.tail())),
+            Err(err) => Some(Err(err.to_string())),
+        }
+    }
+
+    fn tail(&self) -> String {
+        let text = std::fs::read_to_string(&self.log).unwrap_or_default();
+        let last: Vec<&str> = text.lines().rev().take(3).collect();
+        if last.is_empty() {
+            "no output".into()
+        } else {
+            last.into_iter().rev().collect::<Vec<_>>().join(" · ")
+        }
+    }
+}
+
+/// Start the update script for a tag, output going to a log file.
+pub fn start_update(app_dir: &Path, tag: &str) -> Result<Job, String> {
+    let script = crate::update::write_script().map_err(|err| err.to_string())?;
+    let log = crate::update::log_path();
+    let out = File::create(&log).map_err(|err| err.to_string())?;
+    let err = out.try_clone().map_err(|err| err.to_string())?;
+
+    let child = Command::new("sh")
+        .arg(&script)
+        .arg(app_dir)
+        .arg(tag)
+        .current_dir(app_dir)
+        .stdout(Stdio::from(out))
+        .stderr(Stdio::from(err))
+        .spawn()
+        .map_err(|err| format!("could not start the update: {err}"))?;
+
+    Ok(Job { child, log })
+}
+
 /// Stop a fetcher this app did not start, by the pid in its lock file.
 ///
 /// Best effort: the pid is read from a file and could in principle be stale, so

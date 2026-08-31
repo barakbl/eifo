@@ -14,6 +14,37 @@ use objc2_foundation::{NSDictionary, NSString, NSURL};
 
 pub const REPO_URL: &str = "https://github.com/barakbl/eifo";
 
+/// Post a macOS notification.
+///
+/// Through `osascript` rather than `UNUserNotificationCenter`: the modern API
+/// wants an authorization prompt and a provisioning profile, and this is a menu-
+/// bar helper that shows one banner a fortnight. Best-effort - a notification
+/// that does not appear is not worth a failure path.
+pub fn notify(title: &str, body: &str) {
+    let script = format!(
+        "display notification {} with title {}",
+        applescript_string(body),
+        applescript_string(title),
+    );
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .spawn();
+}
+
+/// An AppleScript double-quoted string literal, backslash-escaped.
+fn applescript_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        if ch == '"' || ch == '\\' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('"');
+    out
+}
+
 /// Open a URL in the user's browser.
 pub fn open_url(url: &str) {
     let string = NSString::from_str(url);

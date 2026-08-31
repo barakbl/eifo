@@ -477,6 +477,28 @@ Restart. A sign-in button appears for each provider you configured, and for no o
 
 Every setting, with its default, is in `config/eifo.example.toml` and `.env.example`.
 
+### The menu-bar companion (macOS)
+
+A dot in the menu bar - green when the catalog is well, orange when a source has
+gone stale, red when the web server is not answering - plus a menu that runs the
+nightly chain, keeps the server up, and restarts it if it stops. It is a
+companion to a checkout, not a copy of one: every action is the same
+`eifo-fetch` command you would type, and every reading comes from the same
+`/api/v1/meta` the Manage tab uses.
+
+```bash
+./sidecar/build-app.sh && open sidecar/target/Eifo.app
+```
+
+It asks for your checkout on first launch and remembers it. Two things it does
+that a cron entry cannot: a machine asleep at 03:00 runs on waking rather than
+skipping the night, and a source switched on in the Manage tab is pulled within
+the minute instead of at the next nightly. Keep your existing cron or
+LaunchAgent - the fetcher's single-flight lock means whichever fires first wins
+and the other stands down, and two schedulers are safe here while none is not.
+
+See [`sidecar/README.md`](sidecar/README.md).
+
 ### The Manage tab
 
 Nobody is an administrator until you say so, so this is off on a fresh install and the tab

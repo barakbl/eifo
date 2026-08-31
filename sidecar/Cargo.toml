@@ -1,0 +1,52 @@
+[package]
+name = "eifo-tray"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Menu-bar companion for Eifo: status at a glance, the nightly run, and the web server"
+license = "MIT"
+repository = "https://github.com/barakbl/eifo"
+
+[[bin]]
+name = "eifo-tray"
+path = "src/main.rs"
+
+[dependencies]
+# A real NSApplication run loop, with the Accessory activation policy that keeps
+# a menu-bar app out of the Dock and the app switcher.
+tao = "0.37"
+# NSStatusItem and NSMenu, not a drawn imitation of them.
+tray-icon = "0.24"
+muda = "0.19"
+
+# The AppKit corners tao does not cover: the standard About panel, the folder
+# chooser, and Login Items.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = [
+    "NSApplication",
+    "NSResponder",
+    "NSPanel",
+    "NSWindow",
+    "NSSavePanel",
+    "NSOpenPanel",
+    "NSWorkspace",
+    "NSAlert",
+    "NSRunningApplication",
+] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSURL", "NSArray", "NSDictionary", "NSAttributedString"] }
+objc2-service-management = { version = "0.3", features = ["SMAppService"] }
+
+ureq = { version = "3", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+# Read-only peek at sources.backfill_requested_at, so a source switched on in
+# the Manage tab is pulled within the minute rather than at the next nightly.
+# The system SQLite is used rather than a bundled copy: macOS ships one, and the
+# only statement here is a count.
+rusqlite = "0.32"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

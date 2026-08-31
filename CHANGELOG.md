@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/barakbl/eifo/compare/v0.2.0...v0.3.0) (2026-08-31)
+
+
+### Features
+
+* the sidecar checks for updates, and installs them ([a927f18](https://github.com/barakbl/eifo/commit/a927f18921b8ccbde6834309fe60d3b6e5e46a5f))
+
 ## [0.2.0](https://github.com/barakbl/eifo/compare/v0.1.0...v0.2.0) (2026-08-31)
 
 

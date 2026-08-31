@@ -8,7 +8,15 @@
   "packages": {
     ".": {
       "package-name": "eifo",
-      "changelog-path": "CHANGELOG.md"
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        { "type": "generic", "path": "pyproject.toml" },
+        { "type": "generic", "path": "packages/eifo-core/pyproject.toml" },
+        { "type": "generic", "path": "packages/eifo-api/pyproject.toml" },
+        { "type": "generic", "path": "packages/eifo-fetcher/pyproject.toml" },
+        { "type": "generic", "path": "sidecar/Cargo.toml" },
+        { "type": "generic", "path": "uv.lock" }
+      ]
     }
   },
   "changelog-sections": [

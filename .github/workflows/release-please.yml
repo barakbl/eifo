@@ -1,0 +1,75 @@
+name: release-please
+
+# Conventional-commit messages on main drive a rolling "release PR" that rolls
+# up the changelog and the next version. Merging that PR tags the commit
+# (vX.Y.Z) and cuts a GitHub release; the sync-versions job then writes that
+# version into every pyproject.toml, uv.lock and the sidecar crate, so the tag
+# and the package metadata never disagree.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      version: ${{ steps.rp.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: rp
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  sync-versions:
+    # Only after a release is actually cut. One follow-up commit to main brings
+    # the package manifests up to the version release-please just tagged.
+    # [skip ci] so it does not set the whole pipeline going again.
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Write the version everywhere
+        env:
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          set -eu
+          # Python workspace: root plus each member. `uv version` re-locks, so
+          # uv.lock follows in the same step.
+          uv version "$VERSION"
+          for pkg in eifo-core eifo-api eifo-fetcher; do
+            uv version --package "$pkg" "$VERSION"
+          done
+          # The sidecar crate: the version line in its [package] table, then the
+          # crate's own entry in Cargo.lock.
+          perl -0pi -e 's/(\[package\][^\[]*?\nversion = ")[^"]*/${1}'"$VERSION"'/s' sidecar/Cargo.toml
+          perl -0pi -e 's/(name = "eifo-tray"\nversion = ")[^"]*/${1}'"$VERSION"'/' sidecar/Cargo.lock
+
+      - name: Commit it
+        env:
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "already in sync" && exit 0
+          git commit -m "chore: set package version to ${VERSION} [skip ci]"
+          git push

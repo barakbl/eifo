@@ -1,0 +1,28 @@
+name: release-please
+
+# Watches conventional-commit messages on main and keeps a "release PR" open
+# that rolls up the changelog and the next version. Merging that PR tags the
+# commit (vX.Y.Z) and cuts a GitHub release. Nothing here builds or publishes
+# an artifact - it only turns the commit history into versions and notes.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

@@ -247,7 +247,9 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
     items.server_state.set_text(server_line(snapshot));
     items.start_server.set_enabled(!snapshot.server_owned);
     items.stop_server.set_enabled(snapshot.server_owned);
-    items.start_on_open.set_checked(snapshot.start_server_on_open);
+    items
+        .start_on_open
+        .set_checked(snapshot.start_server_on_open);
     items.keep_up.set_checked(snapshot.keep_server_up);
 }
 
@@ -296,7 +298,10 @@ mod tests {
         s.running_phase = None;
         s.fetch_pid = Some(5150);
         assert_eq!(headline(&s), "A fetch is running");
-        assert_eq!(fetch_line(&s), "Fetch: running (started elsewhere) (pid 5150)");
+        assert_eq!(
+            fetch_line(&s),
+            "Fetch: running (started elsewhere) (pid 5150)"
+        );
         assert_eq!(stop_fetch_label(&s), "Stop the running fetch (pid 5150)");
     }
 

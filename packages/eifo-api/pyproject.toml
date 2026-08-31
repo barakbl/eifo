@@ -19,6 +19,9 @@ dependencies = [
     "httpx>=0.28",
 ]
 
+[project.scripts]
+eifo-api = "eifo_api.__main__:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

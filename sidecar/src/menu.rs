@@ -13,14 +13,17 @@ use crate::worker::Snapshot;
 pub struct Items {
     pub status: MenuItem,
     pub detail: MenuItem,
+    pub fetch_state: MenuItem,
     pub run_sync: MenuItem,
     pub run_enrich: MenuItem,
     pub run_all: MenuItem,
+    pub stop_fetch: MenuItem,
     pub check_now: MenuItem,
     pub server_state: MenuItem,
     pub start_server: MenuItem,
     pub stop_server: MenuItem,
     pub restart_server: MenuItem,
+    pub start_on_open: CheckMenuItem,
     pub keep_up: CheckMenuItem,
     pub schedule: CheckMenuItem,
     pub next_run: MenuItem,
@@ -41,9 +44,12 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
     let status = MenuItem::new("Checking…", false, None);
     let detail = MenuItem::new("", false, None);
 
+    // A readout, like the server line below: what fetch, if any, is running now.
+    let fetch_state = MenuItem::new("Fetch: idle", false, None);
     let run_sync = MenuItem::new("Run sync now", true, None);
     let run_enrich = MenuItem::new("Run enrich now", true, None);
     let run_all = MenuItem::new("Run everything now", true, None);
+    let stop_fetch = MenuItem::new("Stop the current fetch", false, None);
     let check_now = MenuItem::new("Check now", true, None);
     let schedule = CheckMenuItem::new("Run nightly", true, true, None);
     let next_run = MenuItem::new("", false, None);
@@ -52,6 +58,7 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
     let start_server = MenuItem::new("Start", true, None);
     let stop_server = MenuItem::new("Stop", true, None);
     let restart_server = MenuItem::new("Restart", true, None);
+    let start_on_open = CheckMenuItem::new("Start when Eifo opens", true, true, None);
     let keep_up = CheckMenuItem::new("Restart if it stops", true, true, None);
 
     let open_app = MenuItem::new("Open Eifo", true, None);
@@ -66,9 +73,11 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         &status,
         &detail,
         &separator(),
+        &fetch_state,
         &run_sync,
         &run_enrich,
         &run_all,
+        &stop_fetch,
         &separator(),
         &check_now,
         &schedule,
@@ -78,6 +87,7 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         &start_server,
         &stop_server,
         &restart_server,
+        &start_on_open,
         &keep_up,
         &separator(),
         &open_app,
@@ -93,14 +103,17 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
     let items = Items {
         status,
         detail,
+        fetch_state,
         run_sync,
         run_enrich,
         run_all,
+        stop_fetch,
         check_now,
         server_state,
         start_server,
         stop_server,
         restart_server,
+        start_on_open,
         keep_up,
         schedule,
         next_run,
@@ -119,8 +132,11 @@ pub fn headline(snapshot: &Snapshot) -> String {
     if !snapshot.setup_problems.is_empty() {
         return snapshot.setup_problems[0].clone();
     }
-    if let Some(phase) = &snapshot.running_phase {
-        return format!("Running {phase}…");
+    if snapshot.fetch_running {
+        return match &snapshot.running_phase {
+            Some(phase) => format!("Running {phase}…"),
+            None => "A fetch is running".into(),
+        };
     }
     match snapshot.status {
         Status::Ok => format!("All well · {}", snapshot.summary),
@@ -155,6 +171,32 @@ pub fn detail(snapshot: &Snapshot) -> String {
     }
 }
 
+/// The fetch readout: what is running now, and whether Stop can reach it.
+pub fn fetch_line(snapshot: &Snapshot) -> String {
+    if !snapshot.fetch_running {
+        return "Fetch: idle".into();
+    }
+    let what = match &snapshot.running_phase {
+        Some(phase) => format!("running {phase}"),
+        None => "running (started elsewhere)".into(),
+    };
+    match snapshot.fetch_pid {
+        Some(pid) => format!("Fetch: {what} (pid {pid})"),
+        None => format!("Fetch: {what}"),
+    }
+}
+
+/// The label on the Stop item, which names what it will stop.
+pub fn stop_fetch_label(snapshot: &Snapshot) -> String {
+    match (&snapshot.running_phase, snapshot.fetch_pid) {
+        _ if !snapshot.fetch_running => "Stop the current fetch".into(),
+        (Some(phase), Some(pid)) => format!("Stop the {phase} (pid {pid})"),
+        (Some(phase), None) => format!("Stop the {phase}"),
+        (None, Some(pid)) => format!("Stop the running fetch (pid {pid})"),
+        (None, None) => "Stop the running fetch".into(),
+    }
+}
+
 /// What the server line says about a process this app may or may not own.
 pub fn server_line(snapshot: &Snapshot) -> String {
     match (snapshot.server_owned, snapshot.status) {
@@ -183,7 +225,9 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
     // An empty second line would be a blank row in the menu; hide it instead.
     items.detail.set_enabled(false);
 
-    let busy = snapshot.running_phase.is_some();
+    items.fetch_state.set_text(fetch_line(snapshot));
+
+    let busy = snapshot.fetch_running;
     items.run_sync.set_enabled(!busy);
     items.run_enrich.set_enabled(!busy);
     items.run_all.set_enabled(!busy);
@@ -192,6 +236,8 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
     } else {
         "Run sync now"
     });
+    items.stop_fetch.set_enabled(busy);
+    items.stop_fetch.set_text(stop_fetch_label(snapshot));
 
     items.schedule.set_checked(snapshot.schedule_enabled);
     items
@@ -201,6 +247,7 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
     items.server_state.set_text(server_line(snapshot));
     items.start_server.set_enabled(!snapshot.server_owned);
     items.stop_server.set_enabled(snapshot.server_owned);
+    items.start_on_open.set_checked(snapshot.start_server_on_open);
     items.keep_up.set_checked(snapshot.keep_server_up);
 }
 
@@ -213,11 +260,14 @@ mod tests {
             status: Status::Ok,
             summary: "38,836 titles, every source fresh".into(),
             problems: Vec::new(),
+            fetch_running: false,
             running_phase: None,
+            fetch_pid: None,
             last_result: None,
             server_owned: true,
             server_pid: Some(1234),
             keep_server_up: true,
+            start_server_on_open: true,
             schedule_enabled: true,
             next_run: "tomorrow at 03:00".into(),
             restarts_given_up: false,
@@ -234,8 +284,25 @@ mod tests {
     fn a_run_in_progress_outranks_the_status() {
         // What it is doing now matters more than what it found last time.
         let mut s = snapshot();
+        s.fetch_running = true;
         s.running_phase = Some("sync".into());
         assert_eq!(headline(&s), "Running sync…");
+    }
+
+    #[test]
+    fn a_fetch_started_elsewhere_still_shows_and_can_be_stopped() {
+        let mut s = snapshot();
+        s.fetch_running = true;
+        s.running_phase = None;
+        s.fetch_pid = Some(5150);
+        assert_eq!(headline(&s), "A fetch is running");
+        assert_eq!(fetch_line(&s), "Fetch: running (started elsewhere) (pid 5150)");
+        assert_eq!(stop_fetch_label(&s), "Stop the running fetch (pid 5150)");
+    }
+
+    #[test]
+    fn an_idle_fetcher_reads_as_idle() {
+        assert_eq!(fetch_line(&snapshot()), "Fetch: idle");
     }
 
     #[test]

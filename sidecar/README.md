@@ -36,6 +36,20 @@ Staleness is not computed here. `/meta` decides it against the deployment's own
 one - working that out again locally would be a second opinion that could
 disagree with the product's.
 
+The dot is drawn as a small round LED - shaded brighter towards the centre, a
+darker rim, and a soft highlight - so it reads as a status light rather than a
+printed circle.
+
+## The running fetch
+
+The **Fetch** line says what is running now: a phase this app started, or one
+started elsewhere - a nightly run from the LaunchAgent, or an `eifo-fetch` typed
+in a terminal - identified by the pid in `data/.eifo-fetch.lock`. **Stop the
+current fetch** sends its process `SIGTERM` (then `SIGKILL` if it ignores that),
+so the fetcher can close the database and release its lock on the way out. A
+phase this app started runs in its own process and is watched, not waited on, so
+the menu and the Stop item stay responsive for the hours a full run can take.
+
 ## Scheduling
 
 The app owns the nightly chain: at the configured hour (03:00 by default) it
@@ -56,10 +70,28 @@ no scheduler is not.
 
 ## The server
 
+It answers on `http://localhost:3436` by default - both the menu's **Open Eifo**
+and **Open Manage** links and the health poll use that origin, and the server is
+started with a matching `--host localhost --port 3436` (`localhost`, not
+`127.0.0.1`, so the links open the origin you would actually type). Override it
+by setting `base_url` in `config.json`; the host and port the server binds are
+parsed back out of whatever you put there.
+
+> Why 3436? No RFC, no committee, no lovingly curated list of "great ports for
+> your app". Just a rotary phone and the word `EIFO`: E and F on the 3 (DEF),
+> I on the 4 (GHI), O on the 6 (MNO) — dial E-I-F-O, get 3-4-3-6. And if you
+> ever figure out where the *name* comes from, you get to enjoy the joke a
+> second time. 😉
+
 Started as `.venv/bin/uvicorn` directly, not through `uv run`. `uv run` is a
 wrapper that spawns the real server as a child, so stopping the wrapper can
 leave the server orphaned and still holding the port - which is exactly the
 state that makes "restart it when it is down" restart into a port collision.
+
+Opening Eifo starts the web server if it is not already answering - **Start when
+Eifo opens** in the menu, on by default. That is a separate choice from **Restart
+if it stops**: you can want the companion to bring the server up on launch
+without also wanting it resurrected every time you stop it by hand.
 
 If the server stops answering it is restarted, backing off 2s, 10s, 30s, 120s
 and then stopping and saying so. Whatever is wrong at the fourth attempt will

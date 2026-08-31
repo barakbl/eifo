@@ -33,7 +33,7 @@ services:
     <<: *eifo-image
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "3436:3436"
     volumes:
       - ./data:/app/data
       - ./config:/app/config:ro
@@ -47,7 +47,7 @@ services:
         - CMD
         - python
         - -c
-        - import urllib.request as r; r.urlopen("http://localhost:8000/api/v1/meta")
+        - import urllib.request as r; r.urlopen("http://localhost:3436/api/v1/meta")
       interval: 30s
       timeout: 5s
       retries: 3

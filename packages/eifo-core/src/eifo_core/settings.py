@@ -180,7 +180,13 @@ class Settings(BaseSettings):
     images_dir: Path = Path("data/images")
     #: Where the static web client lives; found automatically when unset.
     web_dir: Path | None = None
-    public_origin: str = "http://localhost:8000"
+    public_origin: str = "http://localhost:3436"
+    #: Host and port the bundled ``eifo-api`` command binds. Only the checkout
+    #: path uses these; the Docker image and any real deployment sit behind a
+    #: proxy and pass their own. 3436 spells EIFO on a phone keypad (E/F 3,
+    #: I 4, O 6), and is what the menu-bar companion expects by default too.
+    serve_host: str = "127.0.0.1"
+    serve_port: int = 3436
     stale_after_hours: int = 48
     #: Bring the schema to head as the API starts, so an upgrade is a
     #: restart rather than a restart plus a remembered command. Turn it off

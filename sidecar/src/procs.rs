@@ -244,11 +244,51 @@ impl Phase {
     }
 }
 
-/// Run a fetcher phase, refusing if one is already going.
+/// A fetcher phase this app started and is watching.
 ///
-/// Blocking, and meant for the worker thread: these take minutes to hours, and
-/// the point of the menu item is that the app stays responsive while it happens.
-pub fn run_phase(config: &Config, phase: Phase) -> Result<(), String> {
+/// Owned as a `Child` rather than run to completion in place: a phase takes
+/// minutes to hours, and the worker thread has to stay free to poll the API and
+/// to act on a Stop while it runs.
+pub struct Fetch {
+    child: Child,
+    pub phase: Phase,
+}
+
+impl Fetch {
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// `None` while it is still running; the outcome once it is over.
+    pub fn poll(&mut self) -> Option<Result<(), String>> {
+        match self.child.try_wait() {
+            Ok(None) => None,
+            Ok(Some(status)) => Some(phase_outcome(self.phase, status.code())),
+            Err(err) => Some(Err(format!("lost track of {}: {err}", self.phase.label()))),
+        }
+    }
+
+    /// Ask it to stop, then make sure it has. SIGTERM first, so the fetcher can
+    /// close the database and release its lock; SIGKILL only if it ignores it.
+    pub fn stop(&mut self) {
+        let pid = self.child.id() as i32;
+        // SAFETY: a signal to a pid this struct owns.
+        unsafe { libc_kill(pid, 15) };
+        for _ in 0..50 {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Start a fetcher phase, refusing if one is already going.
+///
+/// Returns immediately with a handle to watch; it does not wait for the run.
+pub fn start_phase(config: &Config, phase: Phase) -> Result<Fetch, String> {
     if let FetcherState::Running { pid } = fetcher_state(config) {
         return Err(match pid {
             Some(pid) => format!("a fetcher is already running (pid {pid})"),
@@ -261,21 +301,44 @@ pub fn run_phase(config: &Config, phase: Phase) -> Result<(), String> {
         return Err(format!("{} does not exist", fetcher.display()));
     }
 
-    let status = Command::new(&fetcher)
+    let child = Command::new(&fetcher)
         .arg(phase.argument())
         .current_dir(&config.app_dir)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
+        .spawn()
         .map_err(|err| format!("could not run {}: {err}", phase.label()))?;
 
+    Ok(Fetch { child, phase })
+}
+
+/// Stop a fetcher this app did not start, by the pid in its lock file.
+///
+/// Best effort: the pid is read from a file and could in principle be stale, so
+/// this sends SIGTERM, gives it a moment, and follows with SIGKILL only if
+/// something with that pid is still there. The advisory lock frees either way.
+pub fn stop_external(pid: u32) {
+    let pid = pid as i32;
+    // SAFETY: kill(2) is async-signal-safe and harmless on a pid that is gone.
+    unsafe { libc_kill(pid, 15) };
+    for _ in 0..30 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if unsafe { libc_kill(pid, 0) } != 0 {
+            return;
+        }
+    }
+    unsafe { libc_kill(pid, 9) };
+}
+
+/// How the fetcher's exit code reads as an outcome.
+fn phase_outcome(phase: Phase, code: Option<i32>) -> Result<(), String> {
     // 2 is the fetcher's "finished, but some source failed" - a real outcome
     // worth reporting differently from a crash, because the catalog did update.
-    match status.code() {
+    match code {
         Some(0) => Ok(()),
         Some(2) => Err(format!("{} finished with source failures", phase.label())),
         Some(code) => Err(format!("{} exited {code}", phase.label())),
-        None => Err(format!("{} was killed", phase.label())),
+        None => Err(format!("{} was stopped", phase.label())),
     }
 }
 
@@ -358,10 +421,19 @@ mod tests {
         use std::os::unix::io::AsRawFd;
         unsafe { libc_flock(file.as_raw_fd(), 2 | 4) };
 
-        let error = run_phase(&config, Phase::Sync).unwrap_err();
+        let error = start_phase(&config, Phase::Sync).err().unwrap();
         assert!(error.contains("already running"), "{error}");
 
         unsafe { libc_flock(file.as_raw_fd(), 8) };
+    }
+
+    #[test]
+    fn a_stopped_phase_says_it_was_stopped_not_that_it_crashed() {
+        assert_eq!(
+            phase_outcome(Phase::Sync, None).unwrap_err(),
+            "sync was stopped"
+        );
+        assert!(phase_outcome(Phase::Enrich, Some(0)).is_ok());
     }
 
     #[test]

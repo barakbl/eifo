@@ -129,6 +129,12 @@ everyone with no sign-in at all.
 
 <sub><b>The operator's tab, for anyone running their own: how complete the catalog is, and one row per service - coverage, last sync, and the switch that turns it on.</b></sub>
 
+<br /><br />
+
+<img src="docs/screenshots/sidecar.png" width="30%" alt="The macOS menu-bar app: a coloured status dot and a menu with the running fetch, a Stop item, the nightly schedule, and web-server controls" />
+
+<sub><b>The sidecar - a macOS menu-bar companion. A coloured LED for the catalog's health, what fetch is running now and a way to stop it, and one-click control of the nightly run and the local web server.</b></sub>
+
 </div>
 
 ## Coverage
@@ -189,7 +195,7 @@ Then fill the catalog - the first run takes a while, and is the only slow part:
 docker compose exec fetcher eifo-fetch all
 ```
 
-Open <http://localhost:8000>.
+Open <http://localhost:3436>.
 
 Nothing else to install: the image ships the headless Chromium that the Kan and Reshet 13
 sources drive, so they work in a container with no setup on the host. That browser is most
@@ -208,7 +214,7 @@ cp .env.example .env          # fill in EIFO_TMDB_API_KEY
 
 uv run eifo-fetch db upgrade  # create the schema (the API would, but the fetcher runs first)
 uv run eifo-fetch all         # fill the catalog
-uv run uvicorn eifo_api.main:app --reload
+uv run eifo-api --reload      # serves on http://localhost:3436
 ```
 
 Same address. The client is static files served by the same process - there is no build
@@ -258,14 +264,14 @@ Steps:
    https://www.themoviedb.org/settings/api and put it in .env as
    EIFO_TMDB_API_KEY. Do not invent a key, and never commit .env.
 4. Start it. Docker: `docker compose up -d`. Otherwise: `uv sync`, then
-   `uv run eifo-fetch db upgrade`, then
-   `uv run uvicorn eifo_api.main:app --host 0.0.0.0 --port 8000`.
+   `uv run eifo-fetch db upgrade`, then `uv run eifo-api` (add `--reload` for
+   development; it binds `localhost:3436` unless `--host`/`--port` say otherwise).
    On the uv path, run `uv run playwright install chromium` only if I want the
    Kan and Reshet 13 sources; the Docker image already ships that browser.
 5. Fill the catalog once with `eifo-fetch all` (inside the fetcher container on
    the Docker path). Warn me it takes a while, then let it finish.
-6. Verify: http://localhost:8000/api/v1/meta returns JSON and
-   http://localhost:8000 serves the client. Tell me how many titles landed and
+6. Verify: http://localhost:3436/api/v1/meta returns JSON and
+   http://localhost:3436 serves the client. Tell me how many titles landed and
    which sources failed, if any.
 
 Rules:
@@ -464,7 +470,7 @@ Only needed if you want lists and ratings.
 1. Create an OAuth client - [Google](https://console.cloud.google.com/apis/credentials)
    (Web application) and/or [X](https://developer.x.com/).
 2. Register the callback: `https://your-host/api/v1/auth/callback/google` (and `/x`).
-   `http://localhost:8000/...` works for local development.
+   `http://localhost:3436/...` works for local development.
 3. Put the credentials plus a session secret in `.env`:
 
 ```bash

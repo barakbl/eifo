@@ -13,8 +13,10 @@ use serde::{Deserialize, Serialize};
 
 /// Where the nightly run starts, local time, when this app owns the schedule.
 pub const DEFAULT_NIGHTLY: &str = "03:00";
-/// Where the API is expected to answer.
-pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8000";
+/// Where the API is expected to answer. `localhost` rather than `127.0.0.1` so
+/// the links in the menu open the same origin the app is usually reached on, and
+/// port 3436 because that is `EIFO` on an old phone keypad (3-4-3-6).
+pub const DEFAULT_BASE_URL: &str = "http://localhost:3436";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -33,6 +35,12 @@ pub struct Config {
     /// Whether to start the server back up when it stops answering.
     #[serde(default = "yes")]
     pub keep_server_up: bool,
+    /// Whether opening Eifo should start the web server if it is not answering.
+    /// Separate from `keep_server_up`: a person can want the companion to bring
+    /// the server up on launch without also wanting it resurrected every time
+    /// they stop it by hand.
+    #[serde(default = "yes")]
+    pub start_server_on_open: bool,
     /// The last date this app ran the nightly chain, `YYYY-MM-DD` local, so a
     /// machine that was asleep at the hour still gets its run on waking rather
     /// than silently skipping the night.
@@ -58,6 +66,7 @@ impl Config {
             nightly: default_nightly(),
             schedule_enabled: true,
             keep_server_up: true,
+            start_server_on_open: true,
             last_nightly_on: None,
         }
     }
@@ -72,7 +81,26 @@ impl Config {
 
     pub fn load() -> Option<Self> {
         let raw = fs::read_to_string(Self::path()).ok()?;
-        serde_json::from_str(&raw).ok()
+        let mut config: Self = serde_json::from_str(&raw).ok()?;
+        if config.migrate() {
+            let _ = config.save();
+        }
+        Some(config)
+    }
+
+    /// Bring a config written by an older build up to date. Returns whether
+    /// anything changed, so the caller knows to write it back.
+    fn migrate(&mut self) -> bool {
+        // An install from before the port move keeps the old default in its
+        // saved config, which would send the menu's links and the health poll
+        // to a server that is no longer there. Nudge it forward rather than
+        // making anyone hand-edit JSON; a base_url that was set on purpose is
+        // left alone.
+        if self.base_url == "http://127.0.0.1:8000" {
+            self.base_url = default_base_url();
+            return true;
+        }
+        false
     }
 
     pub fn save(&self) -> std::io::Result<()> {
@@ -114,10 +142,10 @@ impl Config {
             .trim_end_matches('/')
             .rsplit("//")
             .next()
-            .unwrap_or("127.0.0.1:8000");
+            .unwrap_or("localhost:3436");
         let mut parts = rest.splitn(2, ':');
-        let host = parts.next().unwrap_or("127.0.0.1").to_string();
-        let port = parts.next().and_then(|p| p.parse().ok()).unwrap_or(8000);
+        let host = parts.next().unwrap_or("localhost").to_string();
+        let port = parts.next().and_then(|p| p.parse().ok()).unwrap_or(3436);
         (host, port)
     }
 
@@ -159,15 +187,40 @@ mod tests {
     #[test]
     fn host_and_port_come_out_of_the_base_url() {
         let mut config = Config::new(PathBuf::from("/tmp"));
-        config.base_url = "http://127.0.0.1:8000".into();
-        assert_eq!(config.host_port(), ("127.0.0.1".into(), 8000));
+        config.base_url = "http://localhost:3436".into();
+        assert_eq!(config.host_port(), ("localhost".into(), 3436));
     }
 
     #[test]
     fn a_url_without_a_port_gets_the_default() {
         let mut config = Config::new(PathBuf::from("/tmp"));
         config.base_url = "http://localhost".into();
-        assert_eq!(config.host_port(), ("localhost".into(), 8000));
+        assert_eq!(config.host_port(), ("localhost".into(), 3436));
+    }
+
+    #[test]
+    fn the_pre_move_default_url_is_carried_forward() {
+        let mut config = Config::new(PathBuf::from("/tmp"));
+        config.base_url = "http://127.0.0.1:8000".into();
+        assert!(config.migrate(), "the old default should be rewritten");
+        assert_eq!(config.base_url, "http://localhost:3436");
+    }
+
+    #[test]
+    fn a_deliberately_set_url_is_left_alone() {
+        let mut config = Config::new(PathBuf::from("/tmp"));
+        config.base_url = "http://192.168.1.9:9000".into();
+        assert!(!config.migrate());
+        assert_eq!(config.base_url, "http://192.168.1.9:9000");
+    }
+
+    #[test]
+    fn an_old_config_without_the_flag_still_starts_the_server_on_open() {
+        // The field was added later; a config written before it must not read
+        // back as "do not start the server".
+        let config: Config =
+            serde_json::from_str(r#"{"app_dir":"/tmp"}"#).expect("minimal config parses");
+        assert!(config.start_server_on_open);
     }
 
     #[test]

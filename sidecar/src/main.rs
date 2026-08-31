@@ -112,6 +112,8 @@ fn main() {
                 let _ = to_worker.send(Command::Run(Phase::Enrich));
             } else if id == items.run_all.id() {
                 let _ = to_worker.send(Command::Run(Phase::All));
+            } else if id == items.stop_fetch.id() {
+                let _ = to_worker.send(Command::StopFetch);
             } else if id == items.check_now.id() {
                 let _ = to_worker.send(Command::Refresh);
             } else if id == items.start_server.id() {
@@ -122,6 +124,10 @@ fn main() {
                 let _ = to_worker.send(Command::RestartServer);
             } else if id == items.keep_up.id() {
                 let _ = to_worker.send(Command::SetKeepServerUp(items.keep_up.is_checked()));
+            } else if id == items.start_on_open.id() {
+                let _ = to_worker.send(Command::SetStartServerOnOpen(
+                    items.start_on_open.is_checked(),
+                ));
             } else if id == items.schedule.id() {
                 let _ = to_worker.send(Command::SetScheduleEnabled(items.schedule.is_checked()));
             } else if id == items.open_app.id() {

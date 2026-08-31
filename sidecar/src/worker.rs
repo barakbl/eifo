@@ -37,10 +37,13 @@ pub enum Command {
     /// Stop the server and acknowledge, so Quit can wait for it.
     Shutdown(std::sync::mpsc::Sender<()>),
     Run(Phase),
+    /// Stop the fetch that is running now, whoever started it.
+    StopFetch,
     StartServer,
     StopServer,
     RestartServer,
     SetKeepServerUp(bool),
+    SetStartServerOnOpen(bool),
     SetScheduleEnabled(bool),
 }
 
@@ -50,13 +53,18 @@ pub struct Snapshot {
     pub status: Status,
     pub summary: String,
     pub problems: Vec<String>,
-    /// Set while a fetcher phase is running, naming which.
+    /// True while any fetch is running, whoever started it.
+    pub fetch_running: bool,
+    /// The phase, when this app started the fetch and so knows it.
     pub running_phase: Option<String>,
+    /// The fetcher's pid, for naming it on the Stop item.
+    pub fetch_pid: Option<u32>,
     /// What the last run did, once it is over.
     pub last_result: Option<String>,
     pub server_owned: bool,
     pub server_pid: Option<u32>,
     pub keep_server_up: bool,
+    pub start_server_on_open: bool,
     pub schedule_enabled: bool,
     pub next_run: String,
     pub restarts_given_up: bool,
@@ -82,7 +90,7 @@ struct Worker {
     updates: Sender<Snapshot>,
     wake: Box<dyn Fn() + Send>,
     health: Health,
-    running_phase: Option<Phase>,
+    fetch: Option<procs::Fetch>,
     last_result: Option<String>,
     restart_attempt: usize,
     restarts_given_up: bool,
@@ -97,7 +105,7 @@ impl Worker {
             updates,
             wake,
             health: Health::unknown("starting up"),
-            running_phase: None,
+            fetch: None,
             last_result: None,
             restart_attempt: 0,
             restarts_given_up: false,
@@ -110,13 +118,24 @@ impl Worker {
         // the user started by hand is still a server, and starting a second one
         // would only collide on the port.
         self.poll();
-        if self.health.status == Status::Down && self.config.keep_server_up {
+        // Opening Eifo brings the server up by default: a companion whose whole
+        // job is "is the catalog answering" is not much use sitting next to a
+        // server it could have started.
+        if self.health.status == Status::Down && self.config.start_server_on_open {
             self.start_server();
         }
         self.publish();
 
         loop {
-            match commands.recv_timeout(POLL_EVERY) {
+            // A running fetch is watched more closely than the API is polled:
+            // the point of the Stop item is that it takes effect promptly, and
+            // a finished run should show its result without a twenty-second wait.
+            let wait = if self.fetch.is_some() {
+                Duration::from_secs(3)
+            } else {
+                POLL_EVERY
+            };
+            match commands.recv_timeout(wait) {
                 // Quit from the menu waits on this: on macOS the event loop
                 // never returns from `run`, so without an acknowledgement the
                 // process can exit before the server has actually gone.
@@ -144,7 +163,8 @@ impl Worker {
     fn handle(&mut self, command: Command) {
         match command {
             Command::Refresh => self.poll(),
-            Command::Run(phase) => self.run_phase(phase),
+            Command::Run(phase) => self.start_phase(phase),
+            Command::StopFetch => self.stop_fetch(),
             Command::StartServer => {
                 self.restarts_given_up = false;
                 self.restart_attempt = 0;
@@ -170,6 +190,10 @@ impl Worker {
                 self.restart_attempt = 0;
                 let _ = self.config.save();
             }
+            Command::SetStartServerOnOpen(on) => {
+                self.config.start_server_on_open = on;
+                let _ = self.config.save();
+            }
             Command::SetScheduleEnabled(on) => {
                 self.config.schedule_enabled = on;
                 let _ = self.config.save();
@@ -180,7 +204,9 @@ impl Worker {
 
     /// One turn of the loop: is it time to run, and is the server still there.
     fn tick(&mut self) {
-        if self.running_phase.is_none() && self.config.schedule_enabled {
+        self.reap_fetch();
+
+        if self.fetch.is_none() && self.config.schedule_enabled {
             if let Some(at) = schedule::parse_time(&self.config.nightly) {
                 let now = Local::now();
                 if schedule::is_due(now, at, self.config.last_nightly_on.as_deref()) {
@@ -190,7 +216,7 @@ impl Worker {
                     // waiting for tomorrow.
                     self.config.last_nightly_on = Some(schedule::day_of(now));
                     let _ = self.config.save();
-                    self.run_phase(Phase::All);
+                    self.start_phase(Phase::All);
                     return;
                 }
             }
@@ -199,9 +225,9 @@ impl Worker {
         // A source somebody has just switched on in the Manage tab. The daemon
         // polls for these every thirty seconds; without something doing it, the
         // ask waits until the next nightly.
-        if self.running_phase.is_none() && procs::pending_backfills(&self.config) > 0 {
+        if self.fetch.is_none() && procs::pending_backfills(&self.config) > 0 {
             if let FetcherState::Idle = procs::fetcher_state(&self.config) {
-                self.run_phase(Phase::Sync);
+                self.start_phase(Phase::Sync);
                 return;
             }
         }
@@ -264,21 +290,51 @@ impl Worker {
         }
     }
 
-    /// Run a fetcher phase, keeping the menu honest while it happens.
-    fn run_phase(&mut self, phase: Phase) {
-        self.running_phase = Some(phase);
+    /// Start a fetcher phase. It runs in its own process; the loop watches it.
+    fn start_phase(&mut self, phase: Phase) {
+        if self.fetch.is_some() {
+            return;
+        }
         self.last_result = None;
-        self.publish();
+        match procs::start_phase(&self.config, phase) {
+            Ok(fetch) => self.fetch = Some(fetch),
+            Err(err) => self.last_result = Some(err),
+        }
+    }
 
-        let result = procs::run_phase(&self.config, phase);
-
-        self.running_phase = None;
-        self.last_result = Some(match result {
+    /// If the running fetch has finished, record what it did and refresh.
+    fn reap_fetch(&mut self) {
+        let Some(fetch) = self.fetch.as_mut() else {
+            return;
+        };
+        let Some(outcome) = fetch.poll() else {
+            return;
+        };
+        let phase = fetch.phase;
+        self.fetch = None;
+        self.last_result = Some(match outcome {
             Ok(()) => format!("{} finished", capitalise(phase.label())),
             Err(err) => err,
         });
         // The catalog just changed, so the reading from before it is stale.
         self.poll();
+    }
+
+    /// Stop whatever fetch is running: a clean signal to our own child, or a
+    /// kill by pid for one another process started.
+    fn stop_fetch(&mut self) {
+        if let Some(mut fetch) = self.fetch.take() {
+            let phase = fetch.phase;
+            fetch.stop();
+            self.last_result = Some(format!("{} stopped", capitalise(phase.label())));
+            self.poll();
+            return;
+        }
+        if let FetcherState::Running { pid: Some(pid) } = procs::fetcher_state(&self.config) {
+            procs::stop_external(pid);
+            self.last_result = Some("stopped the running fetch".into());
+            self.poll();
+        }
     }
 
     fn publish(&mut self) {
@@ -294,15 +350,33 @@ impl Worker {
             None => format!("invalid time {:?}", self.config.nightly),
         };
 
+        // Ours if we started it; otherwise whatever the lock file says, so a
+        // nightly run fired by the LaunchAgent or an `eifo-fetch` typed in a
+        // terminal still shows up here.
+        let (fetch_running, running_phase, fetch_pid) = match &self.fetch {
+            Some(fetch) => (
+                true,
+                Some(fetch.phase.label().to_string()),
+                Some(fetch.pid()),
+            ),
+            None => match procs::fetcher_state(&self.config) {
+                FetcherState::Running { pid } => (true, None, pid),
+                FetcherState::Idle => (false, None, None),
+            },
+        };
+
         let snapshot = Snapshot {
             status,
             summary: self.health.summary.clone(),
             problems: self.health.problems.clone(),
-            running_phase: self.running_phase.map(|p| p.label().to_string()),
+            fetch_running,
+            running_phase,
+            fetch_pid,
             last_result: self.last_result.clone(),
             server_owned: self.server.is_running(),
             server_pid: self.server.pid(),
             keep_server_up: self.config.keep_server_up,
+            start_server_on_open: self.config.start_server_on_open,
             schedule_enabled: self.config.schedule_enabled,
             next_run,
             restarts_given_up: self.restarts_given_up,

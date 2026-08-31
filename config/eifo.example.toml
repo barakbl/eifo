@@ -6,7 +6,7 @@
 
 db_url = "sqlite:///data/eifo.db"
 images_dir = "data/images"
-public_origin = "http://localhost:8000"
+public_origin = "http://localhost:3436"
 
 # Titles whose availability data is older than this are reported as stale by
 # GET /api/v1/meta (the health endpoint).

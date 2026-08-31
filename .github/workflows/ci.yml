@@ -54,6 +54,38 @@ jobs:
           EIFO_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run eifo-fetch db upgrade
           EIFO_DB_URL="sqlite:///${RUNNER_TEMP}/ci.db" uv run eifo-fetch db current
 
+  sidecar:
+    # The menu-bar companion. macOS because it is AppKit all the way down -
+    # NSStatusItem, NSOpenPanel, SMAppService - and there is nothing to check on
+    # a runner that has none of them.
+    #
+    # Its own job rather than a step in the Python one: it shares no toolchain
+    # with the rest of the pipeline, and a Rust build failing should read as the
+    # sidecar failing rather than as the test suite failing.
+    name: sidecar (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup component add clippy rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sidecar
+
+      - name: Format
+        run: cargo fmt --manifest-path sidecar/Cargo.toml --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path sidecar/Cargo.toml --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --manifest-path sidecar/Cargo.toml
+
+      - name: It builds a bundle
+        run: ./sidecar/build-app.sh
+
   windows:
     # Off by default: a full Windows run costs about fourteen minutes, which is
     # most of the pipeline, to re-check something that changes only when

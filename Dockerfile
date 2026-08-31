@@ -52,7 +52,7 @@ RUN if [ "$INSTALL_BROWSER" != "0" ]; then \
     fi
 
 USER eifo
-EXPOSE 8000
+EXPOSE 3436
 
 # Overridden by the fetcher service in docker-compose.yml.
-CMD ["uvicorn", "eifo_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["eifo-api", "--host", "0.0.0.0", "--port", "3436"]

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Eifo</string>
+    <key>CFBundleDisplayName</key>
+    <string>Eifo</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.eifo.tray</string>
+    <key>CFBundleExecutable</key>
+    <string>eifo-tray</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+
+    <!-- The whole point: a menu-bar app with no Dock icon and no entry in the
+         app switcher. Without this macOS gives it both, whether or not it ever
+         opens a window. -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <!-- The About panel credits this, and it is the honest statement for a
+         companion that reads somebody else's catalog. -->
+    <key>NSHumanReadableCopyright</key>
+    <string>MIT. Not affiliated with any service it lists.</string>
+</dict>
+</plist>

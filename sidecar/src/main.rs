@@ -22,6 +22,7 @@ mod menu;
 mod platform;
 mod procs;
 mod schedule;
+mod update;
 mod worker;
 
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -34,7 +35,7 @@ use tray_icon::{TrayIcon, TrayIconBuilder};
 use config::Config;
 use health::Status;
 use procs::Phase;
-use worker::{Command, Snapshot};
+use worker::{Command, Snapshot, UpdateView};
 
 /// Posted to the run loop when the worker has something new to show.
 #[derive(Debug, Clone, Copy)]
@@ -85,11 +86,34 @@ fn main() {
 
     let mut shown = Status::Unknown;
     let mut config = config;
+    // The last thing the worker showed, so a menu click knows what state it is
+    // acting on - "Check for updates" and "Update to v0.3.0" are one item.
+    let mut update = UpdateView::Unknown;
+
+    // Stop the server, drop the status item, and leave the run loop - the one
+    // exit path, shared by Quit and by a finished update that must relaunch.
+    let quit = |to_worker: &Sender<Command>,
+                tray: &mut Option<TrayIcon>,
+                control_flow: &mut ControlFlow| {
+        let (ack, acked) = channel::<()>();
+        let _ = to_worker.send(Command::Shutdown(ack));
+        let _ = acked.recv_timeout(std::time::Duration::from_secs(8));
+        tray.take();
+        *control_flow = ControlFlow::Exit;
+    };
 
     event_loop.run(move |_event, _target, control_flow| {
         *control_flow = ControlFlow::Wait;
 
-        drain_updates(&from_worker, &items, tray.as_mut(), &mut shown);
+        if let Some(snapshot) = drain_updates(&from_worker, &items, tray.as_mut(), &mut shown) {
+            update = snapshot.update.clone();
+            if snapshot.relaunch {
+                // The worker has built the new bundle and spawned the process
+                // that will open it once we are gone. All that is left is to go.
+                quit(&to_worker, &mut tray, control_flow);
+                return;
+            }
+        }
 
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             let id = &event.id;
@@ -99,13 +123,15 @@ fn main() {
                 // beat the worker to stopping the server - and an orphaned
                 // server still holding the port is what makes the next launch
                 // report on a process it does not own.
-                let (ack, acked) = channel::<()>();
-                let _ = to_worker.send(Command::Shutdown(ack));
-                let _ = acked.recv_timeout(std::time::Duration::from_secs(8));
-                // Dropped before exiting so the status item goes with the app
-                // rather than lingering until the window server notices.
-                tray.take();
-                *control_flow = ControlFlow::Exit;
+                quit(&to_worker, &mut tray, control_flow);
+            } else if id == items.update.id() {
+                // One item, two jobs: install the update if there is one to
+                // install, otherwise go and look.
+                let command = match update {
+                    UpdateView::Available { .. } => Command::RunUpdate,
+                    _ => Command::CheckUpdate,
+                };
+                let _ = to_worker.send(command);
             } else if id == items.run_sync.id() {
                 let _ = to_worker.send(Command::Run(Phase::Sync));
             } else if id == items.run_enrich.id() {
@@ -167,17 +193,18 @@ fn main() {
 }
 
 /// Render every snapshot waiting, and repaint the dot only when it changed.
+/// Returns the one it rendered, so the caller can act on `relaunch`.
 fn drain_updates(
     from_worker: &Receiver<Snapshot>,
     items: &menu::Items,
     tray: Option<&mut TrayIcon>,
     shown: &mut Status,
-) {
+) -> Option<Snapshot> {
     let mut latest = None;
     while let Ok(snapshot) = from_worker.try_recv() {
         latest = Some(snapshot);
     }
-    let Some(snapshot) = latest else { return };
+    let snapshot = latest?;
 
     menu::apply(items, &snapshot);
     if let Some(tray) = tray {
@@ -189,6 +216,7 @@ fn drain_updates(
             *shown = snapshot.status;
         }
     }
+    Some(snapshot)
 }
 
 /// First launch: ask which folder, and refuse anything that is not one.

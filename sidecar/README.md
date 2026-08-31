@@ -68,6 +68,27 @@ not this app is running, and the fetcher's single-flight lock means whichever
 gets there first wins while the other stands down. Two schedulers are safe here;
 no scheduler is not.
 
+## Updates
+
+Twice a day - and once a few seconds after launch - the app asks GitHub for the
+latest release. "Latest" is compared against the tag the checkout is sitting on
+(`git tag --points-at HEAD`), not the version this binary was built as: the
+companion's job is to keep the *checkout* current, and right after an update it
+is a new checkout that a still-running old binary reports on until it relaunches.
+
+When there is a newer release, a notification says so once (not once per check),
+and the menu's **Check for updates** line becomes **Update to v0.3.0…**. Clicking
+it runs [`update.sh`](update.sh) against the checkout - `git fetch` the tag,
+`git checkout`, `uv sync`, `eifo-fetch db upgrade`, rebuild `Eifo.app` beside the
+running one and swap it in - then the app quits and a small detached shell waits
+for it to exit and reopens the fresh bundle. Every line of that is a command a
+person updating by hand would run.
+
+The script is baked into the binary with `include_str!`, so the copy that runs
+is never the one being checked out from under it. Its output goes to
+`$TMPDIR/eifo-update.log`; on a failure the last few lines are what the menu
+shows.
+
 ## The server
 
 It answers on `http://localhost:3436` by default - both the menu's **Open Eifo**
@@ -126,9 +147,10 @@ a stale file with a live pid in it is possible, an unheld `flock` is not.
 | `icons.rs` | The dot, drawn rather than shipped |
 | `procs.rs` | Starting, stopping, and the single-flight check |
 | `schedule.rs` | When tonight's run is owed |
+| `update.rs` | Is there a newer release, and which one is this |
 | `worker.rs` | The background half: everything slow |
 | `menu.rs` | The menu and the words in it |
-| `platform.rs` | About panel, folder chooser, Login Items |
+| `platform.rs` | About panel, folder chooser, Login Items, notifications |
 | `main.rs` | The run loop, which does nothing slow |
 
 The main thread owns the run loop, the status item and the menu, and renders

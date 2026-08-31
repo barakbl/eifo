@@ -46,6 +46,10 @@ pub struct Config {
     /// than silently skipping the night.
     #[serde(default)]
     pub last_nightly_on: Option<String>,
+    /// The release this app last raised a notification about, so a check that
+    /// runs twice a day does not put the same banner up twice.
+    #[serde(default)]
+    pub update_notified_version: Option<String>,
 }
 
 fn default_base_url() -> String {
@@ -68,6 +72,7 @@ impl Config {
             keep_server_up: true,
             start_server_on_open: true,
             last_nightly_on: None,
+            update_notified_version: None,
         }
     }
 

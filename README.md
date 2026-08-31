@@ -180,7 +180,19 @@ see [Hack on it](#hack-on-it).
 Docker, or Python 3.12+ with [uv](https://docs.astral.sh/uv/). Plus a free
 [TMDB API key](https://www.themoviedb.org/settings/api). Everything else is optional.
 
-### With Docker (recommended)
+### The installer
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/barakbl/eifo/main/install.sh | bash
+```
+
+Downloads the latest release, checks what it needs (offering to install `uv`, and
+Rust on macOS), asks for the TMDB key and - if you want sign-in - a Google OAuth
+client, lets you take every service or pick from a list, sets up the database,
+and on macOS builds the menu-bar companion and opens it. Every step is a command
+you could run by hand; it just asks the questions in order.
+
+### With Docker (recommended for a server)
 
 ```bash
 git clone https://github.com/barakbl/eifo.git && cd eifo

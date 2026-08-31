@@ -1,7 +1,9 @@
 # Runtime state - never committed
 data/
 config/eifo.toml
+config/eifo.toml.bak
 .env
+.env.bak
 
 # Python
 __pycache__/

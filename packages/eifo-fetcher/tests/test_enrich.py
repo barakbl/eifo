@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 from typing import Any
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -32,12 +34,17 @@ from eifo_core.settings import Settings
 from eifo_core.types import utcnow
 from eifo_fetcher.enrich import (
     COMMIT_EVERY,
+    apply_rate_limits,
     enrich_titles,
     mislabelled_names,
     recompute_all_aggregates,
     titles_due,
 )
+from eifo_fetcher.enrichers import discover_enrichers
 from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
+from eifo_fetcher.enrichers.rt import HOST as RT_HOST
+from eifo_fetcher.enrichers.seret import HOST as SERET_HOST
+from eifo_fetcher.http import HttpClient, RateLimiter
 from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError
 
 
@@ -349,6 +356,56 @@ class TestSchedulingTheNextAttempt:
         assert len(first) == 2
         assert len(second) == 2
         assert set(first).isdisjoint(second)
+
+
+class TestRateLimits:
+    """How hard each scraped provider leans on its host.
+
+    This used to be each enricher's own business, via ``ctx.apply_rate_limit``
+    - which resolved the rate from ``[sources.enrich]``, a section that exists
+    in no config file and no documentation. So the call set nothing, every
+    scraped provider ran at the client-wide default, and there was no way to
+    change it. Now the providers declare a host and a pace and the pipeline
+    applies them, which is where the rest of this project's politeness lives.
+    """
+
+    def _limiter(self, **enrich: Any) -> RateLimiter:
+        limiter = RateLimiter(default_rps=0)
+        with HttpClient(rate_limiter=limiter, sleep=lambda _seconds: None) as http:
+            settings = Settings(_env_file=None, enrich=enrich)
+            ctx = FetchContext(source_key="enrich", http=http, settings=settings)
+            apply_rate_limits(discover_enrichers(settings), ctx, settings)
+        return limiter
+
+    def _spacing(self, limiter: RateLimiter, host: str) -> float:
+        later = time.monotonic() + 10_000.0
+        limiter.wait(host, sleep=lambda _seconds: None, now=lambda: later)
+        return limiter.wait(host, sleep=lambda _seconds: None, now=lambda: later)
+
+    def test_each_scraped_provider_gets_its_own_default(self) -> None:
+        limiter = self._limiter()
+
+        assert self._spacing(limiter, RT_HOST) == pytest.approx(1.0)
+        assert self._spacing(limiter, SERET_HOST) == pytest.approx(2.0)
+
+    def test_configuration_overrides_a_default(self) -> None:
+        limiter = self._limiter(rate_limits={"rt": 0.25, "seret": 4.0})
+
+        assert self._spacing(limiter, RT_HOST) == pytest.approx(4.0)
+        assert self._spacing(limiter, SERET_HOST) == pytest.approx(0.25)
+
+    def test_one_provider_can_be_retuned_without_touching_the_others(self) -> None:
+        limiter = self._limiter(rate_limits={"rt": 0.5})
+
+        assert self._spacing(limiter, RT_HOST) == pytest.approx(2.0)
+        assert self._spacing(limiter, SERET_HOST) == pytest.approx(2.0)
+
+    def test_a_provider_with_no_host_of_its_own_is_left_alone(self) -> None:
+        """TMDB is an API with its own [tmdb] pace, not somebody's website."""
+        tmdb = next(e for e in discover_enrichers(Settings(_env_file=None)) if e.key == "tmdb")
+
+        assert tmdb.host is None
+        assert tmdb.default_rate_limit_rps is None
 
 
 class TestEnrichTitles:

@@ -187,9 +187,45 @@ retry_days = 30          # wait after nobody could rate a title; doubles each ti
 retry_error_days = 1     # wait after a provider failed rather than came back empty
 retry_max_days = 365     # ceiling on those doublings
 disabled = []            # enricher keys to switch off, e.g. ["rt"]
-# Seret is off by default: the site publishes no working title search, so a
-# title cannot be resolved to a page id. See docs.internal/06-enrichment.md.
-enabled = []             # providers that are otherwise off, e.g. ["seret"]
+enabled = []             # providers that are otherwise off by default
+
+# How hard each scraped provider leans on somebody's website, by enricher key.
+# TMDB is absent on purpose: it is an API built to be called and has its own
+# [tmdb] pace. Omit a provider to use its own default - rt 1.0, seret 0.5.
+[enrich.rate_limits]
+rt = 1.0
+seret = 0.5
+
+# ---------------------------------------------------------------------------
+# Seret (Israeli ratings)
+# ---------------------------------------------------------------------------
+#
+# Seret publishes no working title search - every search endpoint answers with
+# the same generic listing - so its scores are reachable only through an index
+# built from the sitemap it does publish.
+#
+# Nothing needs doing: `eifo-fetch enrich` crawls a batch each run, beside the
+# IMDb pass, so the index fills itself in over about a month of nightly runs
+# and stays current afterwards. To have it now instead:
+#
+#     eifo-fetch seret index --limit 9000   # the same pass, ~5 hours
+#     eifo-fetch seret status               # what the index holds
+#
+# Its pace is [enrich.rate_limits] seret, above, with every other provider's.
+
+[seret]
+# Pages read per nightly crawl - about ten minutes at the configured pace.
+# Seret publishes ~8,900 title pages, so a first index takes about a month of
+# ordinary runs, each picking up where the last stopped.
+batch_size = 300
+# How old a row may get before its page is read again. Months, not days: a
+# settled score moves slowly and the back catalogue does not move at all.
+refresh_days = 120
+# Ask Seret's autocomplete about a title the index has never heard of. It knows
+# recent releases only, which is exactly the gap between one crawl and the
+# next, and costs at most two requests per unknown title. Worth switching off
+# while first indexing a large catalog.
+live_fallback = true
 
 [scores.weights]
 imdb = 3.0
@@ -197,8 +233,21 @@ rt_critics = 2.0
 rt_audience = 1.0
 tmdb = 1.0
 seret_critics = 2.0
-seret_viewers = 1.5
+seret_viewers = 1.0
 edb = 0.5
+
+# Votes a provider needs before its rating counts towards an aggregate at all.
+# At or below the number here the rating is still stored and still shown - with
+# its vote count and a link, so a reader can judge it - but contributes nothing
+# to the arithmetic. Distinct from low_vote_threshold above, which only halves
+# the weight; these two stack.
+#
+# Only Seret's audience score by default: it is by far the thinnest-voted
+# source here, and a 9.1 from four people is not made harmless by halving it.
+# Setting this section replaces the default outright rather than merging, so
+# name every provider you want a floor for.
+[scores.min_votes]
+seret_viewers = 10
 
 # ---------------------------------------------------------------------------
 # Daemon schedule (ignored when using system cron)

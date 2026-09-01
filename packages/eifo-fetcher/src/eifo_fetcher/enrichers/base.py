@@ -81,6 +81,19 @@ class Enricher(ABC):
     #: Providers this enricher can return. Used to decide what a refresh covers.
     providers: tuple[RatingProvider, ...] = ()
 
+    #: The host this provider reads, when it reads one site of its own.
+    #:
+    #: Declared rather than rate-limited by hand, so politeness is a property
+    #: of the pipeline rather than of each plugin author's diligence - the same
+    #: reason every request goes through one HttpClient (eifo_fetcher.http).
+    #: None for a provider that talks to an API with its own configured pace,
+    #: which is TMDB and its [tmdb] section.
+    host: str | None = None
+
+    #: Requests per second to ask that host for, unless ``[enrich.rate_limits]``
+    #: overrides it. None leaves the client-wide default in place.
+    default_rate_limit_rps: float | None = None
+
     @property
     @abstractmethod
     def key(self) -> str:

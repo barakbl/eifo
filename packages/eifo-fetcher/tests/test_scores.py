@@ -113,8 +113,8 @@ class TestIsraeliAggregate:
             config(),
         )
 
-        # seret_critics 2.0, seret_viewers 1.5 -> (90*2 + 80*1.5) / 3.5 = 85.7 -> 86
-        assert result.score_israeli == 86
+        # seret_critics 2.0, seret_viewers 1.0 -> (90*2 + 80*1.0) / 3.0 = 86.7 -> 87
+        assert result.score_israeli == 87
         assert result.score != result.score_israeli
 
     def test_one_israeli_provider_is_enough(self) -> None:
@@ -141,6 +141,105 @@ class TestIsraeliAggregate:
         assert not P.RT_CRITICS.is_israeli
 
 
+class TestVotesTooThinToCount:
+    """Seret's audience score can be a 9.1 from four people.
+
+    Halving the weight does not make that harmless, so below the configured
+    floor it is left out of the arithmetic entirely. It is still stored and
+    still shown - it is true, and a reader looking at "6.7, 4 votes" can weigh
+    it themselves - it just stops moving a number meant to summarise agreement.
+    """
+
+    def test_a_thinly_voted_seret_audience_score_is_excluded(self) -> None:
+        result = aggregate(
+            [
+                RatingInput(P.SERET_VIEWERS, 91, 4),
+                RatingInput(P.SERET_CRITICS, 62, None),
+                RatingInput(P.IMDB, 71, 12004),
+            ],
+            config(),
+        )
+
+        assert result.components["seret_viewers"]["excluded"] is True
+        assert result.components["seret_viewers"]["weight"] == 0.0
+        # (62*2.0 + 71*3.0) / 5.0 = 67.4 -> 67, with the 91 nowhere in it.
+        assert result.score == 67
+
+    def test_the_floor_is_inclusive(self) -> None:
+        """ "More than 10" means 11 counts and 10 does not."""
+        at = aggregate(
+            [RatingInput(P.SERET_VIEWERS, 91, 10), RatingInput(P.IMDB, 71, 9999)], config()
+        )
+        above = aggregate(
+            [RatingInput(P.SERET_VIEWERS, 91, 11), RatingInput(P.IMDB, 71, 9999)], config()
+        )
+
+        assert at.components["seret_viewers"]["excluded"] is True
+        assert above.components["seret_viewers"]["excluded"] is False
+
+    def test_between_the_floor_and_the_damping_it_counts_half(self) -> None:
+        """The two rules stack rather than replace each other."""
+        result = aggregate(
+            [RatingInput(P.SERET_VIEWERS, 91, 40), RatingInput(P.IMDB, 71, 9999)], config()
+        )
+
+        component = result.components["seret_viewers"]
+        assert (component["excluded"], component["damped"], component["weight"]) == (
+            False,
+            True,
+            0.5,
+        )
+
+    def test_well_voted_it_carries_its_full_weight(self) -> None:
+        result = aggregate(
+            [RatingInput(P.SERET_VIEWERS, 91, 300), RatingInput(P.IMDB, 71, 9999)], config()
+        )
+
+        assert result.components["seret_viewers"]["weight"] == 1.0
+
+    def test_an_excluded_rating_cannot_carry_the_israeli_score_alone(self) -> None:
+        """The Israeli aggregate needs only one provider - but a real one."""
+        result = aggregate(
+            [RatingInput(P.SERET_VIEWERS, 91, 4), RatingInput(P.IMDB, 71, 9999)], config()
+        )
+
+        assert result.score_israeli is None
+
+    def test_it_is_kept_in_the_working_rather_than_dropped(self) -> None:
+        """So "why is this not in the total" is answerable from the page."""
+        result = aggregate(
+            [RatingInput(P.SERET_VIEWERS, 91, 4), RatingInput(P.IMDB, 71, 9999)], config()
+        )
+
+        assert result.components["seret_viewers"]["normalized"] == 91
+        assert result.components["seret_viewers"]["vote_count"] == 4
+
+    def test_no_vote_count_is_not_a_thin_one(self) -> None:
+        """Seret's critic score is one editorial figure, not a poll."""
+        result = aggregate(
+            [RatingInput(P.SERET_CRITICS, 62, None), RatingInput(P.IMDB, 71, 9999)], config()
+        )
+
+        assert result.components["seret_critics"]["excluded"] is False
+        assert result.components["seret_critics"]["weight"] == 2.0
+
+    def test_other_providers_have_no_floor_by_default(self) -> None:
+        """Only Seret's audience score is thin-voted enough to warrant one."""
+        result = aggregate([RatingInput(P.IMDB, 91, 3), RatingInput(P.TMDB, 71, 2)], config())
+
+        assert result.components["imdb"]["excluded"] is False
+        assert result.components["tmdb"]["excluded"] is False
+        assert result.components["imdb"]["damped"] is True
+
+    def test_a_floor_can_be_set_for_any_provider(self) -> None:
+        result = aggregate(
+            [RatingInput(P.IMDB, 91, 3), RatingInput(P.TMDB, 71, 9999)],
+            config(min_votes={"imdb": 10}),
+        )
+
+        assert result.components["imdb"]["excluded"] is True
+
+
 class TestComponents:
     def test_every_input_is_recorded_with_its_weight(self) -> None:
         result = aggregate(
@@ -153,6 +252,7 @@ class TestComponents:
             "weight": 3.0,
             "vote_count": 9999,
             "damped": False,
+            "excluded": False,
         }
         assert result.components["rt_critics"]["weight"] == 2.0
 

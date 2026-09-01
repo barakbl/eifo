@@ -68,6 +68,7 @@ complete -c eifo-fetch -n '__eifo_at ""' -a all -d 'sync, enrich, then fetch art
 complete -c eifo-fetch -n '__eifo_at ""' -a repair-names -d 're-ask TMDB for names stored in the wrong script'
 complete -c eifo-fetch -n '__eifo_at ""' -a rematch -d 'give titles that never matched TMDB another, smarter try'
 complete -c eifo-fetch -n '__eifo_at ""' -a dedupe -d 'merge titles the catalog holds twice'
+complete -c eifo-fetch -n '__eifo_at ""' -a seret -d 'build and inspect the Seret page index (Israeli ratings)'
 complete -c eifo-fetch -n '__eifo_at ""' -a sources -d 'inspect configured sources'
 complete -c eifo-fetch -n '__eifo_at ""' -a review -d 'work through unresolved matches'
 complete -c eifo-fetch -n '__eifo_at ""' -a daemon -d 'run phases on the configured schedule'
@@ -101,6 +102,14 @@ complete -c eifo-fetch -n '__eifo_at rematch' -l limit -x -d 'stop after N title
 # -- dedupe ------------------------------------------------------------------
 
 complete -c eifo-fetch -n '__eifo_at dedupe' -l apply -d 'perform the merges; without it the plan is only printed'
+
+# -- seret -------------------------------------------------------------------
+
+complete -c eifo-fetch -n '__eifo_at seret' -a index -d 'crawl the sitemap so titles can be resolved to Seret pages'
+complete -c eifo-fetch -n '__eifo_at seret' -a status -d 'show what the index currently holds'
+complete -c eifo-fetch -n '__eifo_at "seret index"' -l limit -x -d 'pages to read this run'
+complete -c eifo-fetch -n '__eifo_at "seret index"' -l rps -x -d 'requests per second (default 0.5)'
+complete -c eifo-fetch -n '__eifo_at "seret index"' -l force -d 're-read every page, however recently indexed'
 
 # -- sources -----------------------------------------------------------------
 

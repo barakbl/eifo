@@ -459,6 +459,70 @@ class TmdbAlias(Base):
         return f"<TmdbAlias tmdb={self.tmdb_id} -> title={self.title_id}>"
 
 
+class SeretTitle(Base):
+    """One page of seret.co.il, as that page's own JSON-LD describes it.
+
+    Seret publishes no working title search - its advertised ``SearchAction``,
+    the real form POST and the site-wide search page all answer with a generic
+    current-releases listing - so a title cannot be resolved to a page id on
+    demand. What Seret does publish is a sitemap naming every page, and that is
+    what this table is built from: the crawl reads each page once, and
+    afterwards resolving a title is a local lookup rather than a request.
+
+    The scores are kept here as well as in ``external_ratings``, which is not
+    the duplication it looks like. The crawl has the page open anyway, so
+    reading it again per title would be the same traffic twice over; and
+    holding Seret's own numbers apart from the catalog's means re-indexing can
+    correct them without every affected title having to fall due for
+    enrichment first.
+    """
+
+    __tablename__ = "seret_index"
+    __table_args__ = (Index("ix_seret_index_imdb_id", "imdb_id"),)
+
+    #: Films and series are numbered separately on Seret - ``MID`` against
+    #: ``SID``, at two different endpoints - so which numbering an id belongs
+    #: to is part of the key rather than a property of the row.
+    kind: Mapped[TitleKind] = mapped_column(_enum(TitleKind, "title_kind"), primary_key=True)
+    seret_id: Mapped[int] = mapped_column(primary_key=True)
+
+    name_he: Mapped[str | None] = mapped_column(String(500))
+    #: Seret's ``alternateName``, which is the international title.
+    name_en: Mapped[str | None] = mapped_column(String(500))
+    #: From ``datePublished``, which on Seret is the *Israeli* release date and
+    #: therefore trails the production year a catalog reports - "The Big Short"
+    #: is 2015 upstream and 2016-01-28 here. Matching against it allows more
+    #: slack than the catalog's own year comparisons do.
+    year: Mapped[int | None]
+    #: From ``sameAs``. Decisive about identity when present, and Seret only
+    #: began publishing it on the newer pages.
+    imdb_id: Mapped[str | None] = mapped_column(String(20))
+
+    #: The audience score, on Seret's own 0-10 scale, and how many people voted.
+    viewers_score: Mapped[float | None]
+    viewers_votes: Mapped[int | None]
+    #: "Seret Score", the site's composite editorial figure - the critic score -
+    #: also 0-10.
+    critics_score: Mapped[float | None]
+
+    url: Mapped[str | None] = mapped_column(String(1000))
+    #: When this page was last read, which is what the re-crawl works from: a
+    #: row older than ``[seret] refresh_days`` is fetched again and every other
+    #: row is skipped, so a second crawl costs almost nothing.
+    indexed_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+    #: A page that answered but carried no title node - a withdrawn id, or a
+    #: layout change. Recorded rather than simply left out, so that the crawl
+    #: stops paying for it on every subsequent run.
+    unreadable: Mapped[bool] = mapped_column(default=False, server_default=false())
+
+    def names(self) -> list[str]:
+        """Every name this page gives the title, Hebrew first."""
+        return [name for name in (self.name_he, self.name_en) if name]
+
+    def __repr__(self) -> str:
+        return f"<SeretTitle {self.kind} {self.seret_id} {self.name_he or self.name_en!r}>"
+
+
 class EnrichAttempt(Base):
     """When a title was last put through the enrichers, and what came of it.
 

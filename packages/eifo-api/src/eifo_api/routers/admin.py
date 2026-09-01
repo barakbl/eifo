@@ -13,6 +13,7 @@ surface exists.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -45,6 +46,8 @@ from eifo_core.models import (
 )
 from eifo_core.settings import Settings
 from eifo_core.types import utcnow
+
+logger = logging.getLogger("eifo.api.admin")
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -208,6 +211,21 @@ def get_stats(_admin: AdminDep, session: SessionDep, settings: SettingsDep) -> A
 # -- helpers ----------------------------------------------------------------
 
 
+def _configured_floors(settings: Settings) -> list[tuple[RatingProvider, int]]:
+    """``[scores.min_votes]`` as providers, ignoring names that are not ones.
+
+    The setting is a free-form mapping, so a typo there must not take the whole
+    Manage tab down with a ValueError.
+    """
+    floors = []
+    for name, floor in settings.scores.min_votes.items():
+        try:
+            floors.append((RatingProvider(name), floor))
+        except ValueError:
+            logger.warning("[scores.min_votes] names %r, which is not a rating provider", name)
+    return floors
+
+
 def _scoring_mix(session: Session, settings: Settings) -> list[ScoringProvider]:
     """Every rating provider's part in the catalog's scores, heaviest first.
 
@@ -218,9 +236,10 @@ def _scoring_mix(session: Session, settings: Settings) -> list[ScoringProvider]:
     provider's weight counted once per scored title it has rated, over the same
     total across every provider.
 
-    Halved for a thinly-voted rating, exactly as :mod:`eifo_fetcher.scores`
-    halves it, so the number here is the one the aggregates were built from
-    rather than a second opinion about them.
+    Halved for a thinly-voted rating and dropped entirely for one below its
+    ``[scores.min_votes]`` floor, exactly as :mod:`eifo_fetcher.scores` does it,
+    so the number here is the one the aggregates were built from rather than a
+    second opinion about them.
 
     Every provider appears, including the ones that have rated nothing. A
     provider contributing zero is the single most useful row on the table:
@@ -230,7 +249,21 @@ def _scoring_mix(session: Session, settings: Settings) -> list[ScoringProvider]:
     # A rating with no vote count is not a thin one - it is a provider that does
     # not publish counts, and treating "unknown" as "hardly anybody" would halve
     # every score Rotten Tomatoes ever contributed.
+    #
+    # The floors come first: a rating below its provider's min_votes contributed
+    # nothing at all to the aggregate, so crediting it half here would make this
+    # table disagree with the scores it claims to describe.
+    excluded = [
+        (
+            (ExternalRating.provider == provider)
+            & ExternalRating.vote_count.is_not(None)
+            & (ExternalRating.vote_count <= floor),
+            0.0,
+        )
+        for provider, floor in _configured_floors(settings)
+    ]
     units = case(
+        *excluded,
         (ExternalRating.vote_count.is_not(None) & (ExternalRating.vote_count < thin), 0.5),
         else_=1.0,
     )

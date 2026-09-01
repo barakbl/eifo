@@ -32,6 +32,8 @@ from eifo_fetcher.dedupe import (
     needs_a_human,
     plan_merges,
 )
+from eifo_fetcher.enrichers.seret import DEFAULT_RATE_LIMIT_RPS as SERET_DEFAULT_RPS
+from eifo_fetcher.enrichers.seret_index import SERET_KEY, index_status
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.lock import AlreadyRunningError, single_flight
 from eifo_fetcher.pipeline import register_declared_sources
@@ -41,7 +43,13 @@ from eifo_fetcher.registry import (
     enabled_sources,
     source_overrides,
 )
-from eifo_fetcher.runner import enrich_all, fetch_images, repair_names, sync_all
+from eifo_fetcher.runner import (
+    enrich_all,
+    fetch_images,
+    index_seret,
+    repair_names,
+    sync_all,
+)
 from eifo_fetcher.runs import close_abandoned_runs
 from eifo_fetcher.sources.base import SourceInfo
 from eifo_fetcher.tmdb import TmdbClient
@@ -133,6 +141,47 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="perform the merges; without it the plan is only printed",
     )
+
+    seret = subcommands.add_parser(
+        "seret", help="build and inspect the Seret page index (Israeli ratings)"
+    )
+    seret_actions = seret.add_subparsers(dest="seret_command", required=True)
+    seret_index = seret_actions.add_parser(
+        "index",
+        help="crawl seret.co.il's sitemap so titles can be resolved to its pages",
+        description=(
+            "Seret has no working title search, so its scores are reachable only "
+            "through an index built from its sitemap. Every `enrich` run already "
+            "crawls a batch of it, so the index builds itself over about a month "
+            "of nightly runs and this command is not needed. It is here to have "
+            "the index sooner: `--limit 9000` reads all ~8,900 pages in one go, "
+            "about five hours at the configured pace. Progress is saved as it "
+            "goes, so a run that is interrupted loses nothing."
+        ),
+    )
+    seret_index.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="pages to read this run, overriding [seret] batch_size",
+    )
+    seret_index.add_argument(
+        "--rps",
+        type=float,
+        default=None,
+        metavar="RATE",
+        help=(
+            "requests per second, overriding [enrich.rate_limits] seret "
+            "(default 0.5 - one page every two seconds)"
+        ),
+    )
+    seret_index.add_argument(
+        "--force",
+        action="store_true",
+        help="re-read every page, however recently it was indexed",
+    )
+    seret_actions.add_parser("status", help="show what the index currently holds")
 
     sources = subcommands.add_parser("sources", help="inspect configured sources")
     sources.add_subparsers(dest="sources_command", required=True).add_parser(
@@ -265,6 +314,75 @@ def _cmd_enrich(args: argparse.Namespace, settings: Settings) -> int:
             skip=args.skip,
         )
     return EXIT_PARTIAL if tally.errors else EXIT_OK
+
+
+def _cmd_seret(args: argparse.Namespace, settings: Settings) -> int:
+    if args.seret_command == "status":
+        return _seret_status(settings)
+    return _seret_index(args, settings)
+
+
+def _seret_index(args: argparse.Namespace, settings: Settings) -> int:
+    rps = args.rps or settings.enrich.rate_limit_for(SERET_KEY, SERET_DEFAULT_RPS)
+    if rps is None or rps <= 0:
+        logger.error("the Seret rate must be greater than 0; see [enrich.rate_limits]")
+        return EXIT_FATAL
+
+    with single_flight(settings), _database(settings) as session_factory, HttpClient() as http:
+        result = index_seret(
+            session_factory,
+            settings,
+            http=http,
+            limit=args.limit,
+            rate_limit_rps=args.rps,
+            force=args.force,
+        )
+
+    _print_table(
+        ("metric", "count"),
+        [
+            ("pages listed by the sitemap", str(result.pages_listed)),
+            ("read this run", str(result.fetched)),
+            ("new", str(result.created)),
+            ("refreshed", str(result.updated)),
+            ("already fresh, skipped", str(result.skipped_fresh)),
+            ("carried no title", str(result.unreadable)),
+            ("failed", str(result.error_count)),
+            ("still to do", str(result.remaining)),
+        ],
+    )
+    if result.remaining:
+        # The batch is the whole point of the design, so say what to do about
+        # it rather than leaving a half-built index looking like a failure.
+        minutes = round(result.remaining / rps / 60)
+        print(
+            f"\n{result.remaining} pages still to read - run this again "
+            f"(about {minutes} more minutes at {rps:g}/s)."
+        )
+    return EXIT_PARTIAL if result.errors else EXIT_OK
+
+
+def _seret_status(settings: Settings) -> int:
+    with _database(settings) as session_factory, session_factory() as session:
+        counts = index_status(session)
+
+    if not counts["pages"]:
+        print("The Seret page index is empty. Build it with: eifo-fetch seret index")
+        return EXIT_OK
+
+    _print_table(
+        ("metric", "count"),
+        [
+            ("pages indexed", str(counts["pages"])),
+            ("  films", str(counts["movies"])),
+            ("  series", str(counts["series"])),
+            ("carrying an IMDb id", str(counts["with_imdb_id"])),
+            ("with an audience score", str(counts["with_viewer_score"])),
+            ("with a critic score", str(counts["with_critic_score"])),
+            ("carried no title", str(counts["unreadable"])),
+        ],
+    )
+    return EXIT_OK
 
 
 def _cmd_repair_names(args: argparse.Namespace, settings: Settings) -> int:
@@ -593,6 +711,7 @@ _COMMANDS = {
     "rematch": _cmd_rematch,
     "dedupe": _cmd_dedupe,
     "all": _cmd_all,
+    "seret": _cmd_seret,
     "sources": _cmd_sources,
     "review": _cmd_review,
     "daemon": _cmd_daemon,

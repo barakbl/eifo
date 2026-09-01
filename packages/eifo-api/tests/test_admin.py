@@ -404,13 +404,13 @@ class TestWhatTheScoreIsMadeOf:
         self, client: TestClient, admin: dict[str, str], catalog: Seeded
     ) -> None:
         # The seeded catalog scores two titles between three raters, one rating
-        # each: IMDb at 3.0, RT critics at 2.0, Seret viewers at 1.5 - so 6.5 of
+        # each: IMDb at 3.0, RT critics at 2.0, Seret viewers at 1.0 - so 6.0 of
         # weight, and each rater's share is its own part of it.
         mix = self.mix(client)
 
-        assert mix["imdb"]["share"] == pytest.approx(3.0 / 6.5 * 100)
-        assert mix["rt_critics"]["share"] == pytest.approx(2.0 / 6.5 * 100)
-        assert mix["seret_viewers"]["share"] == pytest.approx(1.5 / 6.5 * 100)
+        assert mix["imdb"]["share"] == pytest.approx(3.0 / 6.0 * 100)
+        assert mix["rt_critics"]["share"] == pytest.approx(2.0 / 6.0 * 100)
+        assert mix["seret_viewers"]["share"] == pytest.approx(1.0 / 6.0 * 100)
 
     def test_they_add_up_to_the_whole_score(
         self, client: TestClient, admin: dict[str, str], catalog: Seeded
@@ -445,6 +445,60 @@ class TestWhatTheScoreIsMadeOf:
 
         assert [row["provider"] for row in rows][:3] == ["imdb", "rt_critics", "seret_viewers"]
 
+    def test_a_rating_below_its_floor_counts_for_nothing_here_either(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """It contributed nothing to the aggregate, so it is owed no share.
+
+        Crediting it half - which is what damping alone would do - would make
+        this table disagree with the very scores it claims to describe.
+        """
+        with session_factory() as session:
+            session.add(
+                ExternalRating(
+                    title_id=catalog.foxtrot,
+                    provider=RatingProvider.SERET_VIEWERS,
+                    score_raw=9.1,
+                    score_normalized=91,
+                    vote_count=4,
+                )
+            )
+            session.commit()
+
+        mix = self.mix(client)
+
+        # The seeded catalog already gives seret_viewers one rating on Fauda,
+        # 120 votes, worth its full 1.0; the four-vote one adds nothing.
+        assert mix["seret_viewers"]["share"] == pytest.approx(1.0 / 6.0 * 100)
+
+    def test_the_floor_is_inclusive_here_too(
+        self,
+        client: TestClient,
+        admin: dict[str, str],
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """Eleven votes is above the floor, so it counts - halved, being thin."""
+        with session_factory() as session:
+            session.add(
+                ExternalRating(
+                    title_id=catalog.foxtrot,
+                    provider=RatingProvider.SERET_VIEWERS,
+                    score_raw=9.1,
+                    score_normalized=91,
+                    vote_count=11,
+                )
+            )
+            session.commit()
+
+        mix = self.mix(client)
+
+        assert mix["seret_viewers"]["share"] == pytest.approx(1.5 / 6.5 * 100)
+
     def test_a_thinly_voted_rating_counts_half_here_too(
         self,
         client: TestClient,
@@ -467,9 +521,9 @@ class TestWhatTheScoreIsMadeOf:
             )
             session.commit()
 
-        # TMDB weighs 1.0, halved to 0.5 for three votes, against the 6.5 that
+        # TMDB weighs 1.0, halved to 0.5 for three votes, against the 6.0 that
         # was already there.
-        assert self.mix(client)["tmdb"]["share"] == pytest.approx(0.5 / 7.0 * 100)
+        assert self.mix(client)["tmdb"]["share"] == pytest.approx(0.5 / 6.5 * 100)
 
     def test_a_rating_with_no_vote_count_is_not_a_thin_one(
         self,
@@ -492,7 +546,7 @@ class TestWhatTheScoreIsMadeOf:
             )
             session.commit()
 
-        assert self.mix(client)["tmdb"]["share"] == pytest.approx(1.0 / 7.5 * 100)
+        assert self.mix(client)["tmdb"]["share"] == pytest.approx(1.0 / 7.0 * 100)
 
     def test_a_rating_on_a_title_nothing_could_score_is_still_a_rating(
         self,

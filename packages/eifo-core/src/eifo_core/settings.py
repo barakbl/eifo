@@ -58,7 +58,7 @@ class ScoreWeights(BaseModel):
     rt_audience: float = 1.0
     tmdb: float = 1.0
     seret_critics: float = 2.0
-    seret_viewers: float = 1.5
+    seret_viewers: float = 1.0
     edb: float = 0.5
 
 
@@ -68,6 +68,18 @@ class ScoresConfig(BaseModel):
     low_vote_threshold: int = 50
     #: An aggregate of a single provider is misleading; require at least this many.
     min_providers: int = 2
+    #: Votes a provider needs before its rating counts towards an aggregate at
+    #: all, by provider. At or below the number here the rating is still stored
+    #: and still shown - with its vote count and a link, so a reader can judge
+    #: it - but contributes nothing to the arithmetic.
+    #:
+    #: Only Seret's audience score by default. It is the thinnest-voted source
+    #: here by a wide margin: a film can carry a 9.1 from four people, which
+    #: halving the weight does not make harmless. Everything else keeps to the
+    #: damping above. Setting this section in the config file replaces the
+    #: default outright rather than merging, so name every provider you want a
+    #: floor for.
+    min_votes: dict[str, int] = Field(default_factory=lambda: {"seret_viewers": 10})
 
 
 class EnrichConfig(BaseModel):
@@ -92,6 +104,64 @@ class EnrichConfig(BaseModel):
     disabled: list[str] = Field(default_factory=list)
     #: Providers switched on that are otherwise off by default.
     enabled: list[str] = Field(default_factory=list)
+
+    #: Requests per second per scraped provider, by enricher key.
+    #:
+    #: The scraped providers read somebody's website rather than an API built
+    #: to be called, and how hard to lean on each is the operator's decision
+    #: rather than the plugin's. Absent means the provider's own default.
+    #:
+    #: This replaces a ``ctx.apply_rate_limit`` call inside each enricher,
+    #: which resolved to ``[sources.enrich]`` - a section that exists nowhere,
+    #: so every enricher's rate limit was silently a no-op and `rt` scraped at
+    #: the client-wide default with no documented way to change it.
+    rate_limits: dict[str, float] = Field(default_factory=dict)
+
+    def rate_limit_for(self, key: str, default: float | None = None) -> float | None:
+        """The pace configured for one enricher, or its own default."""
+        return self.rate_limits.get(key, default)
+
+
+class SeretConfig(BaseModel):
+    """Building the Seret index, and how hard seret.co.il is asked for it.
+
+    Its own section rather than a ``[sources.*]`` entry, because Seret is a
+    ratings provider rather than a catalog and the crawl that builds its index
+    is a separate job from the nightly enrich that reads it
+    (docs.internal/06-enrichment.md).
+    """
+
+    #: Pages read per crawl.
+    #:
+    #: Sized to disappear into a nightly run rather than to finish quickly: 300
+    #: pages at the default half-a-second pace is about ten minutes. Seret
+    #: publishes ~8,900 title pages, so a first index fills itself in over a
+    #: month of ordinary nightly runs, and every run picks up where the last
+    #: one stopped. Somebody who wants it now runs ``eifo-fetch seret index
+    #: --limit 9000`` and waits five hours.
+    #:
+    #: The pace itself is not here - it is ``[enrich.rate_limits] seret``,
+    #: beside every other scraped provider's.
+    batch_size: int = 300
+    #: How old a row may get before the crawl reads its page again. Months,
+    #: not days: a score that has been settling for years moves slowly, and the
+    #: back catalogue does not move at all.
+    refresh_days: int = 120
+    #: Ask Seret's autocomplete about a title the index has never heard of.
+    #:
+    #: It answers for recent releases only - it knows this year's films and not
+    #: 2004's - which is exactly the gap between one index crawl and the next,
+    #: and it costs at most two requests for a title that would otherwise get
+    #: no Israeli score at all. One request per unknown title, so it is worth
+    #: switching off for a first run over a large unindexed catalog.
+    live_fallback: bool = True
+
+    @field_validator("batch_size", "refresh_days")
+    @classmethod
+    def _at_least_one(cls, value: int) -> int:
+        if value < 1:
+            raise ValueError("seret batch_size and refresh_days must be at least 1")
+        return value
 
 
 class FetchConfig(BaseModel):
@@ -227,6 +297,7 @@ class Settings(BaseSettings):
     fetch: FetchConfig = Field(default_factory=FetchConfig)
     tmdb: TmdbConfig = Field(default_factory=TmdbConfig)
     enrich: EnrichConfig = Field(default_factory=EnrichConfig)
+    seret: SeretConfig = Field(default_factory=SeretConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
 
     @classmethod

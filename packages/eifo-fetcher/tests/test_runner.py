@@ -14,11 +14,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_core.db import create_engine_from_settings
 from eifo_core.enums import FetchPhase, FetchStatus, SourceKind, TitleKind
-from eifo_core.models import Base, FetchRun, Source
+from eifo_core.models import Base, FetchRun, Source, Title
 from eifo_core.settings import Settings, SourceConfig
 from eifo_core.types import utcnow
 from eifo_fetcher.daemon import _parse_time, run_backfills, run_daemon, run_nightly, run_once
 from eifo_fetcher.enrich import EnrichResultTally
+from eifo_fetcher.enrichers.seret_index import IndexResult
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.lock import single_flight
 from eifo_fetcher.runner import enrich_all, sync_all
@@ -664,6 +665,81 @@ class TestTheSchedule:
         assert job["max_instances"] == 1
 
 
+class TestTheSeretIndexInsideEnrich:
+    """The sitemap crawl is a bulk pass beside the IMDb one, not a side door.
+
+    It runs from ``enrich_all`` for the same reasons the IMDb pass does -
+    catalog-wide rather than per title, its own ``fetch_runs`` row, skippable
+    by name - and is bounded by ``[seret] batch_size`` so a first index fills
+    itself in over a month of nightly runs rather than holding somebody's site
+    for five hours the night an operator upgrades.
+    """
+
+    def _crawls(
+        self,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
+        monkeypatch: pytest.MonkeyPatch,
+        **kwargs: Any,
+    ) -> bool:
+        """Whether the run reached for the crawl, without letting it fetch."""
+        called: list[bool] = []
+        monkeypatch.setattr(
+            "eifo_fetcher.runner.index_seret",
+            lambda *_args, **_kwargs: called.append(True) or IndexResult(),
+        )
+        enrich_all(session_factory, settings, http=http, limit=0, skip_imdb=True, **kwargs)
+        return bool(called)
+
+    def _a_title(self, session_factory: sessionmaker[Session]) -> None:
+        with session_factory() as session:
+            session.add(Title(type=TitleKind.MOVIE, name_he="פוקסטרוט"))
+            session.commit()
+
+    def test_a_nightly_enrich_crawls_a_batch(
+        self, session_factory, settings: Settings, http: HttpClient, monkeypatch
+    ) -> None:
+        self._a_title(session_factory)
+
+        assert self._crawls(session_factory, settings, http, monkeypatch)
+
+    def test_it_can_be_skipped_by_name_like_the_imdb_pass(
+        self, session_factory, settings: Settings, http: HttpClient, monkeypatch
+    ) -> None:
+        self._a_title(session_factory)
+
+        assert not self._crawls(session_factory, settings, http, monkeypatch, skip=["seret-index"])
+
+    def test_skipping_the_enricher_skips_the_crawl_that_feeds_it(
+        self, session_factory, settings: Settings, http: HttpClient, monkeypatch
+    ) -> None:
+        """Indexing pages nothing will read is somebody's bandwidth for nothing."""
+        self._a_title(session_factory)
+
+        assert not self._crawls(session_factory, settings, http, monkeypatch, skip=["seret"])
+
+    def test_an_empty_catalog_is_not_crawled_for(
+        self, session_factory, settings: Settings, http: HttpClient, monkeypatch
+    ) -> None:
+        """The same guard the IMDb pass makes when no title carries an imdb_id.
+
+        A fresh install must not spend 8,900 requests on somebody's site to
+        enrich a catalog that does not exist yet.
+        """
+        assert not self._crawls(session_factory, settings, http, monkeypatch)
+
+    def test_skipping_it_by_name_is_not_reported_as_a_typo(
+        self, session_factory, settings: Settings, http: HttpClient, monkeypatch, caplog
+    ) -> None:
+        self._a_title(session_factory)
+
+        with caplog.at_level(logging.WARNING, logger="eifo.fetch.runner"):
+            self._crawls(session_factory, settings, http, monkeypatch, skip=["seret-index"])
+
+        assert "nothing to skip" not in caplog.text
+
+
 class TestSkippingAnEnricherForOneRun:
     """One enricher can be an order of magnitude slower than the rest.
 
@@ -690,7 +766,7 @@ class TestSkippingAnEnricherForOneRun:
         with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
             self._run(session_factory, settings, http, skip_imdb=True)
 
-        assert "enriching with: tmdb, rt" in caplog.text
+        assert "enriching with: tmdb, seret, rt" in caplog.text
 
     def test_one_can_be_left_out(
         self, session_factory, settings: Settings, http: HttpClient, caplog
@@ -698,14 +774,16 @@ class TestSkippingAnEnricherForOneRun:
         with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
             self._run(session_factory, settings, http, skip_imdb=True, skip=["rt"])
 
-        assert "enriching with: tmdb" in caplog.text
+        assert "enriching with: tmdb, seret" in caplog.text
         assert "rt" not in caplog.text.split("enriching with:")[1].split("\n")[0]
 
     def test_the_case_it_is_typed_in_does_not_matter(
         self, session_factory, settings: Settings, http: HttpClient, caplog
     ) -> None:
         with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
-            self._run(session_factory, settings, http, skip_imdb=True, skip=["RT", " tmdb "])
+            self._run(
+                session_factory, settings, http, skip_imdb=True, skip=["RT", " tmdb ", "Seret"]
+            )
 
         assert "enriching with: nothing" in caplog.text
 
@@ -732,4 +810,4 @@ class TestSkippingAnEnricherForOneRun:
         with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
             self._run(session_factory, settings, http, skip_imdb=True, skip=[])
 
-        assert "enriching with: tmdb, rt" in caplog.text
+        assert "enriching with: tmdb, seret, rt" in caplog.text

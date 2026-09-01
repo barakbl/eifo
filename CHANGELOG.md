@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/barakbl/eifo/compare/v0.3.0...v0.4.0) (2026-09-01)
+
+
+### Features
+
+* Israeli ratings, by indexing Seret's pages instead of searching them ([14005ae](https://github.com/barakbl/eifo/commit/14005ae0e4b98db85f78ab2a9fe9a954764adfa9))
+* Israeli ratings, by indexing Seret's pages instead of searching them ([2dd5306](https://github.com/barakbl/eifo/commit/2dd53065e36a8cae601a7fb6614f90e5e690948c))
+
 ## [0.3.0](https://github.com/barakbl/eifo/compare/v0.2.0...v0.3.0) (2026-08-31)
 
 

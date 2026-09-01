@@ -124,6 +124,7 @@ _eifo-fetch() {
     'repair-names:re-ask TMDB for names stored in the wrong script'
     'rematch:give titles that never matched TMDB another, smarter try'
     'dedupe:merge titles the catalog holds twice'
+    'rescore:recompute every aggregate from the ratings already stored'
     'seret:build and inspect the Seret page index (Israeli ratings)'
     'sources:inspect configured sources'
     'review:work through unresolved matches'

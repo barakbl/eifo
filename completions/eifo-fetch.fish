@@ -68,6 +68,7 @@ complete -c eifo-fetch -n '__eifo_at ""' -a all -d 'sync, enrich, then fetch art
 complete -c eifo-fetch -n '__eifo_at ""' -a repair-names -d 're-ask TMDB for names stored in the wrong script'
 complete -c eifo-fetch -n '__eifo_at ""' -a rematch -d 'give titles that never matched TMDB another, smarter try'
 complete -c eifo-fetch -n '__eifo_at ""' -a dedupe -d 'merge titles the catalog holds twice'
+complete -c eifo-fetch -n '__eifo_at ""' -a rescore -d 'recompute every aggregate from the ratings already stored'
 complete -c eifo-fetch -n '__eifo_at ""' -a seret -d 'build and inspect the Seret page index (Israeli ratings)'
 complete -c eifo-fetch -n '__eifo_at ""' -a sources -d 'inspect configured sources'
 complete -c eifo-fetch -n '__eifo_at ""' -a review -d 'work through unresolved matches'

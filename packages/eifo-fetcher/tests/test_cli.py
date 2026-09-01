@@ -20,12 +20,22 @@ from eifo_core.enums import (
     FetchStatus,
     MatchDecision,
     OfferType,
+    RatingProvider,
     SourceKind,
     TitleKind,
 )
 from eifo_core.fts import TITLES, missing_triggers
 from eifo_core.migrate import alembic_config, upgrade
-from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
+from eifo_core.models import (
+    AggregateScore,
+    Availability,
+    EnrichAttempt,
+    ExternalRating,
+    FetchRun,
+    MatchReview,
+    Source,
+    Title,
+)
 from eifo_core.settings import Settings, get_settings
 from eifo_fetcher import cli
 from eifo_fetcher.cli import EXIT_FATAL, EXIT_OK, EXIT_PARTIAL, build_parser, main
@@ -153,6 +163,107 @@ class TestTheNightlyCommand:
 
         assert main(["all"]) == EXIT_PARTIAL
         assert main(["daemon", "--once"]) == EXIT_PARTIAL
+
+
+class TestRescore:
+    """Applying a scoring change without pretending it is an enrichment.
+
+    Changing a weight changes no rating - only what the sum makes of them - so
+    the alternative, `enrich --force`, would re-ask every provider about every
+    title for the same answers and record a fruitless attempt against each one
+    the change was not even about.
+    """
+
+    def _rated(self, factory: sessionmaker[Session]) -> None:
+        with factory() as session:
+            title = Title(type=TitleKind.MOVIE, name_he="פוקסטרוט", year=2017)
+            session.add(title)
+            session.flush()
+            session.add_all(
+                [
+                    ExternalRating(
+                        title_id=title.id,
+                        provider=RatingProvider.IMDB,
+                        score_raw=7.1,
+                        score_normalized=71,
+                        vote_count=12004,
+                    ),
+                    ExternalRating(
+                        title_id=title.id,
+                        provider=RatingProvider.SERET_CRITICS,
+                        score_raw=6.2,
+                        score_normalized=62,
+                    ),
+                    # Four voters: stored and shown, but no part of the sum.
+                    ExternalRating(
+                        title_id=title.id,
+                        provider=RatingProvider.SERET_VIEWERS,
+                        score_raw=9.1,
+                        score_normalized=91,
+                        vote_count=4,
+                    ),
+                ]
+            )
+            session.commit()
+
+    def test_it_builds_the_aggregate_from_stored_ratings(
+        self, factory: sessionmaker[Session]
+    ) -> None:
+        self._rated(factory)
+
+        assert main(["rescore"]) == EXIT_OK
+
+        with factory() as session:
+            aggregate = session.scalars(select(AggregateScore)).one()
+        # (62*2.0 + 71*3.0) / 5.0 = 67.4 -> 67, the 91 nowhere in it.
+        assert aggregate.score == 67
+
+    def test_it_shows_its_working(self, factory: sessionmaker[Session]) -> None:
+        self._rated(factory)
+
+        main(["rescore"])
+
+        with factory() as session:
+            aggregate = session.scalars(select(AggregateScore)).one()
+        assert aggregate.components["seret_viewers"]["excluded"] is True
+        assert aggregate.components["seret_viewers"]["weight"] == 0.0
+
+    def test_a_weight_change_reaches_titles_already_scored(
+        self, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The whole point: no enrich run, no network, no attempt recorded."""
+        self._rated(factory)
+        main(["rescore"])
+
+        monkeypatch.setenv("EIFO_SCORES__WEIGHTS__SERET_CRITICS", "6.0")
+        get_settings.cache_clear()
+        assert main(["rescore"]) == EXIT_OK
+
+        with factory() as session:
+            aggregate = session.scalars(select(AggregateScore)).one()
+        # (62*6.0 + 71*3.0) / 9.0 = 65.0
+        assert aggregate.score == 65
+
+    def test_it_records_no_enrichment_attempt(self, factory: sessionmaker[Session]) -> None:
+        """It did not attempt anything - it did arithmetic over what was there."""
+        self._rated(factory)
+
+        main(["rescore"])
+
+        with factory() as session:
+            assert session.scalars(select(EnrichAttempt)).all() == []
+
+    def test_an_unscored_catalog_is_not_an_error(self, factory: sessionmaker[Session]) -> None:
+        assert main(["rescore"]) == EXIT_OK
+
+    def test_it_says_how_many_it_did(
+        self, factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._rated(factory)
+
+        main(["rescore"])
+
+        assert "rescored 1 title(s)" in capsys.readouterr().out
 
 
 class TestCommandsRequireAMigratedDatabase:

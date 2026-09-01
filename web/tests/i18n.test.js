@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
@@ -51,6 +52,28 @@ describe("translate", () => {
 
   it("falls back to the default language for an unknown language", () => {
     assert.equal(translate("fr", "title.watch"), translate("he", "title.watch"));
+  });
+
+  /* Read from the source text rather than the loaded object, because that is
+     the only place a duplicate still exists: a repeated key in an object
+     literal silently collapses to the last one, so the parity check above
+     cannot see it and the earlier string is simply dead. That is how a second
+     "title.votes" got added beside the one already there. */
+  it("defines no key twice in the same language", () => {
+    const source = readFileSync(new URL("../js/i18n.js", import.meta.url), "utf8");
+    const blocks = source.split(/^  (?:he|en): \{$/m).slice(1);
+
+    assert.equal(blocks.length, LANGUAGES.length, "expected one block per language");
+
+    for (const [index, block] of blocks.entries()) {
+      const body = block.split(/^  \},?$/m)[0];
+      const keys = [...body.matchAll(/^\s*"([^"]+)":/gm)].map((match) => match[1]);
+      const seen = new Set();
+      const duplicated = keys.filter((key) => (seen.has(key) ? true : (seen.add(key), false)));
+
+      assert.deepEqual(duplicated, [], `${LANGUAGES[index]} defines these twice`);
+      assert.ok(keys.length > 100, "the block parser found suspiciously few keys");
+    }
   });
 
   it("covers every key in both languages", () => {

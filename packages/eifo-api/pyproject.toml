@@ -1,6 +1,6 @@
 [project]
 name = "eifo-api"
-version = "0.5.0"  # x-release-please-version
+version = "0.5.1"  # x-release-please-version
 description = "Eifo REST API"
 requires-python = ">=3.12"
 license = "MIT"

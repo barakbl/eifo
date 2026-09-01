@@ -1,23 +1,30 @@
 """Israeli Film Archive (Jerusalem Cinematheque) - jfc.org.il.
 
 Israel's national film archive, streaming its own digitised collection: about
-940 films, roughly half of them free to watch and the rest sold per title. A
+970 films, roughly half of them free to watch and the rest sold per title. A
 :data:`SourceKind.RENT_BUY` source, then, but one whose offers are as often
 :data:`OfferType.FREE` as :data:`OfferType.RENT`.
 
 Where the catalog comes from:
 
-* **The sitemap lists the films.** The archive has no page that lists its whole
+* **The sitemaps list the films.** The archive has no page that lists its whole
   collection - the browse UI pages out at ten screens and its "load more" runs
-  through ``admin-ajax.php``, which ``robots.txt`` disallows - but the WordPress
-  sitemap at :data:`SITEMAP_URL` carries every film page, and robots welcomes
-  it.
+  through ``admin-ajax.php``, which ``robots.txt`` disallows - but its WordPress
+  sitemaps carry every film page, and robots welcomes them.
+
+  Sitemaps, plural, and that is the point: the archive files its Israeli
+  collection under ``/movie/`` and the international films it licenses under
+  ``/general_film/``, each with a sitemap of its own. This read only the first
+  for a long time, and so was missing Tarkovsky, Kurosawa and twenty others -
+  invisible from the outside, because 947 films still looks like all of them.
+  The children are therefore discovered from :data:`SITEMAP_INDEX_URL` rather
+  than named, and :data:`FILM_PATHS` says which of them hold films.
 * **Each film page states its own terms.** A paid film renders a price block
   ("מחיר : ₪15"); a free one renders none and offers "לצפייה ישירה" instead.
   That distinction is the whole point of this plugin: an archive film that
   costs nothing must reach the catalog as free to watch, not as a rental.
 
-The cost is what it is: **one request per film**, ~940 per sync, because the
+The cost is what it is: **one request per film**, ~970 per sync, because the
 price and the year live on the film's own page and nowhere cheaper. Everything
 else here exists to keep that sweep honest and gentle - the per-source rate
 limit applies, and a page that fails is counted rather than retried.
@@ -52,8 +59,20 @@ logger = logging.getLogger("eifo.fetch.source.israel_film_archive")
 SOURCE_KEY = "israel_film_archive"
 HOST = "jfc.org.il"
 BASE_URL = f"https://{HOST}"
-SITEMAP_URL = f"{BASE_URL}/movie-sitemap.xml"
+SITEMAP_INDEX_URL = f"{BASE_URL}/sitemap_index.xml"
 CATALOG_URL = f"{BASE_URL}/movie/"
+
+#: The paths the archive files a film under, and the sitemap that lists each.
+#:
+#: Two, because the archive keeps its international shelf apart from its Israeli
+#: one: ``/movie/`` holds the national collection and ``/general_film/`` the
+#: foreign titles it licenses - Tarkovsky, Kurosawa, and twenty others. Reading
+#: only the first quietly lost every one of them, which is not visible from the
+#: outside because what remains is still 947 films and still looks complete.
+#:
+#: Both are ordinary WordPress post types with identical page markup, so this is
+#: only about which URLs to ask for.
+FILM_PATHS = ("/movie/", "/general_film/")
 
 #: The archive sells in shekels; the price block prints the symbol, not a code.
 PRICE_CURRENCY = "ILS"
@@ -105,11 +124,11 @@ class IsraelFilmArchivePlugin(SourcePlugin):
     def fetch(self, ctx: FetchContext) -> Iterator[RawItem]:
         ctx.apply_rate_limit(HOST)
         robots = RobotsPolicy(user_agent=USER_AGENT)
-        robots.require_allowed(SITEMAP_URL)
+        robots.require_allowed(SITEMAP_INDEX_URL)
         robots.require_allowed(CATALOG_URL)
 
-        urls = parse_sitemap(ctx.http.get(SITEMAP_URL).text)
-        logger.info("archive sitemap lists %d film pages", len(urls))
+        urls = self._film_urls(ctx, robots)
+        logger.info("archive sitemaps list %d film pages", len(urls))
 
         unreadable = 0
         for url in urls:
@@ -126,6 +145,43 @@ class IsraelFilmArchivePlugin(SourcePlugin):
             # must not hide a day when every page broke either.
             ctx.record_error(f"{unreadable} film pages could not be read; skipped")
 
+    def _film_urls(self, ctx: FetchContext, robots: RobotsPolicy) -> list[str]:
+        """Every film page, across each sitemap the index points at.
+
+        The children are discovered rather than named: which post types the
+        archive files films under is its business to change, and hard-coding
+        one of them is how the international collection went missing.
+
+        Raises:
+            ArchiveCatalogError: if no sitemap yields a film page at all, which
+                means the index moved or the response was not it.
+        """
+        index = ctx.http.get(SITEMAP_INDEX_URL).text
+        found: list[str] = []
+        seen: set[str] = set()
+
+        for child in film_sitemaps(index):
+            if not robots.allows(child):
+                logger.info("skipping %s: robots.txt disallows it", child)
+                continue
+            try:
+                urls = parse_sitemap(ctx.http.get(child).text)
+            except Exception as exc:
+                ctx.record_error(f"archive sitemap {child} could not be read", exc=exc)
+                continue
+            logger.info("%s lists %d film pages", child, len(urls))
+            for url in urls:
+                if url not in seen:
+                    seen.add(url)
+                    found.append(url)
+
+        if not found:
+            raise ArchiveCatalogError(
+                f"no film pages under {SITEMAP_INDEX_URL}; "
+                f"the sitemaps moved or the response was not the index"
+            )
+        return found
+
     def _film(self, ctx: FetchContext, url: str) -> ArchiveFilm | None:
         """One film page, or None if it could not be read or is not streamable."""
         try:
@@ -135,27 +191,44 @@ class IsraelFilmArchivePlugin(SourcePlugin):
             return None
 
 
+def film_sitemaps(index_xml: str) -> list[str]:
+    """The children of the sitemap index that list films.
+
+    The archive publishes a sitemap per post type - pages, news, products,
+    collections - and only some of them are films. Selected by the path each
+    one is named for rather than by a list of filenames, so a third film post
+    type arrives on its own.
+    """
+    return [
+        url
+        for url in _SITEMAP_LOC.findall(index_xml)
+        if any(f"/{path.strip('/')}-sitemap" in url for path in FILM_PATHS)
+    ]
+
+
 def parse_sitemap(xml: str) -> list[str]:
-    """Film page URLs from the archive's sitemap, index entry excluded.
+    """Film page URLs from one of the archive's sitemaps.
+
+    The bare archive page for each post type - ``/movie/``, ``/general_film/`` -
+    is listed beside the films and is not one.
 
     Raises:
         ArchiveCatalogError: if the document lists no film pages at all, which
-            means the sitemap moved or the response was not the sitemap.
+            means the sitemap moved or the response was not a sitemap.
     """
-    urls = [
-        url
-        for url in _SITEMAP_LOC.findall(xml)
-        if _is_film_url(url) and url.rstrip("/") != f"{BASE_URL}/movie"
-    ]
+    urls = [url for url in _SITEMAP_LOC.findall(xml) if _is_film_url(url)]
     if not urls:
-        raise ArchiveCatalogError(
-            f"no film pages in {SITEMAP_URL}; the sitemap moved or the response was not it"
-        )
+        raise ArchiveCatalogError("no film pages in the document; it was not a film sitemap")
     return urls
 
 
 def _is_film_url(url: str) -> bool:
-    return "/movie/" in _canonical_host(url)
+    """Whether this is a film's own page, rather than a listing of them."""
+    canonical = _canonical_host(url)
+    return any(
+        path in canonical and canonical.rstrip("/") != f"{BASE_URL}{path.rstrip('/')}"
+        for path in FILM_PATHS
+    )
 
 
 def _canonical_host(url: str) -> str:

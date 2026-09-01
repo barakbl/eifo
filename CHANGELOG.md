@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/barakbl/eifo/compare/v0.4.0...v0.5.0) (2026-09-01)
+
+
+### Features
+
+* a rescore command, and a working that says why a weight is nought ([f4dcdab](https://github.com/barakbl/eifo/commit/f4dcdab12410c3f55dab89d29bc8b88d704020ff))
+* a rescore command, and a working that says why a weight is nought ([3bf60cb](https://github.com/barakbl/eifo/commit/3bf60cb8d177b0ced0555579fa80454676f6e1b1))
+
 ## [0.4.0](https://github.com/barakbl/eifo/compare/v0.3.0...v0.4.0) (2026-09-01)
 
 

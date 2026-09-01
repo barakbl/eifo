@@ -12,9 +12,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_core.enums import FetchPhase, FetchStatus
+from eifo_core.models import Title
 from eifo_core.settings import Settings
 from eifo_core.types import utcnow
 from eifo_fetcher.enrich import (
@@ -25,6 +27,12 @@ from eifo_fetcher.enrich import (
 )
 from eifo_fetcher.enrichers import discover_enrichers
 from eifo_fetcher.enrichers.imdb import ImdbDatasetLoader
+from eifo_fetcher.enrichers.seret_index import (
+    IndexResult,
+    SeretIndexer,
+    SeretLookup,
+    wake_titles_newly_covered,
+)
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.images import ImageFetcher, ImageResult
 from eifo_fetcher.pipeline import (
@@ -52,6 +60,14 @@ IMDB_RUN_KEY = "imdb"
 
 #: The enricher that knows what a title is called in English.
 TMDB_ENRICHER_KEY = "tmdb"
+
+#: Source key the Seret index crawl records itself under. Like the IMDb pass it
+#: is not a catalog, but it is a long job that can fail on its own and so needs
+#: a row of its own in ``fetch_runs``.
+SERET_INDEX_RUN_KEY = "seret-index"
+
+#: The enricher that reads what the crawl writes.
+SERET_ENRICHER_KEY = "seret"
 
 logger = logging.getLogger("eifo.fetch.runner")
 
@@ -220,18 +236,31 @@ def enrich_all(
             different job from a nightly refresh.
     """
     skipped = {key.strip().casefold() for key in (skip or ()) if key.strip()}
-    enrichers = [e for e in discover_enrichers(settings) if e.key not in skipped]
     skip_imdb = skip_imdb or IMDB_RUN_KEY in skipped
 
-    unknown = sorted(skipped - {e.key for e in discover_enrichers(settings)} - {IMDB_RUN_KEY})
-    if unknown:
-        # Said out loud: a typo that silently skips nothing would look like the
-        # flag not working, on a run that takes hours.
-        logger.warning("nothing to skip called: %s", ", ".join(unknown))
-
-    logger.info("enriching with: %s", ", ".join(e.key for e in enrichers) or "nothing")
+    # Before the per-title pass, so pages read tonight are scored tonight
+    # rather than waiting for tomorrow's run. Bounded by [seret] batch_size,
+    # which is sized to disappear into a nightly run.
+    if _seret_is_on(session_factory, settings, skipped):
+        index_seret(session_factory, settings, http=http)
 
     with session_factory() as session:
+        # Loaded here, where there is a session, and handed to the enricher:
+        # enrichers are pure readers and have no database access of their own.
+        # One query for the whole run rather than one per title per name.
+        lookup = SeretLookup.load(session)
+        available = discover_enrichers(settings, seret_lookup=lookup)
+        enrichers = [e for e in available if e.key not in skipped]
+
+        unknown = sorted(skipped - {e.key for e in available} - {IMDB_RUN_KEY, SERET_INDEX_RUN_KEY})
+        if unknown:
+            # Said out loud: a typo that silently skips nothing would look like
+            # the flag not working, on a run that takes hours.
+            logger.warning("nothing to skip called: %s", ", ".join(unknown))
+
+        logger.info("enriching with: %s", ", ".join(e.key for e in enrichers) or "nothing")
+        logger.info("seret page index holds %d titles", len(lookup))
+
         ctx = FetchContext(source_key="enrich", http=http, settings=settings)
         tally = enrich_titles(session, enrichers, ctx, settings, force=force, limit=limit)
 
@@ -281,6 +310,111 @@ def enrich_all(
         tally.aggregates_computed,
     )
     return tally
+
+
+def _seret_is_on(
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    skipped: set[str],
+) -> bool:
+    """Whether tonight's enrich should crawl part of Seret's sitemap.
+
+    Three ways it should not, and all three are about not spending somebody
+    else's bandwidth for nothing: the index is skipped by name, the enricher
+    that reads it is off or skipped, or there is no catalog for it to serve
+    yet. The last is the same guard the IMDb pass makes when no title carries
+    an ``imdb_id`` - a fresh install should not crawl 8,900 pages to enrich
+    nothing.
+
+    ``eifo-fetch seret index`` is unconditional: somebody typing that has said
+    what they want, including on an empty database.
+    """
+    if SERET_INDEX_RUN_KEY in skipped or SERET_ENRICHER_KEY in skipped:
+        return False
+    if not any(e.key == SERET_ENRICHER_KEY for e in discover_enrichers(settings)):
+        return False
+
+    with session_factory() as session:
+        if session.scalar(select(Title.id).limit(1)) is None:
+            logger.info("no titles in the catalog yet; not crawling Seret's sitemap")
+            return False
+    return True
+
+
+def index_seret(
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    *,
+    http: HttpClient,
+    limit: int | None = None,
+    rate_limit_rps: float | None = None,
+    force: bool = False,
+) -> IndexResult:
+    """Crawl seret.co.il's sitemap and refresh the local page index.
+
+    A bulk pass beside the IMDb one, and run from the same place: catalog-wide
+    rather than per title, owning its session, writing directly, and carrying
+    its own row in ``fetch_runs`` so a crawl that fails leaves something behind
+    to look at.
+
+    ``[seret] batch_size`` bounds it to about ten minutes, so a first index
+    fills itself in over a month of nightly runs instead of holding the site
+    for five hours the night somebody upgrades. ``eifo-fetch seret index
+    --limit 9000`` is the same pass, told not to hold back.
+    """
+    with session_factory() as session:
+        run = open_run(session, phase=FetchPhase.ENRICH, source_key=SERET_INDEX_RUN_KEY)
+        ctx = FetchContext(source_key=SERET_INDEX_RUN_KEY, http=http, settings=settings)
+        with capture_log() as captured:
+            try:
+                result = SeretIndexer(ctx, rate_limit_rps=rate_limit_rps).run(
+                    session, limit=limit, force=force
+                )
+            except Exception as exc:
+                # Reported, not raised: this runs inside the nightly enrich, and
+                # Seret being down is not a reason to lose the ratings every
+                # other provider was about to supply.
+                logger.exception("seret index crawl failed")
+                session.rollback()
+                failed = IndexResult(errors=[f"fatal: {type(exc).__name__}: {exc}"], error_count=1)
+                close_run(
+                    session,
+                    run,
+                    status=FetchStatus.FAILED,
+                    stats=failed.as_stats(),
+                    log=captured.text(),
+                )
+                return failed
+
+            # A title waiting out a month's backoff for a page this crawl has
+            # just read should not go on waiting for it. Moves due dates only;
+            # the next ordinary enrich does the scoring.
+            result.woken = wake_titles_newly_covered(session, result.newly_scorable)
+            session.commit()
+
+        close_run(
+            session,
+            run,
+            # Errors on individual pages are ordinary over a crawl this wide -
+            # withdrawn ids, the odd timeout - and are counted in the stats
+            # rather than failing the run. A crawl that could not read the
+            # sitemap at all returned above and never reaches here.
+            status=FetchStatus.OK,
+            stats=result.as_stats(),
+            log=captured.text(),
+        )
+
+    if result.woken:
+        logger.info(
+            "seret: %d title(s) that had been parked will be scored on the next enrich",
+            result.woken,
+        )
+    if result.remaining:
+        # Said every time, because a bounded crawl looks identical to a stalled
+        # one from the outside: this is the line that says it is still working
+        # through the catalogue rather than stuck.
+        logger.info("seret index: %d pages still to read on later runs", result.remaining)
+    return result
 
 
 def repair_names(

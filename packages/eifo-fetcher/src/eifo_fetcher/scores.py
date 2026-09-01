@@ -1,12 +1,19 @@
 """Normalisation and score aggregation.
 
-Every provider is normalised to 0-100, then combined as a weighted mean. Two
+Every provider is normalised to 0-100, then combined as a weighted mean. Three
 rules keep the result honest:
 
 * **At least two providers.** An "aggregate" of a single number is just that
   number wearing a disguise, so it stays null until a second opinion arrives.
-* **Thin votes count for less.** A rating backed by a handful of votes has its
-  weight halved, so a 10/10-from-three-people cannot outrank a well-supported 8.
+* **Thin votes count for less.** A rating backed by fewer than
+  ``low_vote_threshold`` votes has its weight halved, so a 10/10-from-three-
+  people cannot outrank a well-supported 8.
+* **Very thin votes do not count at all.** Below ``[scores.min_votes]`` a
+  rating is excluded from the arithmetic outright. It is still stored and still
+  shown, with its vote count and a link to where it came from, because it is
+  true and a reader can weigh it themselves - it just stops moving a number
+  that is meant to summarise a consensus. Seret's audience score is the one
+  provider this is set for by default.
 """
 
 from __future__ import annotations
@@ -63,6 +70,10 @@ class Component:
     weight: float
     vote_count: int | None
     damped: bool
+    #: Left out of the arithmetic for want of votes. Carried in the working
+    #: rather than dropped, so "why is this score not in the total" has an
+    #: answer on the page instead of only in this file.
+    excluded: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -70,6 +81,7 @@ class Component:
             "weight": round(self.weight, 3),
             "vote_count": self.vote_count,
             "damped": self.damped,
+            "excluded": self.excluded,
         }
 
 
@@ -109,6 +121,20 @@ def aggregate(ratings: list[RatingInput], config: ScoresConfig) -> Aggregate:
 
 def _component(rating: RatingInput, config: ScoresConfig) -> Component:
     weight = getattr(config.weights, rating.provider.value, 0.0)
+
+    if _too_few_votes(rating, config):
+        # Zero weight rather than a separate code path: _weighted_mean already
+        # counts only components carrying weight, so this drops out of both the
+        # global and the Israeli aggregate without either learning a new rule.
+        return Component(
+            provider=rating.provider,
+            normalized=rating.score_normalized,
+            weight=0.0,
+            vote_count=rating.vote_count,
+            damped=False,
+            excluded=True,
+        )
+
     damped = rating.vote_count is not None and rating.vote_count < config.low_vote_threshold
     if damped:
         weight /= 2
@@ -119,6 +145,19 @@ def _component(rating: RatingInput, config: ScoresConfig) -> Component:
         vote_count=rating.vote_count,
         damped=damped,
     )
+
+
+def _too_few_votes(rating: RatingInput, config: ScoresConfig) -> bool:
+    """Whether this rating is too thinly voted to count towards an aggregate.
+
+    A provider with no floor configured, or a rating that reports no vote count
+    at all, is never excluded: "unknown" is not "few". Seret's critic score
+    carries no count because it is one editorial figure rather than a poll.
+    """
+    floor = config.min_votes.get(rating.provider.value)
+    if floor is None or rating.vote_count is None:
+        return False
+    return rating.vote_count <= floor
 
 
 def _weighted_mean(components: list[Component], minimum: int) -> int | None:

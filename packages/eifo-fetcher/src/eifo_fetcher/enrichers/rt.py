@@ -43,14 +43,16 @@ class RottenTomatoesEnricher(Enricher):
     """Critic and audience percentages."""
 
     providers = (RatingProvider.RT_CRITICS, RatingProvider.RT_AUDIENCE)
+    host = HOST
+    #: What this has always effectively run at - the client-wide default - now
+    #: said out loud and settable through ``[enrich.rate_limits] rt``.
+    default_rate_limit_rps = 1.0
 
     @property
     def key(self) -> str:
         return "rt"
 
     def enrich(self, title: TitleView, ctx: FetchContext) -> EnrichResult | None:
-        ctx.apply_rate_limit(HOST)
-
         for url in candidate_urls(title):
             html = self._page(url, ctx)
             if html is None:

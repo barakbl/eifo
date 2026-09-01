@@ -8,9 +8,13 @@ from __future__ import annotations
 
 import logging
 from importlib.metadata import entry_points
+from typing import TYPE_CHECKING
 
 from eifo_core.settings import Settings
 from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
+
+if TYPE_CHECKING:  # pragma: no cover - typing only; the module is imported lazily
+    from eifo_fetcher.enrichers.seret_index import SeretLookup
 
 ENTRY_POINT_GROUP = "eifo.enrichers"
 
@@ -26,20 +30,26 @@ __all__ = [
 ]
 
 
-def _builtin_enrichers() -> list[Enricher]:
+def _builtin_enrichers(seret_lookup: SeretLookup | None = None) -> list[Enricher]:
     # Imported lazily so one broken provider cannot break the whole CLI.
     from eifo_fetcher.enrichers.rt import RottenTomatoesEnricher
     from eifo_fetcher.enrichers.seret import SeretEnricher
     from eifo_fetcher.enrichers.tmdb_meta import TmdbMetadataEnricher
 
     # TMDB first: it fills the imdb_id and names the others resolve against.
-    return [TmdbMetadataEnricher(), SeretEnricher(), RottenTomatoesEnricher()]
+    return [
+        TmdbMetadataEnricher(),
+        SeretEnricher(seret_lookup),
+        RottenTomatoesEnricher(),
+    ]
 
 
-#: Providers switched off unless configuration enables them. Seret has no
-#: working title search, so it cannot resolve a title to a page on its own
-#: (see eifo_fetcher.enrichers.seret).
-DISABLED_BY_DEFAULT = frozenset({"seret"})
+#: Providers switched off unless configuration enables them.
+#:
+#: Empty. Seret used to be here because it had no way to resolve a title to a
+#: page; it now resolves through the index built by ``eifo-fetch seret index``,
+#: and an unbuilt index costs nothing and says so rather than misbehaving.
+DISABLED_BY_DEFAULT: frozenset[str] = frozenset()
 
 
 def _entry_point_enrichers() -> list[Enricher]:
@@ -57,9 +67,20 @@ def _entry_point_enrichers() -> list[Enricher]:
     return found
 
 
-def discover_enrichers(settings: Settings | None = None) -> list[Enricher]:
-    """Every installed enricher that configuration leaves switched on."""
-    enrichers = [*_builtin_enrichers(), *_entry_point_enrichers()]
+def discover_enrichers(
+    settings: Settings | None = None,
+    *,
+    seret_lookup: SeretLookup | None = None,
+) -> list[Enricher]:
+    """Every installed enricher that configuration leaves switched on.
+
+    Args:
+        seret_lookup: the loaded Seret page index. Passed in rather than read
+            here because enrichers are pure readers with no database access of
+            their own - loading it is the caller's job, and the caller is the
+            one that already holds a session.
+    """
+    enrichers = [*_builtin_enrichers(seret_lookup), *_entry_point_enrichers()]
     if settings is None:
         return enrichers
 

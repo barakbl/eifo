@@ -236,6 +236,28 @@ def _outcome_of(title: Title, *, written: int, errored: bool) -> EnrichOutcome:
     return EnrichOutcome.NO_MATCH
 
 
+def apply_rate_limits(
+    enrichers: list[Enricher],
+    ctx: FetchContext,
+    settings: Settings,
+) -> None:
+    """Set each scraped provider's pace before any of them is asked anything.
+
+    Here rather than inside the enrichers because that is where it actually
+    happens: an enricher calling ``ctx.apply_rate_limit`` resolved its rate
+    from ``[sources.enrich]``, a section that exists nowhere, so the call set
+    nothing and every scraped provider ran at the client-wide default.
+    """
+    for enricher in enrichers:
+        if enricher.host is None:
+            continue
+        rps = settings.enrich.rate_limit_for(enricher.key, enricher.default_rate_limit_rps)
+        if rps is None:
+            continue
+        ctx.http.rate_limiter.set_host_rate(enricher.host, rps)
+        logger.info("%s reads %s at %.2f requests/second", enricher.key, enricher.host, rps)
+
+
 def enrich_titles(
     session: Session,
     enrichers: list[Enricher],
@@ -258,6 +280,8 @@ def enrich_titles(
     run = open_run(session, phase=FetchPhase.ENRICH, started_at=started_at)
     fatal: str | None = None
 
+    apply_rate_limits(enrichers, ctx, settings)
+
     with capture_log() as captured:
         try:
             due = (
@@ -274,7 +298,7 @@ def enrich_titles(
 
             for index, title in enumerate(due, 1):
                 tally.titles_seen += 1
-                view = _view_of(title)
+                view = view_of(title)
                 # Every title by name, for anybody who wants to watch it work or
                 # to find which one a provider choked on. At DEBUG because a
                 # batch of five thousand would otherwise bury the progress lines
@@ -648,7 +672,7 @@ def _describe(title: Title) -> str:
     return f"{name!r} (id {title.id})"
 
 
-def _view_of(title: Title) -> TitleView:
+def view_of(title: Title) -> TitleView:
     return TitleView(
         id=title.id,
         kind=title.type,

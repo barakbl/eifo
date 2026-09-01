@@ -12,7 +12,7 @@ worth your evening.
 For the pedants: **EIFO Indexes Films Online**.</sub>
 
 [![CI](https://github.com/barakbl/eifo/actions/workflows/ci.yml/badge.svg)](https://github.com/barakbl/eifo/actions/workflows/ci.yml)
-[![tests](https://img.shields.io/badge/tests-1568%20passing-brightgreen)](https://github.com/barakbl/eifo/actions/workflows/ci.yml)
+[![tests](https://img.shields.io/badge/tests-1503%20passing-brightgreen)](https://github.com/barakbl/eifo/actions/workflows/ci.yml)
 [![licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/)
 
@@ -53,8 +53,10 @@ people actually trust, and puts a search box in front of it.
 - **Ratings worth trusting, side by side.** IMDb, Rotten Tomatoes (critics and audience),
   TMDB and the Israeli site Seret - each with a link back to where it came from, plus a
   weighted aggregate that **shows its working** rather than asking you to take a number on
-  faith. Israeli titles get a separate Israeli score, because local critics and global
-  audiences rarely rate the same film the same way.
+  faith. A score from a handful of voters counts half, and below a floor counts for
+  nothing at all: it is still shown with its vote count, it just does not get to outvote
+  twelve thousand people. Israeli titles get a separate Israeli score, because local
+  critics and global audiences rarely rate the same film the same way.
 - **Bilingual search that actually works.** Hebrew and English over one FTS5 index, with
   prefix matching as you type. "פאודה" and "Fauda" find the same series. The suggestions
   come from the same set as the results, filters and all - a dropdown that offers titles
@@ -172,7 +174,10 @@ someone's subscription ([why](#data-attribution-and-fair-use)).
 | **Reshet 13** | ◐ Partial | `reshet13` | The site 403s non-browser clients, so the same stock headless Chromium as `kan` reads the two public screens (all shows, news) and their embedded catalog data - one page view each per sync, nothing else. Series/programmes only, no films. |
 
 Ratings come from IMDb (datasets), TMDB, Rotten Tomatoes and Seret - the last two by scraping,
-so they can lag or break when those sites change. Adding a service is a ~100-line plugin:
+so they can lag or break when those sites change. Seret scores appear as its page index
+builds itself over the first month of nightly runs - the site publishes no working title
+search, so its pages have to be indexed from its sitemap first; see
+[Keeping it fresh](#keeping-it-fresh). Adding a service is a ~100-line plugin:
 see [Hack on it](#hack-on-it).
 
 ## Install
@@ -462,6 +467,75 @@ uv run eifo-fetch enrich --skip rt --skip imdb      # repeatable; --skip-imdb is
 Skipping is per run and never edits the configured set, so a catch-up cannot quietly
 become the new normal. To switch one off for good, use `disabled` under `[enrich]`.
 
+Israeli scores arrive on their own, but not overnight. Seret publishes no working title
+search - its advertised search endpoint, the real form POST and the site-wide search page
+all answer with the same generic listing whatever they are asked - so a title cannot be
+resolved to one of its pages on demand. What Seret does publish is a sitemap naming every
+page, so the ids are read from that once and kept locally.
+
+Each `enrich` run crawls a batch of that sitemap, beside the IMDb pass: 300 pages, about
+ten minutes. Seret has ~8,900 title pages, so the index fills itself in over roughly a
+month of nightly runs and is nearly free to keep current after that. It reads the newest
+ids first, so a half-built index already covers the films people search for. To have it
+all now instead of waiting:
+
+```bash
+uv run eifo-fetch seret index --limit 9000   # the same pass, unbounded - about 5 hours
+uv run eifo-fetch seret status               # what the index holds
+```
+
+Each page gives its Hebrew and international name, its year, the IMDb id newer pages
+carry, and the three figures Seret reports: the audience score, how many people voted for
+it, and "Seret Score", the site's composite editorial figure. Because those are stored as
+the crawl goes past, enrichment itself makes no request to Seret at all - it is a local
+lookup - and a title released since the last crawl still gets one try at the site's own
+autocomplete.
+
+A crawl also wakes what it has just learned about. A title nobody could rate backs off for
+a month and then longer, which is right when no provider carries it and wrong when its
+Seret page merely had not been read yet - so a crawl that covers a parked title, or finds
+a film that has been released and rated since, marks it due again. Otherwise a score would
+sit in the index for weeks with the one thing that reads it declining to look. Nothing is
+fetched to do this and no rating is written; the next ordinary run does the scoring.
+
+`seret status` reports where it has got to: pages indexed, split into films and series,
+how many carry an IMDb id, and how many have an audience or a critic score. A complete
+index is **8,127 films and 736 series**. Plenty of those pages carry no score - an
+unreleased film has none yet - which is why the score counts run below the page count.
+
+How hard each scraped provider leans on its site is one setting in one place:
+
+```toml
+[enrich.rate_limits]
+rt = 1.0      # Rotten Tomatoes
+seret = 0.5   # one page every two seconds
+```
+
+Weights are in the same file, and two rules stop a thin vote outweighing a real one:
+
+```toml
+[scores.weights]
+imdb = 3.0
+rt_critics = 2.0
+seret_critics = 2.0
+rt_audience = 1.0
+tmdb = 1.0
+seret_viewers = 1.0
+edb = 0.5
+
+[scores.min_votes]
+seret_viewers = 10
+```
+
+- Below `[scores] low_vote_threshold` (50 votes) a rating counts **half**.
+- At or below `[scores.min_votes]` it counts for **nothing**. It is still stored and still
+  shown, with its vote count and a link back, because it is true and you can weigh it
+  yourself - it just stops moving a number meant to summarise agreement. Seret's audience
+  score is the only one this is set for: it is much the thinnest-voted source here, and a
+  9.1 from four people is not made harmless by halving it.
+- An aggregate needs two providers to exist at all. The Israeli one needs only one - but a
+  real one, so a score excluded for thin votes cannot carry it alone.
+
 Titles that never matched TMDB - named with decoration a strict comparison cannot see
 past, like "Star Wars The Force Awakens Episode VII" - can be given another try:
 
@@ -542,7 +616,7 @@ Four panels, the first three on one screen:
 |---|---|
 | **Overview** | Is the catalog alright. The three figures that are really shares - with a score, with a poster, review queue cleared - lead with the percentage, green above 95, amber above 75, red below, with the count they were taken from underneath. Everything is stated so that more is better, which is what lets one colour scale read the same across all of them. |
 | **Sources** | Is *this* source alright - a row each, with the share of its titles that carry a poster, a score, an enrichment attempt and a cleared queue, when it last synced, and a switch. |
-| **What the score is made of** | Which rater actually decided the scores. The configured weights alone do not answer that: a rater weighted heaviest that has reached a tenth of the catalog is not the one deciding it. So the share is the weight that really went in - each rater's weight counted once per scored title it has managed to rate, halved for a thinly voted rating exactly as the sum itself halves it - beside its weight and how much of the catalog it reaches. A rater on 0% is the most useful row on the table: an enricher is off, blocked, or quietly failing. |
+| **What the score is made of** | Which rater actually decided the scores. The configured weights alone do not answer that: a rater weighted heaviest that has reached a tenth of the catalog is not the one deciding it. So the share is the weight that really went in - each rater's weight counted once per scored title it has managed to rate, halved for a thinly voted rating and dropped for one below its vote floor, exactly as the sum itself treats them - beside its weight and how much of the catalog it reaches. A rater on 0% is the most useful row on the table: an enricher is off, blocked, or quietly failing. |
 | **Runs** | What happened last night - every fetcher run with what it counted, and the tail of what it said while it ran. |
 
 **The run log is the part worth knowing about.** Runs were always recorded - when they
@@ -648,7 +722,10 @@ parking the ambiguous ones for review, expiring what disappeared, and downloadin
 
 Same shape, in `enrichers/`: add a `RatingProvider` enum member, give it a weight under
 `[scores.weights]` in the config, and write the enricher. Normalisation to 0-100 and the
-weighted aggregate are already handled.
+weighted aggregate are already handled, as are vote-count damping and the
+`[scores.min_votes]` floor - an enricher that scrapes a site declares its `host` and
+`default_rate_limit_rps` and the pipeline paces it, rather than reaching for the rate
+limiter itself.
 
 ### Other good first issues
 

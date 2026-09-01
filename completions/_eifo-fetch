@@ -71,6 +71,28 @@ _eifo_review() {
   esac
 }
 
+_eifo_seret() {
+  local -a subs
+  subs=(
+    'index:crawl the sitemap so titles can be resolved to Seret pages'
+    'status:show what the index currently holds'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe -t commands 'seret command' subs
+    return
+  fi
+
+  case $words[2] in
+    index)
+      _arguments \
+        '--limit=[pages to read this run, overriding [seret] batch_size]:count:' \
+        '--rps=[requests per second, overriding [seret] rate_limit_rps]:rate:' \
+        '--force[re-read every page, however recently it was indexed]'
+      ;;
+  esac
+}
+
 _eifo_db() {
   local -a subs
   subs=(
@@ -102,6 +124,7 @@ _eifo-fetch() {
     'repair-names:re-ask TMDB for names stored in the wrong script'
     'rematch:give titles that never matched TMDB another, smarter try'
     'dedupe:merge titles the catalog holds twice'
+    'seret:build and inspect the Seret page index (Israeli ratings)'
     'sources:inspect configured sources'
     'review:work through unresolved matches'
     'daemon:run phases on the configured schedule'
@@ -152,6 +175,7 @@ _eifo-fetch() {
           subs=('list:show every source with its last run')
           _describe -t commands 'sources command' subs
           ;;
+        seret) _eifo_seret ;;
         review) _eifo_review ;;
         db) _eifo_db ;;
         daemon)

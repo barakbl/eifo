@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/barakbl/eifo/compare/v0.5.0...v0.5.1) (2026-09-01)
+
+
+### Bug Fixes
+
+* read both of the film archive's shelves, not just the Israeli one ([9f7d7de](https://github.com/barakbl/eifo/commit/9f7d7decd553d1ef01ce78ec00c120405b043f8f))
+* read both of the film archive's shelves, not just the Israeli one ([abe79b8](https://github.com/barakbl/eifo/commit/abe79b86e3834940a89e69295a95d54dca560b94))
+
 ## [0.5.0](https://github.com/barakbl/eifo/compare/v0.4.0...v0.5.0) (2026-09-01)
 
 

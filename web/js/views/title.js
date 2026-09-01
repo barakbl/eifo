@@ -8,6 +8,7 @@ import {
   countryName,
   formatDate,
   formatPrice,
+  formatVotes,
   languageName,
   offerState,
   personName,
@@ -88,7 +89,7 @@ function buildDetail(title, { t, language, user, items }) {
           facts.map((fact) => el("span", { text: fact })),
         ),
         overview ? el("p", { class: "detail__overview", text: overview }) : null,
-        aggregateBlock(title, t),
+        aggregateBlock(title, { t, language }),
         userSection(title, { t, user, items }),
       ]),
       creditsSection(title, { t, language }),
@@ -268,7 +269,7 @@ function userSection(title, { t, user, items }) {
   ]);
 }
 
-function aggregateBlock(title, t) {
+function aggregateBlock(title, { t, language }) {
   const { score, score_israeli: israeli, components } = title.aggregate;
   if (score === null && israeli === null) return null;
 
@@ -303,6 +304,7 @@ function aggregateBlock(title, t) {
           el("tr", {}, [
             el("th", { text: t("title.provider") }),
             el("th", { text: t("title.normalized") }),
+            el("th", { text: t("title.votes") }),
             el("th", { text: t("title.weight") }),
           ]),
         ),
@@ -310,16 +312,61 @@ function aggregateBlock(title, t) {
           "tbody",
           {},
           entries.map(([provider, detail]) =>
-            el("tr", {}, [
-              el("td", { text: provider }),
-              el("td", { text: String(detail.normalized ?? "-") }),
-              el("td", { text: String(detail.weight ?? "-") }),
-            ]),
+            componentRow(provider, detail, title, { t, language }),
           ),
         ),
       ]),
     ]),
   ]);
+}
+
+/**
+ * One rater's line of the working.
+ *
+ * A weight of 0 on its own is not an explanation - it reads as a rater that was
+ * switched off rather than as one this title has too few votes to trust - so
+ * the reason is spelled out beside it, and the vote count that decided it is
+ * shown rather than left in the database.
+ */
+function componentRow(provider, detail, title, { t, language }) {
+  const note = componentNoteKey(detail);
+
+  return el("tr", { class: detail.excluded ? "components__row--excluded" : null }, [
+    el("td", { text: providerName(provider, title.ratings) }),
+    el("td", { text: String(detail.normalized ?? "-") }),
+    el("td", { text: formatVotes(detail.vote_count, language) || "-" }),
+    el("td", {}, [
+      el("span", { text: String(detail.weight ?? 0) }),
+      note ? el("span", { class: "components__note", text: t(note) }) : null,
+    ]),
+  ]);
+}
+
+/**
+ * Why a rater's weight is not what the config says, if it is not.
+ *
+ * Returns a translation key, or null when the weight speaks for itself. The
+ * two cases are not the same thing and must not read as though they were: a
+ * damped rating was counted and a excluded one was not.
+ */
+export function componentNoteKey(detail) {
+  if (detail.excluded) return "title.notCountedTooFewVotes";
+  if (detail.damped) return "title.countedHalfThinVotes";
+  return null;
+}
+
+/**
+ * What to call a rater in the table.
+ *
+ * The aggregate keys its working by the stored provider name; the ratings
+ * beside it already carry that name in the reader's language, so it is taken
+ * from there rather than translated a second time. The raw key is the
+ * fallback - a rater whose rating is not in this payload is still better named
+ * badly than not at all.
+ */
+export function providerName(provider, ratings) {
+  const rating = (ratings ?? []).find((candidate) => candidate.provider === provider);
+  return rating?.provider_name || provider;
 }
 
 function ratingsSection(title, { t, language }) {

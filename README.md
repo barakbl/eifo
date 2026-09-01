@@ -536,6 +536,22 @@ seret_viewers = 10
 - An aggregate needs two providers to exist at all. The Israeli one needs only one - but a
   real one, so a score excluded for thin votes cannot carry it alone.
 
+Both are shown in the title page's "how this score was computed" table, beside each
+rater's vote count - a weight of nought reads as a rater that is switched off unless it
+says why it is nought.
+
+Changing any of these numbers only affects titles as they next fall due, which is up to a
+fortnight. To apply it to the whole catalog at once:
+
+```bash
+uv run eifo-fetch rescore     # arithmetic over the ratings already stored
+```
+
+Nothing is fetched and no rating changes, so it takes minutes and records no enrichment
+attempt. `enrich --force` would also do it, but by re-asking every provider about every
+title for the same answers - and it books a fruitless attempt against each title the
+change was not even about, pushing those further down the refresh queue.
+
 Titles that never matched TMDB - named with decoration a strict comparison cannot see
 past, like "Star Wars The Force Awakens Episode VII" - can be given another try:
 

@@ -1016,6 +1016,21 @@ img {
   font-weight: var(--weight-normal);
 }
 
+/* A rater the sum left out. Dimmed rather than hidden: the score is still
+   true and still worth reading, it just did not get a vote in the total. */
+.components__row--excluded td {
+  color: var(--fg-faint);
+}
+
+/* Why a weight is nought or halved. Beside the number rather than in a column
+   of its own, because it is an aside about that number and empty on most rows. */
+.components__note {
+  display: block;
+  color: var(--fg-faint);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+}
+
 /* -- availability --------------------------------------------------------- */
 
 .offers {

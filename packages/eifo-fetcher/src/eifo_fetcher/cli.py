@@ -32,6 +32,7 @@ from eifo_fetcher.dedupe import (
     needs_a_human,
     plan_merges,
 )
+from eifo_fetcher.enrich import recompute_all_aggregates
 from eifo_fetcher.enrichers.seret import DEFAULT_RATE_LIMIT_RPS as SERET_DEFAULT_RPS
 from eifo_fetcher.enrichers.seret_index import SERET_KEY, index_status
 from eifo_fetcher.http import HttpClient
@@ -140,6 +141,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help="perform the merges; without it the plan is only printed",
+    )
+
+    subcommands.add_parser(
+        "rescore",
+        help="recompute every aggregate from the ratings already stored",
+        description=(
+            "Recomputes each title's aggregate score from the ratings already in the "
+            "database. Nothing is fetched and no rating changes - only the arithmetic "
+            "over them - so this is what to run after editing [scores.weights], "
+            "[scores.min_votes] or low_vote_threshold, instead of a full enrich. An "
+            "enrich would re-ask every provider about every title for the same answers, "
+            "and record an attempt against each one while it was at it."
+        ),
     )
 
     seret = subcommands.add_parser(
@@ -314,6 +328,26 @@ def _cmd_enrich(args: argparse.Namespace, settings: Settings) -> int:
             skip=args.skip,
         )
     return EXIT_PARTIAL if tally.errors else EXIT_OK
+
+
+def _cmd_rescore(_args: argparse.Namespace, settings: Settings) -> int:
+    """Rebuild every aggregate from ratings already stored.
+
+    Its own command because a scoring change needs no network and no
+    enrichment: the ratings are unchanged, only what the sum makes of them is.
+    Reaching for ``enrich --force`` instead costs a pass over every provider
+    and leaves a fruitless attempt recorded against every title the change was
+    not even about.
+    """
+    with (
+        single_flight(settings),
+        _database(settings) as session_factory,
+        session_factory() as session,
+    ):
+        computed = recompute_all_aggregates(session, settings)
+
+    print(f"rescored {computed} title(s)")
+    return EXIT_OK
 
 
 def _cmd_seret(args: argparse.Namespace, settings: Settings) -> int:
@@ -711,6 +745,7 @@ _COMMANDS = {
     "rematch": _cmd_rematch,
     "dedupe": _cmd_dedupe,
     "all": _cmd_all,
+    "rescore": _cmd_rescore,
     "seret": _cmd_seret,
     "sources": _cmd_sources,
     "review": _cmd_review,

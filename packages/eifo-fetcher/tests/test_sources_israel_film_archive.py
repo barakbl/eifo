@@ -18,18 +18,23 @@ from eifo_fetcher.robots import RobotsDisallowedError
 from eifo_fetcher.sources.base import FetchContext
 from eifo_fetcher.sources.israel_film_archive import (
     CATALOG_URL,
-    SITEMAP_URL,
+    SITEMAP_INDEX_URL,
     ArchiveCatalogError,
     IsraelFilmArchivePlugin,
     _absolute,
+    film_sitemaps,
     parse_film,
     parse_sitemap,
 )
 
 ROBOTS_URL = "https://jfc.org.il/robots.txt"
 PERMISSIVE_ROBOTS = "User-agent: *\nDisallow: /wp-admin/\nDisallow: /wp-admin/admin-ajax.php\n"
+MOVIE_SITEMAP = "https://jfc.org.il/movie-sitemap.xml"
+GENERAL_SITEMAP = "https://jfc.org.il/general_film-sitemap.xml"
 FREE_URL = "https://jfc.org.il/movie/24567-2/"
 PAID_URL = "https://jfc.org.il/movie/44380-2/"
+#: The international shelf, which this plugin did not read for a long time.
+GENERAL_URL = "https://jfc.org.il/general_film/stalker-2/"
 
 
 @pytest.fixture
@@ -39,9 +44,24 @@ def archive_ctx(http: object, settings: Settings) -> FetchContext:
 
 def _mock_site(robots: str = PERMISSIVE_ROBOTS) -> None:
     respx.get(ROBOTS_URL).mock(return_value=httpx.Response(200, text=robots))
-    respx.get(SITEMAP_URL).mock(
+    respx.get(SITEMAP_INDEX_URL).mock(
+        return_value=httpx.Response(
+            200, text=load_fixture("israel_film_archive", "sitemap_index.xml")
+        )
+    )
+    respx.get(MOVIE_SITEMAP).mock(
         return_value=httpx.Response(
             200, text=load_fixture("israel_film_archive", "movie_sitemap.xml")
+        )
+    )
+    respx.get(GENERAL_SITEMAP).mock(
+        return_value=httpx.Response(
+            200, text=load_fixture("israel_film_archive", "general_film_sitemap.xml")
+        )
+    )
+    respx.get(GENERAL_URL).mock(
+        return_value=httpx.Response(
+            200, text=load_fixture("israel_film_archive", "film_general.html")
         )
     )
     respx.get(FREE_URL).mock(
@@ -55,6 +75,93 @@ def _mock_site(robots: str = PERMISSIVE_ROBOTS) -> None:
 def _fetch(ctx: FetchContext) -> list:
     _mock_site()
     return list(IsraelFilmArchivePlugin().fetch(ctx))
+
+
+class TestFindingEverySitemap:
+    """The archive keeps its films in two places, and this read one of them.
+
+    ``/movie/`` is the Israeli collection; ``/general_film/`` is the
+    international one it licenses - Tarkovsky, Kurosawa, twenty-odd others.
+    Reading only the first lost every one of them, and lost them invisibly:
+    947 films still looks like the whole archive from the outside. So the
+    children are discovered from the index rather than named.
+    """
+
+    def test_takes_both_film_sitemaps_from_the_index(self) -> None:
+        found = film_sitemaps(load_fixture("israel_film_archive", "sitemap_index.xml"))
+
+        assert found == [
+            "https://jfc.org.il/movie-sitemap.xml",
+            "https://jfc.org.il/general_film-sitemap.xml",
+        ]
+
+    def test_leaves_the_sitemaps_that_are_not_films(self) -> None:
+        """Pages, news and collections are not the catalog."""
+        found = film_sitemaps(load_fixture("israel_film_archive", "sitemap_index.xml"))
+
+        assert not any("news_journal" in url or "collection" in url for url in found)
+
+    @respx.mock
+    def test_the_international_shelf_reaches_the_catalog(self, archive_ctx: FetchContext) -> None:
+        """The regression this fixes: Stalker was on the site and not in here."""
+        items = list(_fetch(archive_ctx))
+
+        stalker = next(item for item in items if item.name == "סטאלקר")
+        assert stalker.deep_link_url == GENERAL_URL
+        assert stalker.kind is TitleKind.MOVIE
+
+    @respx.mock
+    def test_both_shelves_are_read_in_one_sweep(self, archive_ctx: FetchContext) -> None:
+        items = list(_fetch(archive_ctx))
+
+        paths = sorted(
+            {
+                "/general_film/" if "/general_film/" in (item.deep_link_url or "") else "/movie/"
+                for item in items
+            }
+        )
+        assert paths == ["/general_film/", "/movie/"]
+
+    @respx.mock
+    def test_a_film_listed_in_both_is_fetched_once(self, archive_ctx: FetchContext) -> None:
+        """Belt and braces: the sitemaps are the archive's to overlap."""
+        _mock_site()
+        respx.get(GENERAL_SITEMAP).mock(
+            return_value=httpx.Response(
+                200, text=load_fixture("israel_film_archive", "movie_sitemap.xml")
+            )
+        )
+
+        items = list(IsraelFilmArchivePlugin().fetch(archive_ctx))
+
+        assert len(items) == 2
+
+    @respx.mock
+    def test_one_broken_sitemap_does_not_lose_the_other(self, archive_ctx: FetchContext) -> None:
+        _mock_site()
+        respx.get(GENERAL_SITEMAP).mock(return_value=httpx.Response(500))
+
+        items = list(IsraelFilmArchivePlugin().fetch(archive_ctx))
+
+        assert len(items) == 2
+        assert archive_ctx.error_count == 1
+
+    @respx.mock
+    def test_an_index_naming_no_film_sitemaps_is_a_failure(self, archive_ctx: FetchContext) -> None:
+        """Better to fail than to conclude the archive has emptied itself."""
+        _mock_site()
+        respx.get(SITEMAP_INDEX_URL).mock(
+            return_value=httpx.Response(200, text="<sitemapindex></sitemapindex>")
+        )
+
+        with pytest.raises(ArchiveCatalogError, match="no film pages"):
+            list(IsraelFilmArchivePlugin().fetch(archive_ctx))
+
+    def test_a_post_type_listing_is_not_a_film(self) -> None:
+        """Both shelves list their own index page beside the films."""
+        urls = parse_sitemap(load_fixture("israel_film_archive", "general_film_sitemap.xml"))
+
+        assert urls == ["https://jfc.org.il/general_film/stalker-2/"]
 
 
 class TestSourceDeclaration:
@@ -71,7 +178,7 @@ class TestFetch:
     def test_yields_a_film_per_sitemap_entry(self, archive_ctx: FetchContext) -> None:
         items = list(_fetch(archive_ctx))
 
-        assert len(items) == 2
+        assert len(items) == 3
         assert all(item.kind is TitleKind.MOVIE for item in items)
         assert all(item.source_key == "israel_film_archive" for item in items)
 
@@ -114,7 +221,7 @@ class TestFetch:
 
         items = list(IsraelFilmArchivePlugin().fetch(archive_ctx))
 
-        assert [item.name for item in items] == ["עורבים"]
+        assert [item.name for item in items] == ["עורבים", "סטאלקר"]
         assert any("could not be read" in error for error in archive_ctx.errors)
 
 
@@ -163,7 +270,7 @@ class TestParseSitemap:
         assert urls == [FREE_URL, PAID_URL]
 
     def test_a_sitemap_without_films_fails_loudly(self) -> None:
-        with pytest.raises(ArchiveCatalogError, match="sitemap moved"):
+        with pytest.raises(ArchiveCatalogError, match="not a film sitemap"):
             parse_sitemap("<?xml version='1.0'?><urlset></urlset>")
 
 

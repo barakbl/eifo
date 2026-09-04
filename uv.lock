@@ -432,7 +432,7 @@ wheels = [
 
 [[package]]
 name = "eifo"
-version = "0.9.0"  # x-release-please-version
+version = "0.10.0"  # x-release-please-version
 source = { virtual = "." }
 dependencies = [
     { name = "eifo-api" },
@@ -473,7 +473,7 @@ dev = [
 
 [[package]]
 name = "eifo-api"
-version = "0.9.0"  # x-release-please-version
+version = "0.10.0"  # x-release-please-version
 source = { editable = "packages/eifo-api" }
 dependencies = [
     { name = "authlib" },
@@ -498,7 +498,7 @@ requires-dist = [
 
 [[package]]
 name = "eifo-core"
-version = "0.9.0"  # x-release-please-version
+version = "0.10.0"  # x-release-please-version
 source = { editable = "packages/eifo-core" }
 dependencies = [
     { name = "alembic" },
@@ -517,7 +517,7 @@ requires-dist = [
 
 [[package]]
 name = "eifo-fetcher"
-version = "0.9.0"  # x-release-please-version
+version = "0.10.0"  # x-release-please-version
 source = { editable = "packages/eifo-fetcher" }
 dependencies = [
     { name = "apscheduler" },

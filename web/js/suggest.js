@@ -8,7 +8,7 @@
 import { suggest as fetchSuggestions } from "./api.js";
 import { paramsToFilters } from "./format.js";
 import { parseHash } from "./router.js";
-import { el, replace } from "./ui.js";
+import { el, replace, scorePill } from "./ui.js";
 
 /**
  * Shorter than the grid's debounce, because this is the answer somebody is
@@ -176,6 +176,9 @@ function titleOption(title, language) {
       : el("span", { class: "suggest__poster suggest__poster--blank", "aria-hidden": "true" }),
     el("span", { class: "suggest__name", text: name }),
     title.year ? el("span", { class: "suggest__meta", text: String(title.year) }) : null,
+    // The same pill the cards carry, colour and all: a suggestion is a preview
+    // of a result, and choosing between two of them is mostly this number.
+    scorePill(title.score),
   ]);
   return { node, id: title.id, route: "title" };
 }

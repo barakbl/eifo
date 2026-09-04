@@ -362,21 +362,29 @@ def _suggest_titles(
     if not ids:
         return []
 
-    # One narrow read: a dropdown row needs no availability, genres or scores.
+    # One narrow read: a dropdown row needs no availability and no genres. The
+    # score comes along because the row shows it, and an outer join keeps a
+    # title nobody has rated in the list rather than dropping it.
     found = {
-        title.id: title for title in session.scalars(select(Title).where(Title.id.in_(ids))).all()
+        row.Title.id: row
+        for row in session.execute(
+            select(Title, AggregateScore.score)
+            .outerjoin(AggregateScore, AggregateScore.title_id == Title.id)
+            .where(Title.id.in_(ids))
+        ).all()
     }
     return [
         TitleSuggestion(
-            id=title.id,
-            type=title.type,
-            name_he=title.name_he,
-            name_en=title.name_en,
-            year=title.year,
-            poster_url=image_url(title.poster_path),
+            id=row.Title.id,
+            type=row.Title.type,
+            name_he=row.Title.name_he,
+            name_en=row.Title.name_en,
+            year=row.Title.year,
+            poster_url=image_url(row.Title.poster_path),
+            score=row.score,
         )
         for title_id in ids
-        if (title := found.get(title_id)) is not None
+        if (row := found.get(title_id)) is not None
     ]
 
 

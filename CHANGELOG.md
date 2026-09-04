@@ -8,6 +8,12 @@
 * filter the catalog by how long a film runs ([948c140](https://github.com/barakbl/eifo/commit/948c140d086e0d47486dbbba7c186ef0dd02e4fd))
 * filter the catalog by how long a film runs ([3813bab](https://github.com/barakbl/eifo/commit/3813babfc2b82932ee55f936a83bf72434179bfb))
 
+
+### Bug Fixes
+
+* gone means gone from everything, not gone from one thing ([1ee17ea](https://github.com/barakbl/eifo/commit/1ee17ea2d16443b077dfe4fd1395a9e5d5405225))
+* gone means gone from everything, not gone from one thing ([36ac267](https://github.com/barakbl/eifo/commit/36ac267059eabacb4e69f391021ed48016c22ced))
+
 ## [0.5.1](https://github.com/barakbl/eifo/compare/v0.5.0...v0.5.1) (2026-09-01)
 
 

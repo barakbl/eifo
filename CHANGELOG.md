@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.0](https://github.com/barakbl/eifo/compare/v0.7.0...v0.8.0) (2026-09-04)
+
+
+### Features
+
+* suggestions carry their score, in the pill the cards use ([a8b564d](https://github.com/barakbl/eifo/commit/a8b564d57e8af2e0f98cb7a1f785d734ca3d153c))
+* suggestions carry their score, in the pill the cards use ([496f0df](https://github.com/barakbl/eifo/commit/496f0df1e84347178dc4d7d7829c8386a28c1269))
+
 ## [0.7.0](https://github.com/barakbl/eifo/compare/v0.6.0...v0.7.0) (2026-09-04)
 
 

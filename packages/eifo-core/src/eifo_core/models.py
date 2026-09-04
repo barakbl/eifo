@@ -401,6 +401,50 @@ class ExternalRating(Base):
         return f"<ExternalRating {self.provider} {self.score_raw} title={self.title_id}>"
 
 
+class RatingProviderInfo(TimestampMixin, Base):
+    """How a ratings provider presents itself, as its enricher declares it.
+
+    Written by the fetcher, which is the only thing that knows what enrichers
+    exist, and read by the API, which cannot ask one - the same arrangement as
+    ``sources.default_enabled``, and for the same reason: the database is all
+    the two processes share.
+
+    Before this, the API carried a hand-kept map of provider names. It had to be
+    edited to add a provider, it could disagree with the plugin that actually
+    produced the scores, and it had nowhere to say the two things a chip needs
+    beyond a name: that Tomatometer and Audience are one service rather than
+    two, and what that service's mark looks like.
+    """
+
+    __tablename__ = "rating_providers"
+
+    provider: Mapped[RatingProvider] = mapped_column(
+        _enum(RatingProvider, "rating_provider"),
+        primary_key=True,
+    )
+    #: What this particular score is called - "Tomatometer", "Audience".
+    label: Mapped[str] = mapped_column(String(100))
+    #: Providers sharing a group are one service, and read as one chip. Two
+    #: figures from Rotten Tomatoes are two things it measured, not two
+    #: opinions from two places, and showing them as separate chips made the
+    #: page look like it had six raters when it has four.
+    group_key: Mapped[str] = mapped_column(String(50))
+    #: The service behind the group - "Rotten Tomatoes", "סרט".
+    group_name: Mapped[str] = mapped_column(String(100))
+    #: The group's mark, under the images root, when the plugin ships one.
+    #: Null is an ordinary answer: the chip falls back to the name.
+    logo_path: Mapped[str | None] = mapped_column(String(500))
+    #: Where the service lives, for a chip whose score carries no link of its
+    #: own. A rating without its source is a rumour.
+    website_url: Mapped[str | None] = mapped_column(String(500))
+    #: Order within the group. Critics before the crowd, because that is the
+    #: order both sites print them in.
+    position: Mapped[int] = mapped_column(default=0)
+
+    def __repr__(self) -> str:
+        return f"<RatingProviderInfo {self.provider} in {self.group_key!r}>"
+
+
 class AggregateScore(Base):
     """The combined score for a title, plus how it was arrived at."""
 

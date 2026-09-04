@@ -16,7 +16,7 @@ import {
   sourceColorVar,
 } from "../format.js";
 import { displayName, secondaryName } from "../i18n.js";
-import { el, ratingPill, replace, scorePill, stateBlock } from "../ui.js";
+import { el, ratingChip, replace, scorePill, stateBlock } from "../ui.js";
 
 export function createTitleView({ mount, app, router, items }) {
   return async function render(route) {
@@ -332,7 +332,7 @@ function componentRow(provider, detail, title, { t, language }) {
   const note = componentNoteKey(detail);
 
   return el("tr", { class: detail.excluded ? "components__row--excluded" : null }, [
-    el("td", { text: providerName(provider, title.ratings) }),
+    el("td", { text: providerName(provider, title) }),
     el("td", { text: String(detail.normalized ?? "-") }),
     el("td", { text: formatVotes(detail.vote_count, language) || "-" }),
     el("td", {}, [
@@ -358,25 +358,41 @@ export function componentNoteKey(detail) {
 /**
  * What to call a rater in the table.
  *
- * The aggregate keys its working by the stored provider name; the ratings
- * beside it already carry that name in the reader's language, so it is taken
- * from there rather than translated a second time. The raw key is the
- * fallback - a rater whose rating is not in this payload is still better named
- * badly than not at all.
+ * The aggregate keys its working by the stored provider key; the payload
+ * beside it already carries the name, so it is taken from there rather than
+ * translated a second time. The raw key is the fallback - a rater whose rating
+ * is not in this payload is still better named badly than not at all.
+ *
+ * The service is named too where it has to be. A chip can show "Audience"
+ * under a Rotten Tomatoes logo and be perfectly clear; a table of raters with
+ * one row saying "Audience" and another saying "צופים" is a table where two
+ * different sites' crowds are indistinguishable. So a rater from a service
+ * that reported more than one figure is named by both.
  */
-export function providerName(provider, ratings) {
-  const rating = (ratings ?? []).find((candidate) => candidate.provider === provider);
+export function providerName(provider, title) {
+  const groups = title?.rating_groups ?? [];
+  for (const group of groups) {
+    const score = (group.scores ?? []).find((candidate) => candidate.provider === provider);
+    if (!score) continue;
+    return group.scores.length > 1 ? `${group.name} · ${score.provider_name}` : score.provider_name;
+  }
+  const rating = (title?.ratings ?? []).find((candidate) => candidate.provider === provider);
   return rating?.provider_name || provider;
 }
 
 function ratingsSection(title, { t, language }) {
+  // By service, not by rater. The flat `ratings` list is still in the payload
+  // and still what the aggregate's working reads from, because a weight is per
+  // rater; a chip is per place the score came from.
+  const groups = title.rating_groups ?? [];
+
   return el("section", { class: "section" }, [
     el("h2", { class: "section__heading", text: t("title.ratings") }),
-    title.ratings.length
+    groups.length
       ? el(
           "ul",
           { class: "ratings" },
-          title.ratings.map((rating) => ratingPill(rating, language)),
+          groups.map((group) => ratingChip(group, language)),
         )
       : el("p", { class: "state__body", text: t("title.noRatings") }),
   ]);

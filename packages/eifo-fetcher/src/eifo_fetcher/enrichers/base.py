@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from eifo_core.enums import RatingProvider, TitleKind
@@ -43,6 +44,42 @@ class TitleView:
     def names(self) -> list[str]:
         """Every name this title is known by, Hebrew first."""
         return [name for name in (self.name_he, self.name_en) if name]
+
+
+#: Where the built-in marks live. A plugin outside this tree points at its own
+#: folder the same way: ``Path(__file__).parent / "icons" / "thing.svg"``.
+ICONS_DIR = Path(__file__).parent / "icons"
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderInfo:
+    """How one score credits itself on the page.
+
+    Declared here rather than in the API, which is where it used to live as a
+    dictionary of names. A provider that produces scores is the thing that
+    knows what it is called, which of its figures belong together and what its
+    mark looks like; the API only knows what it has been told, and had to be
+    edited to be told anything.
+
+    The fetcher writes these to ``rating_providers`` on every enrich, so the
+    client is never taught a provider - it renders whatever is in the table.
+    """
+
+    provider: RatingProvider
+    #: This figure's own name: "Tomatometer", "Audience", "מבקרים".
+    label: str
+    #: The service behind it. Figures sharing a group are one chip, because
+    #: they are one service having measured two things - not two raters.
+    group_key: str
+    group_name: str
+    #: The service's mark, as a file this plugin ships. None is ordinary: the
+    #: chip falls back to ``group_name``, which is what it showed before marks
+    #: existed at all.
+    icon: Path | None = None
+    website_url: str | None = None
+    #: Order within the group. Critics before the crowd, which is the order
+    #: both sites that report two figures print them in.
+    position: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +117,12 @@ class Enricher(ABC):
 
     #: Providers this enricher can return. Used to decide what a refresh covers.
     providers: tuple[RatingProvider, ...] = ()
+
+    #: How each of those credits itself on the page - name, mark, and which of
+    #: them are one service. Optional: an enricher that declares nothing still
+    #: works, and its scores are credited by the provider key, which is what
+    #: any unknown provider has always fallen back to.
+    provider_info: tuple[ProviderInfo, ...] = ()
 
     #: The host this provider reads, when it reads one site of its own.
     #:

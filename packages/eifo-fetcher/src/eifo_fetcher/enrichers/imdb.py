@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from eifo_core.enums import RatingProvider
 from eifo_core.models import ExternalRating, Title
 from eifo_core.types import utcnow
+from eifo_fetcher.enrichers.base import ICONS_DIR, ProviderInfo
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.progress import ProgressTicker
 from eifo_fetcher.scores import normalise
@@ -104,6 +105,20 @@ def _parse_row(row: dict[str, str]) -> ImdbRating | None:
 
 class ImdbDatasetLoader:
     """Downloads the ratings dataset and applies it to the catalog in one pass."""
+
+    #: Declared here even though this is not an ``Enricher``: it is what
+    #: produces the IMDb score, so it is what should say how the score credits
+    #: itself. The one figure IMDb publishes is its own group.
+    provider_info = (
+        ProviderInfo(
+            provider=RatingProvider.IMDB,
+            label="IMDb",
+            group_key="imdb",
+            group_name="IMDb",
+            icon=ICONS_DIR / "imdb.svg",
+            website_url="https://www.imdb.com",
+        ),
+    )
 
     def __init__(self, http: HttpClient) -> None:
         self._http = http

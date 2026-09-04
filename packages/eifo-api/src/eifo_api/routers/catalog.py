@@ -18,6 +18,7 @@ from sqlalchemy import Select, func, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from eifo_api.converters import (
+    ProviderRegistry,
     hydrate_titles,
     image_url,
     to_card,
@@ -159,7 +160,9 @@ def get_title(title_id: int, session: SessionDep) -> TitleDetail:
     titles = hydrate_titles(session, [title_id])
     if not titles:
         raise HTTPException(status_code=404, detail=f"No title with id {title_id}")
-    return to_detail(titles[0])
+    # One small query for the seven-odd rows that say how each score is
+    # credited, rather than a per-rating lazy load of the same table.
+    return to_detail(titles[0], ProviderRegistry.load(session))
 
 
 @router.get("/whats-new", response_model=Page[Arrival], summary="Recent arrivals, per service")

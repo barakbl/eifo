@@ -47,7 +47,14 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from eifo_core.enums import RatingProvider, TitleKind
-from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
+from eifo_fetcher.enrichers.base import (
+    ICONS_DIR,
+    Enricher,
+    EnrichResult,
+    ProviderInfo,
+    Rating,
+    TitleView,
+)
 from eifo_fetcher.http import USER_AGENT
 from eifo_fetcher.match import similarity, years_match
 from eifo_fetcher.robots import RobotsPolicy
@@ -159,6 +166,29 @@ class SeretEnricher(Enricher):
     """
 
     providers = (RatingProvider.SERET_CRITICS, RatingProvider.SERET_VIEWERS)
+    #: One chip, two figures, and both named in Hebrew: this is an Israeli site
+    #: reporting on Israeli films, and "Critics" beside a Hebrew logo would be
+    #: a translation nobody asked for.
+    provider_info = (
+        ProviderInfo(
+            provider=RatingProvider.SERET_CRITICS,
+            label="מבקרים",
+            group_key="seret",
+            group_name="סרט",
+            icon=ICONS_DIR / "seret.png",
+            website_url=BASE_URL,
+            position=0,
+        ),
+        ProviderInfo(
+            provider=RatingProvider.SERET_VIEWERS,
+            label="צופים",
+            group_key="seret",
+            group_name="סרט",
+            icon=ICONS_DIR / "seret.png",
+            website_url=BASE_URL,
+            position=1,
+        ),
+    )
     host = HOST
     default_rate_limit_rps = DEFAULT_RATE_LIMIT_RPS
 

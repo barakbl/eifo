@@ -152,6 +152,30 @@ class RatingOut(BaseModel):
     url: str | None = None
 
 
+class RatingGroupOut(BaseModel):
+    """One service's chip: its mark, and every figure it reported.
+
+    A service rather than a score, because two of them report two figures.
+    Rotten Tomatoes measuring critics and the crowd separately is one site
+    having measured two things - shown as two chips it read as two raters
+    disagreeing, on a page whose whole business is telling raters apart.
+
+    Everything here is what the fetcher recorded from the plugin that produced
+    the scores (``rating_providers``). The client renders it and knows the name
+    of no provider.
+    """
+
+    key: str
+    name: str
+    #: The service's mark, when its plugin ships one. The chip shows the name
+    #: instead when it does not, which is what every chip did before marks.
+    logo_url: str | None = None
+    #: Where this title lives on that service, falling back to the service
+    #: itself. One link for the chip, because the chip is one thing.
+    url: str | None = None
+    scores: list[RatingOut] = Field(default_factory=list)
+
+
 class AggregateOut(BaseModel):
     """The combined score and the working behind it."""
 
@@ -227,6 +251,10 @@ class TitleDetail(TitleCard):
     #: Director, cinematographer and billed cast, in that order.
     credits: list[CreditOut] = Field(default_factory=list)
     ratings: list[RatingOut] = Field(default_factory=list)
+    #: The same ratings, gathered by the service that reported them. Both are
+    #: sent: the chips read by service, and the aggregate's working reads by
+    #: rater, because a weight is per rater and not per site.
+    rating_groups: list[RatingGroupOut] = Field(default_factory=list)
     aggregate: AggregateOut = Field(default_factory=AggregateOut)
 
 

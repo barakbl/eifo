@@ -7,6 +7,7 @@ handlers stay short.
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -19,6 +20,7 @@ from eifo_api.schemas import (
     PersonCredit,
     PersonDetail,
     PersonRef,
+    RatingGroupOut,
     RatingOut,
     SourceOut,
     TitleCard,
@@ -34,6 +36,7 @@ from eifo_core.models import (
     ExternalRating,
     Genre,
     Person,
+    RatingProviderInfo,
     Source,
     Title,
     User,
@@ -42,20 +45,55 @@ from eifo_core.models import (
 
 IMAGES_PREFIX = "/images"
 
-#: How each provider is credited in the UI. A score without an attributed
-#: source is a rumour, so every rating carries one.
-PROVIDER_NAMES = {
-    RatingProvider.IMDB: "IMDb",
-    RatingProvider.TMDB: "TMDB",
-    RatingProvider.RT_CRITICS: "Rotten Tomatoes - Tomatometer",
-    RatingProvider.RT_AUDIENCE: "Rotten Tomatoes - Audience",
-    RatingProvider.SERET_CRITICS: "סרט - מבקרים",
-    RatingProvider.SERET_VIEWERS: "סרט - צופים",
-    RatingProvider.EDB: "EDB",
-}
-
 #: Providers reported as percentages rather than out of ten.
 _PERCENT_PROVIDERS = frozenset({RatingProvider.RT_CRITICS, RatingProvider.RT_AUDIENCE})
+
+
+class ProviderRegistry:
+    """How each ratings provider credits itself, as its plugin declared it.
+
+    This used to be a dictionary here - names for seven providers, kept by hand
+    in a package that has never met an enricher. It could disagree with the
+    plugin that produced the score, it had to be edited to add a provider, and
+    it had nowhere to say which figures belong to the same service or where
+    that service's mark is.
+
+    Now the fetcher writes what the plugins declare into ``rating_providers``
+    and this reads it. A provider with no row is still shown - its key is a
+    worse name than "Tomatometer" but a better one than nothing - because the
+    alternative is a score on the page with no source against it, and a rating
+    without its source is a rumour.
+    """
+
+    def __init__(self, rows: Iterable[RatingProviderInfo]) -> None:
+        self._rows = {RatingProvider(row.provider): row for row in rows}
+
+    @classmethod
+    def load(cls, session: Session) -> ProviderRegistry:
+        return cls(session.scalars(select(RatingProviderInfo)).all())
+
+    @classmethod
+    def empty(cls) -> ProviderRegistry:
+        """A registry that knows nothing, for callers without a session."""
+        return cls([])
+
+    def label(self, provider: RatingProvider) -> str:
+        """What to call this particular figure."""
+        row = self._rows.get(provider)
+        return row.label if row else provider.value
+
+    def row(self, provider: RatingProvider) -> RatingProviderInfo | None:
+        return self._rows.get(provider)
+
+    def group_key(self, provider: RatingProvider) -> str:
+        """Which chip this figure belongs in.
+
+        Its own provider key when nothing has been declared, which puts an
+        unknown provider in a chip of its own - the shape the page had before
+        grouping existed, and the right guess when nobody has said otherwise.
+        """
+        row = self._rows.get(provider)
+        return row.group_key if row else provider.value
 
 
 def image_url(path: str | None) -> str | None:
@@ -91,17 +129,64 @@ def to_availability(availability: Availability) -> AvailabilityOut:
     )
 
 
-def to_rating(rating: ExternalRating) -> RatingOut:
+def to_rating(rating: ExternalRating, registry: ProviderRegistry) -> RatingOut:
     provider = RatingProvider(rating.provider)
     return RatingOut(
         provider=provider,
-        provider_name=PROVIDER_NAMES.get(provider, provider.value),
+        provider_name=registry.label(provider),
         score_raw=rating.score_raw,
         score_display=score_display(provider, rating.score_raw),
         score_normalized=rating.score_normalized,
         vote_count=rating.vote_count,
         url=rating.url,
     )
+
+
+def to_rating_groups(
+    ratings: list[ExternalRating],
+    registry: ProviderRegistry,
+) -> list[RatingGroupOut]:
+    """The same ratings, gathered into one chip per service.
+
+    Order is the order the providers are declared in :class:`RatingProvider`,
+    and within a chip the order the plugin gave - critics before the crowd,
+    which is how both sites that report two figures print them. Neither is a
+    judgement made here: a page that reshuffled its raters between two loads
+    would be unreadable, so it needs *an* order, and the schema's own is the
+    one thing every deployment already agrees on.
+    """
+    order = {provider: index for index, provider in enumerate(RatingProvider)}
+    grouped: dict[str, list[ExternalRating]] = {}
+    for rating in sorted(ratings, key=lambda r: order.get(RatingProvider(r.provider), 99)):
+        grouped.setdefault(registry.group_key(RatingProvider(rating.provider)), []).append(rating)
+
+    groups = []
+    for key, members in grouped.items():
+        members.sort(key=lambda r: _position(registry, RatingProvider(r.provider)))
+        first = registry.row(RatingProvider(members[0].provider))
+        groups.append(
+            RatingGroupOut(
+                key=key,
+                # The service's name where one is recorded, and this figure's
+                # own name where none is: a chip has to say something, and an
+                # undeclared provider's key is the only true thing available.
+                name=first.group_name
+                if first
+                else registry.label(RatingProvider(members[0].provider)),
+                logo_url=image_url(first.logo_path) if first else None,
+                # The title's page on that service, which both of a pair carry
+                # and which is the link worth having. The service's front page
+                # only when no score brought one.
+                url=next((r.url for r in members if r.url), first.website_url if first else None),
+                scores=[to_rating(rating, registry) for rating in members],
+            )
+        )
+    return groups
+
+
+def _position(registry: ProviderRegistry, provider: RatingProvider) -> int:
+    row = registry.row(provider)
+    return row.position if row else 0
 
 
 def to_aggregate(aggregate: AggregateScore | None) -> AggregateOut:
@@ -138,8 +223,15 @@ def to_card(title: Title) -> TitleCard:
     )
 
 
-def to_detail(title: Title) -> TitleDetail:
-    """A full title, including availability that has lapsed."""
+def to_detail(title: Title, registry: ProviderRegistry | None = None) -> TitleDetail:
+    """A full title, including availability that has lapsed.
+
+    ``registry`` is how the ratings are credited. It defaults to an empty one
+    so a caller with no session still gets a title back - every score then
+    carries its provider key rather than its name, which is the honest thing to
+    show when nothing has said what the name is.
+    """
+    registry = registry or ProviderRegistry.empty()
     card = to_card(title)
     return TitleDetail(
         **card.model_dump(exclude={"availability"}),
@@ -156,7 +248,8 @@ def to_detail(title: Title) -> TitleDetail:
         credits=[
             to_credit(credit) for credit in sort_credits(preferred_credits(list(title.credits)))
         ],
-        ratings=[to_rating(rating) for rating in title.ratings],
+        ratings=[to_rating(rating, registry) for rating in title.ratings],
+        rating_groups=to_rating_groups(list(title.ratings), registry),
         aggregate=to_aggregate(title.aggregate),
     )
 

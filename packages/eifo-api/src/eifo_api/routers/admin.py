@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import Select, case, func, select
 from sqlalchemy.orm import Session
 
-from eifo_api.converters import PROVIDER_NAMES
+from eifo_api.converters import ProviderRegistry
 from eifo_api.deps import AdminDep, CsrfDep, SessionDep, SettingsDep
 from eifo_api.schemas import (
     AdminSource,
@@ -282,6 +282,7 @@ def _scoring_mix(session: Session, settings: Settings) -> list[ScoringProvider]:
     ).all()
     counted = {RatingProvider(provider): (rated, units) for provider, rated, units in rows}
 
+    registry = ProviderRegistry.load(session)
     weights = settings.scores.weights
     weighted = {
         provider: counted.get(provider, (0, 0.0))[1] * getattr(weights, provider.value, 0.0)
@@ -292,7 +293,7 @@ def _scoring_mix(session: Session, settings: Settings) -> list[ScoringProvider]:
     mix = [
         ScoringProvider(
             provider=provider,
-            provider_name=PROVIDER_NAMES.get(provider, provider.value),
+            provider_name=registry.label(provider),
             weight=getattr(weights, provider.value, 0.0),
             # None rather than 0 on a catalog with nothing scored yet: there is
             # no whole to take a share of, and a column of zeroes would read as

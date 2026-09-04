@@ -5,7 +5,7 @@
  * faster than the network answers.
  */
 
-import { deleteMyItem, loginUrl, putMyItem } from "./api.js";
+import { deleteMyItem, listMyItems, loginUrl, putMyItem } from "./api.js";
 import {
   NOTE_MAX_LENGTH,
   RATING_MAX,
@@ -168,6 +168,29 @@ export function titleActions({ titleId, items, t, onError, onChange }) {
  * Always drawn, never on hover: a phone has no hover, and "have I seen this"
  * that only appears when you reach for it is not an answer.
  */
+/**
+ * Which of the titles just loaded the viewer is already keeping.
+ *
+ * Asked per page rather than by fetching the whole list up front: somebody with
+ * a thousand entries should not download all of them to light up twenty-four
+ * cards. A failure here costs the toggles their state, which is worth strictly
+ * less than the grid, so it is swallowed.
+ *
+ * Returns whether anything came back, so a page of titles the viewer has never
+ * filed - which is most of them - is not repainted for nothing.
+ */
+export async function loadMineFor(titleIds, { user, items }) {
+  if (!user || !titleIds.length) return false;
+  try {
+    const mine = await listMyItems({ titleIds }, { pageSize: titleIds.length });
+    items.merge(mine.items);
+    return mine.items.length > 0;
+  } catch {
+    // The cards still render; their toggles just start empty.
+    return false;
+  }
+}
+
 export function cardActions({ titleId, items, t, onError }) {
   const container = el("div", { class: "card__actions" });
 

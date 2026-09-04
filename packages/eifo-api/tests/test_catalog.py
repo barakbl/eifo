@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 from fastapi.testclient import TestClient
 from seed import NOW, Seeded
 from sqlalchemy.orm import Session, sessionmaker
 
-from eifo_core.enums import CreditRole, OfferType, SourceKind, TitleKind
-from eifo_core.models import Availability, Credit, Person, Source, Title
+from eifo_core.enums import (
+    CreditRole,
+    FetchPhase,
+    FetchStatus,
+    OfferType,
+    SourceKind,
+    TitleKind,
+)
+from eifo_core.models import Availability, Credit, FetchRun, Person, Source, Title
 
 
 def names(payload: dict) -> list[str]:
@@ -17,6 +26,11 @@ def names(payload: dict) -> list[str]:
 
 def ids(payload: dict) -> list[int]:
     return [item["id"] for item in payload["items"]]
+
+
+def arrivals(payload: dict) -> list[tuple[int, str]]:
+    """Each arrival as the pair it really is: a title, and the service it hit."""
+    return [(item["title"]["id"], item["source_key"]) for item in payload["items"]]
 
 
 def _also_on_mako(session_factory: sessionmaker[Session], title_id: int, source_id: int) -> None:
@@ -89,6 +103,81 @@ class TestAvailabilityFilter:
         body = client.get("/api/v1/titles", params={"available": "any"}).json()
 
         assert catalog.orphan not in ids(body)
+
+
+class TestWhatsNew:
+    """Arrivals belong to the service they arrived on, not to the title."""
+
+    def test_lists_arrivals_newest_first(self, client: TestClient, catalog: Seeded) -> None:
+        body = client.get("/api/v1/whats-new").json()
+
+        assert arrivals(body) == [(catalog.fauda, "mako"), (catalog.fauda, "netflix_il")]
+        assert body["total"] == 2
+
+    def test_an_arrival_belongs_to_one_service(self, client: TestClient, catalog: Seeded) -> None:
+        """A title long on one service is still news on the one that just added it."""
+        body = client.get("/api/v1/whats-new", params={"sources": "mako"}).json()
+
+        assert arrivals(body) == [(catalog.fauda, "mako")]
+
+    def test_leaves_out_what_cannot_be_watched_now(
+        self, client: TestClient, catalog: Seeded
+    ) -> None:
+        """Arrived and left again is not news anybody can act on."""
+        listed = [title_id for title_id, _ in arrivals(client.get("/api/v1/whats-new").json())]
+
+        assert catalog.foxtrot not in listed  # gone from Netflix
+        assert catalog.shtisel not in listed  # only on a source we no longer track
+
+    def test_two_offers_on_one_service_are_one_arrival(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """A film to rent and to buy arrived once: the day the first of them did."""
+        with session_factory() as session:
+            session.add(
+                Availability(
+                    title_id=catalog.fauda,
+                    source_id=catalog.netflix,
+                    offer_type=OfferType.BUY,
+                    first_seen=NOW,
+                    last_seen=NOW,
+                )
+            )
+            session.commit()
+
+        body = client.get("/api/v1/whats-new", params={"sources": "netflix_il"}).json()
+
+        assert arrivals(body) == [(catalog.fauda, "netflix_il")]
+        # The stream offer, a hundred days old - not today's second listing.
+        assert body["items"][0]["added_at"].startswith("2026-04-29")
+
+    def test_the_first_sweep_of_a_service_is_not_an_arrival(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """What a service was already carrying was found, not added."""
+        with session_factory() as session:
+            session.add(
+                FetchRun(
+                    source_key="mako",
+                    phase=FetchPhase.SYNC,
+                    status=FetchStatus.OK,
+                    started_at=NOW - dt.timedelta(days=1, minutes=5),
+                    finished_at=NOW - dt.timedelta(days=1),
+                )
+            )
+            session.commit()
+
+        body = client.get("/api/v1/whats-new").json()
+
+        # Mako's own catalog predates the night Eifo first read it. Netflix has
+        # no completed sync on record, so its offers are taken at face value.
+        assert arrivals(body) == [(catalog.fauda, "netflix_il")]
+
+    def test_names_the_service_it_arrived_on(self, client: TestClient, catalog: Seeded) -> None:
+        first = client.get("/api/v1/whats-new").json()["items"][0]
+
+        assert first["source_name"] == "Mako VOD (Keshet 12)"
+        assert first["title"]["name_en"] == "Fauda"
 
 
 class TestSourceFilter:

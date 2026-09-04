@@ -23,7 +23,12 @@ CATALOG_CACHE_CONTROL = "public, max-age=300"
 NO_STORE = "no-store"
 
 #: Paths whose responses are safe to cache and revalidate.
-CACHEABLE_PREFIXES = ("/api/v1/titles", "/api/v1/sources", "/api/v1/genres")
+CACHEABLE_PREFIXES = (
+    "/api/v1/titles",
+    "/api/v1/sources",
+    "/api/v1/genres",
+    "/api/v1/whats-new",
+)
 
 #: Paths whose responses must never be written down anywhere.
 #:

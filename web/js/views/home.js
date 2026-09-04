@@ -1,7 +1,7 @@
 /* The catalog grid: filters, search-as-you-type, and endless scrolling. */
 
-import { ApiError, listGenres, listMyItems, listTitles } from "../api.js";
-import { cardActions } from "../account.js";
+import { ApiError, listGenres, listTitles } from "../api.js";
+import { cardActions, loadMineFor } from "../account.js";
 import {
   DEFAULT_FILTERS,
   filtersToParams,
@@ -199,39 +199,17 @@ export function createHomeView({ mount, app, router, items }) {
         paint();
         // The catalog does not wait on a personal-data request to appear. The
         // toggles fill in a beat later, and only if there was anything to fill.
-        if ((await loadMine(page.items)) && token === requestToken) paint();
+        const mine = await loadMineFor(
+          page.items.map((title) => title.id),
+          { user, items },
+        );
+        if (mine && token === requestToken) paint();
       } catch (error) {
         if (token !== requestToken) return;
         state.error = error;
         paintError();
       } finally {
         if (token === requestToken) state.loading = false;
-      }
-    }
-
-    /**
-     * Which of the titles just loaded the viewer is already keeping.
-     *
-     * Asked per page rather than by fetching the whole list up front: somebody
-     * with a thousand entries should not download all of them to light up
-     * twenty-four cards. A failure here costs the toggles their state, which is
-     * worth strictly less than the catalog, so it is swallowed.
-     *
-     * Returns whether anything came back, so a grid of titles the viewer has
-     * never filed - which is most of them - is not repainted for nothing.
-     */
-    async function loadMine(titles) {
-      if (!user || !titles.length) return false;
-      try {
-        const mine = await listMyItems(
-          { titleIds: titles.map((title) => title.id) },
-          { pageSize: titles.length },
-        );
-        items.merge(mine.items);
-        return mine.items.length > 0;
-      } catch {
-        // The cards still render; their toggles just start empty.
-        return false;
       }
     }
 
@@ -358,6 +336,10 @@ function buildFilterBar({ state, sources, genres, language, user, t, onChange })
       sort,
       direction.node,
       more.node,
+      // A way out of the catalog rather than another way through it, so it sits
+      // at the end of the row and is a link: what is new is a page, not a
+      // filter, and something to come back from.
+      el("a", { class: "control control--new", href: "#/new", text: t("filters.whatsNew") }),
     ]),
   );
 

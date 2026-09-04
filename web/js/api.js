@@ -131,6 +131,21 @@ export function suggest(q, filters, options) {
   return request(`/suggest?${params}`, options);
 }
 
+/**
+ * What turned up on each service lately.
+ *
+ * `sources` narrows to one service - the page asks for one at a time - and the
+ * server answers with arrivals rather than titles: the same film landing on two
+ * services is two pieces of news.
+ */
+export function listWhatsNew({ sources = [] } = {}, { page = 1, pageSize = 24 } = {}, options) {
+  const params = new URLSearchParams();
+  if (sources.length) params.set("sources", sources.join(","));
+  params.set("page", String(page));
+  params.set("page_size", String(pageSize));
+  return request(`/whats-new?${params}`, options);
+}
+
 export function listGenres(options) {
   return request("/genres", options);
 }

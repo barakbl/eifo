@@ -409,6 +409,14 @@ def _availability_ids(source_keys: list[str], available: AvailabilityFilter) -> 
 
     "current" means available now on a source still being tracked: a title left
     behind on a retired source is history, not something to send a viewer to.
+
+    "gone" means gone from everything being asked about, not gone from one
+    thing. Kung Fu Panda left Netflix and went on streaming on Disney+; listing
+    it as no longer available said something plainly untrue about a film
+    anybody could watch that evening. A title that left one service while
+    playing on another has moved, not gone. The exclusion is scoped to the same
+    services as the question, so somebody who narrowed to what they pay for is
+    still told what left their own services.
     """
     statement = select(Availability.title_id).join(Source, Source.id == Availability.source_id)
 
@@ -418,7 +426,12 @@ def _availability_ids(source_keys: list[str], available: AvailabilityFilter) -> 
     if available is AvailabilityFilter.CURRENT:
         statement = statement.where(Availability.is_current.is_(True), Source.active.is_(True))
     elif available is AvailabilityFilter.GONE:
-        statement = statement.where(Availability.is_current.is_(False))
+        statement = statement.where(
+            Availability.is_current.is_(False),
+            Availability.title_id.not_in(
+                _availability_ids(source_keys, AvailabilityFilter.CURRENT)
+            ),
+        )
 
     return statement
 

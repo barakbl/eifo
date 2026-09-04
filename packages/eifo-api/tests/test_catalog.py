@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
-from seed import Seeded
+from seed import NOW, Seeded
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_core.enums import CreditRole, OfferType, SourceKind, TitleKind
@@ -17,6 +17,21 @@ def names(payload: dict) -> list[str]:
 
 def ids(payload: dict) -> list[int]:
     return [item["id"] for item in payload["items"]]
+
+
+def _also_on_mako(session_factory: sessionmaker[Session], title_id: int, source_id: int) -> None:
+    """Put a title on a second, still-current service."""
+    with session_factory() as session:
+        session.add(
+            Availability(
+                title_id=title_id,
+                source_id=source_id,
+                offer_type=OfferType.FREE,
+                first_seen=NOW,
+                last_seen=NOW,
+            )
+        )
+        session.commit()
 
 
 class TestAvailabilityFilter:
@@ -43,6 +58,30 @@ class TestAvailabilityFilter:
         self, client: TestClient, catalog: Seeded
     ) -> None:
         body = client.get("/api/v1/titles", params={"available": "gone"}).json()
+
+        assert ids(body) == [catalog.foxtrot]
+
+    def test_a_title_still_playing_elsewhere_has_not_gone(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """It moved, it did not leave: Kung Fu Panda left Netflix for Disney+."""
+        _also_on_mako(session_factory, catalog.foxtrot, catalog.mako)
+
+        gone = client.get("/api/v1/titles", params={"available": "gone"}).json()
+        current = client.get("/api/v1/titles", params={"available": "current"}).json()
+
+        assert catalog.foxtrot not in ids(gone)
+        assert catalog.foxtrot in ids(current)
+
+    def test_gone_from_the_services_asked_about_still_counts(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """Narrowed to one service, "what left" means what left that service."""
+        _also_on_mako(session_factory, catalog.foxtrot, catalog.mako)
+
+        body = client.get(
+            "/api/v1/titles", params={"available": "gone", "sources": "netflix_il"}
+        ).json()
 
         assert ids(body) == [catalog.foxtrot]
 

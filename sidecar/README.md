@@ -50,6 +50,81 @@ so the fetcher can close the database and release its lock on the way out. A
 phase this app started runs in its own process and is watched, not waited on, so
 the menu and the Stop item stay responsive for the hours a full run can take.
 
+When nothing is running, that line says how the last run went instead - the
+question at nine in the morning is not "is anything running" but "did the night
+go well".
+
+### Progress
+
+A full run takes hours; one source alone can take fifty minutes. "Running" is
+not an answer for that long, so the **Progress** submenu is the run itself:
+
+```
+Started 13:47 · 2h 25m so far
+✓  Netflix - 3,204 items, 51 new (1h 3m)
+✓  Prime Video - 2,110 items, 4 retired (21m)
+✕  Reshet 13 - failed (1s)
+▶  FreeTV - 12m so far
+·  Israel Film Archive (Jerusalem)
+·  Kan Box (Kan 11)
+·  Mako VOD (Keshet 12)
+```
+
+Done, doing, and to come, in the order it happened, with what each source
+actually found. The headline says the same thing in one line - `Running sync ·
+4 of 14 services` - and the second line names what it is on right now.
+
+None of it is computed twice. The fetcher opens a `fetch_runs` row when a phase
+starts and closes it when it ends (`eifo_fetcher.runs`), so the run log is a
+live account of a run rather than a report filed afterwards. This reads it
+straight from SQLite, read-only, the same way the backfill check does and for
+the same reason: the endpoint that would answer is behind the admin session this
+app does not have.
+
+**What is still to come is the one thing nobody wrote down.** Sources are synced
+in the order the plugins declare them, which lives in Python. But that order is
+the same every night, so the last time each source ran says exactly where it
+comes in the queue: sorting the ones this run has not reached by their previous
+run's start time reproduces the order, and a source that has never run has
+nothing to sort by and goes last. The queue is shown only while something is
+actually running - a `sync --source` touches one service and stops, and listing
+the other thirteen underneath it would be a run this app invented.
+
+A row still marked `running` with no fetcher holding the lock is one whose
+process died. The fetcher says so itself, but only when it next starts; the menu
+says it immediately, rather than insisting for three hours that FreeTV is still
+going.
+
+When a run ends - whoever started it - a notification says how it went. The
+whole point of a two-hour sweep in the background is that somebody is doing
+something else.
+
+## One service at a time
+
+**Sync one service** lists every service the fetcher would actually collect,
+each with how old its catalog is:
+
+```
+Kan Box (Kan 11) - synced 3h ago
+Mako VOD (Keshet 12) - synced 2d ago
+Reshet 13 - never synced
+```
+
+Clicking one runs `eifo-fetch sync --source KEY`, which is the command that was
+always there - the menu was just the one place that could only do all of them.
+A service that has come back after a morning of failing is a click, not a
+two-hour sweep of the other thirteen.
+
+Only services that are switched on are listed. `sync --source` on one that is
+off syncs nothing and says so in a log nobody is reading, and a menu item that
+quietly does nothing is worse than one that is not there. "Switched on" is the
+operator's answer from the Manage tab where there is one and the plugin's own
+default where there is not - the same rule the fetcher applies.
+
+**Download artwork now** is the third verb, `eifo-fetch images`. The menu could
+already sync and enrich; the pass that fetches missing posters was the one thing
+it could not reach.
+
 ## Scheduling
 
 The app owns the nightly chain: at the configured hour (03:00 by default) it
@@ -144,6 +219,7 @@ a stale file with a live pid in it is possible, an unheld `flock` is not.
 |---|---|
 | `config.rs` | The checkout, the schedule, what is remembered |
 | `health.rs` | `/meta` → a colour and a sentence |
+| `runs.rs` | The run log → what is done, going, and still to come |
 | `icons.rs` | The dot, drawn rather than shipped |
 | `procs.rs` | Starting, stopping, and the single-flight check |
 | `schedule.rs` | When tonight's run is owed |
@@ -176,3 +252,7 @@ exactly wrong here, where the colour is the message.
   doing nothing - the error is shown in the menu.
 * **Changing the folder needs a restart.** The menu writes the new path and says
   so; the worker reads it at startup.
+* **The queue is a prediction, not a promise.** It is read off the order the
+  last run took, so the first run after a plugin is added has one source in the
+  wrong place until that run finishes. The rows already done are never a
+  prediction - those are what happened.

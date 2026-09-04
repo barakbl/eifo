@@ -615,6 +615,14 @@ the minute instead of at the next nightly. Keep your existing cron or
 LaunchAgent - the fetcher's single-flight lock means whichever fires first wins
 and the other stands down, and two schedulers are safe here while none is not.
 
+A run takes hours, so the menu shows it happening rather than saying "running"
+for two of them: **Progress** lists every service this run has done - with what
+each found - the one it is on now, and the ones still to come, read from the
+`fetch_runs` rows the fetcher writes as it goes. **Sync one service** runs
+`eifo-fetch sync --source KEY` for any single service, each listed with how old
+its catalog is, so a source that has just come back is a click rather than a
+full sweep. When a run ends, whoever started it, a notification says how it went.
+
 See [`sidecar/README.md`](sidecar/README.md).
 
 ### The Manage tab

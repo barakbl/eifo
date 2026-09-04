@@ -219,28 +219,53 @@ impl Drop for Server {
 }
 
 /// One phase of the fetcher, run to completion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Each is a command somebody could type, and is run as exactly that. `One` is
+/// `eifo-fetch sync --source KEY`: the fetcher has always been able to do a
+/// single service, and there was no reason for the menu to be the one place
+/// that could only do all of them - a service that has just come back after a
+/// morning of failing should be answerable in a click rather than by a two-hour
+/// sweep of the other thirteen.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Phase {
     Sync,
+    /// One source, named so the menu can say which without a lookup.
+    One {
+        key: String,
+        name: String,
+    },
     Enrich,
+    Images,
     All,
 }
 
 impl Phase {
-    pub fn argument(self) -> &'static str {
+    /// The command line, after `eifo-fetch`.
+    pub fn arguments(&self) -> Vec<String> {
         match self {
-            Phase::Sync => "sync",
-            Phase::Enrich => "enrich",
-            Phase::All => "all",
+            Phase::Sync => vec!["sync".into()],
+            Phase::One { key, .. } => vec!["sync".into(), "--source".into(), key.clone()],
+            Phase::Enrich => vec!["enrich".into()],
+            Phase::Images => vec!["images".into()],
+            Phase::All => vec!["all".into()],
         }
     }
 
-    pub fn label(self) -> &'static str {
+    /// What to call it in a sentence: "Running the full run…", "sync stopped".
+    pub fn label(&self) -> String {
         match self {
-            Phase::Sync => "sync",
-            Phase::Enrich => "enrich",
-            Phase::All => "the full run",
+            Phase::Sync => "sync".into(),
+            Phase::One { name, .. } => format!("sync of {name}"),
+            Phase::Enrich => "enrich".into(),
+            Phase::Images => "the artwork pass".into(),
+            Phase::All => "the full run".into(),
         }
+    }
+
+    /// Whether this phase sweeps every source, which is what decides if the
+    /// menu can honestly count "4 of 14" against it.
+    pub fn is_sweep(&self) -> bool {
+        matches!(self, Phase::Sync | Phase::All)
     }
 }
 
@@ -263,7 +288,7 @@ impl Fetch {
     pub fn poll(&mut self) -> Option<Result<(), String>> {
         match self.child.try_wait() {
             Ok(None) => None,
-            Ok(Some(status)) => Some(phase_outcome(self.phase, status.code())),
+            Ok(Some(status)) => Some(phase_outcome(&self.phase, status.code())),
             Err(err) => Some(Err(format!("lost track of {}: {err}", self.phase.label()))),
         }
     }
@@ -302,7 +327,7 @@ pub fn start_phase(config: &Config, phase: Phase) -> Result<Fetch, String> {
     }
 
     let child = Command::new(&fetcher)
-        .arg(phase.argument())
+        .args(phase.arguments())
         .current_dir(&config.app_dir)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -384,7 +409,7 @@ pub fn stop_external(pid: u32) {
 }
 
 /// How the fetcher's exit code reads as an outcome.
-fn phase_outcome(phase: Phase, code: Option<i32>) -> Result<(), String> {
+fn phase_outcome(phase: &Phase, code: Option<i32>) -> Result<(), String> {
     // 2 is the fetcher's "finished, but some source failed" - a real outcome
     // worth reporting differently from a crash, because the catalog did update.
     match code {
@@ -483,10 +508,10 @@ mod tests {
     #[test]
     fn a_stopped_phase_says_it_was_stopped_not_that_it_crashed() {
         assert_eq!(
-            phase_outcome(Phase::Sync, None).unwrap_err(),
+            phase_outcome(&Phase::Sync, None).unwrap_err(),
             "sync was stopped"
         );
-        assert!(phase_outcome(Phase::Enrich, Some(0)).is_ok());
+        assert!(phase_outcome(&Phase::Enrich, Some(0)).is_ok());
     }
 
     #[test]
@@ -497,9 +522,24 @@ mod tests {
 
     #[test]
     fn phases_map_to_the_cli_verbs() {
-        assert_eq!(Phase::Sync.argument(), "sync");
-        assert_eq!(Phase::Enrich.argument(), "enrich");
-        assert_eq!(Phase::All.argument(), "all");
+        assert_eq!(Phase::Sync.arguments(), ["sync"]);
+        assert_eq!(Phase::Enrich.arguments(), ["enrich"]);
+        assert_eq!(Phase::Images.arguments(), ["images"]);
+        assert_eq!(Phase::All.arguments(), ["all"]);
+    }
+
+    #[test]
+    fn one_source_is_the_flag_the_fetcher_already_takes() {
+        // Not a mode of its own: `sync --source KEY` is what somebody would
+        // type, so it is what gets run.
+        let one = Phase::One {
+            key: "kan".into(),
+            name: "Kan Box".into(),
+        };
+        assert_eq!(one.arguments(), ["sync", "--source", "kan"]);
+        assert_eq!(one.label(), "sync of Kan Box");
+        assert!(!one.is_sweep(), "one source is not a sweep of every source");
+        assert!(Phase::All.is_sweep());
     }
 
     fn tempdir() -> std::path::PathBuf {

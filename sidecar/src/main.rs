@@ -21,6 +21,7 @@ mod icons;
 mod menu;
 mod platform;
 mod procs;
+mod runs;
 mod schedule;
 mod update;
 mod worker;
@@ -35,6 +36,7 @@ use tray_icon::{TrayIcon, TrayIconBuilder};
 use config::Config;
 use health::Status;
 use procs::Phase;
+use runs::SourceOption;
 use worker::{Command, Snapshot, UpdateView};
 
 /// Posted to the run loop when the worker has something new to show.
@@ -89,6 +91,10 @@ fn main() {
     // The last thing the worker showed, so a menu click knows what state it is
     // acting on - "Check for updates" and "Update to v0.3.0" are one item.
     let mut update = UpdateView::Unknown;
+    // The services currently on offer, so a click on one of them can be turned
+    // back into the source it names. A menu event carries an id and nothing
+    // else, and the id is built from the key.
+    let mut sources: Vec<SourceOption> = Vec::new();
 
     // Stop the server, drop the status item, and leave the run loop - the one
     // exit path, shared by Quit and by a finished update that must relaunch.
@@ -107,6 +113,7 @@ fn main() {
 
         if let Some(snapshot) = drain_updates(&from_worker, &items, tray.as_mut(), &mut shown) {
             update = snapshot.update.clone();
+            sources = snapshot.run.sources.clone();
             if snapshot.relaunch {
                 // The worker has built the new bundle and spawned the process
                 // that will open it once we are gone. All that is left is to go.
@@ -136,6 +143,8 @@ fn main() {
                 let _ = to_worker.send(Command::Run(Phase::Sync));
             } else if id == items.run_enrich.id() {
                 let _ = to_worker.send(Command::Run(Phase::Enrich));
+            } else if id == items.run_images.id() {
+                let _ = to_worker.send(Command::Run(Phase::Images));
             } else if id == items.run_all.id() {
                 let _ = to_worker.send(Command::Run(Phase::All));
             } else if id == items.stop_fetch.id() {
@@ -186,6 +195,17 @@ fn main() {
                     } else {
                         items.detail.set_text("That folder is not an Eifo checkout");
                     }
+                }
+            } else if let Some(key) = menu::source_key(&id.0) {
+                // One service from the Sync one submenu. Matched against the
+                // list the last snapshot carried rather than trusted from the
+                // id, so a stale item left by a source that has since been
+                // switched off cannot start a run for it.
+                if let Some(source) = sources.iter().find(|source| source.key == key) {
+                    let _ = to_worker.send(Command::Run(Phase::One {
+                        key: source.key.clone(),
+                        name: source.name.clone(),
+                    }));
                 }
             }
         }

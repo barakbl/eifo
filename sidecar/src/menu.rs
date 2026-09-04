@@ -3,19 +3,44 @@
 //! Built once and updated in place rather than rebuilt on every reading: an
 //! `NSMenu` swapped out from under an open menu is a menu that closes itself
 //! while somebody is reading it, twenty seconds into every minute.
+//!
+//! Two lists here are not fixed in length - the run's steps and the services on
+//! offer - so those two are grown and trimmed a row at a time rather than
+//! rebuilt. Their contents change every few seconds; their *shape* changes when
+//! a run reaches another source, or when somebody adds a service, which is
+//! rarely enough that the flicker is not a thing anybody sees.
 
-use muda::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use std::cell::RefCell;
+
+use chrono::Utc;
+use muda::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
 use crate::health::Status;
+use crate::runs::{self, RunView, SourceOption};
 use crate::worker::{Snapshot, UpdateView};
+
+/// Prefix on the id of a per-source item, so a click can be turned back into
+/// the source it was for. The id is the only thing a menu event carries.
+pub const SOURCE_PREFIX: &str = "source:";
+
+/// How many rows the progress list may take before it stops naming what is
+/// still to come. A menu longer than the screen is not a readout.
+const MAX_PROGRESS_ROWS: usize = 28;
 
 /// Every item the app keeps a handle on, so their labels can change.
 pub struct Items {
     pub status: MenuItem,
     pub detail: MenuItem,
     pub fetch_state: MenuItem,
+    pub progress: Submenu,
+    /// The rows inside it, grown and trimmed to fit the run.
+    progress_rows: RefCell<Vec<MenuItem>>,
     pub run_sync: MenuItem,
+    pub sync_one: Submenu,
+    /// One row per service on offer, with the key its id was built from.
+    source_items: RefCell<Vec<(String, MenuItem)>>,
     pub run_enrich: MenuItem,
+    pub run_images: MenuItem,
     pub run_all: MenuItem,
     pub stop_fetch: MenuItem,
     pub check_now: MenuItem,
@@ -47,8 +72,11 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
 
     // A readout, like the server line below: what fetch, if any, is running now.
     let fetch_state = MenuItem::new("Fetch: idle", false, None);
-    let run_sync = MenuItem::new("Run sync now", true, None);
-    let run_enrich = MenuItem::new("Run enrich now", true, None);
+    let progress = Submenu::new("Progress", true);
+    let run_sync = MenuItem::new("Sync every service now", true, None);
+    let sync_one = Submenu::new("Sync one service", true);
+    let run_enrich = MenuItem::new("Refresh ratings now", true, None);
+    let run_images = MenuItem::new("Download artwork now", true, None);
     let run_all = MenuItem::new("Run everything now", true, None);
     let stop_fetch = MenuItem::new("Stop the current fetch", false, None);
     let check_now = MenuItem::new("Check now", true, None);
@@ -76,8 +104,11 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         &detail,
         &separator(),
         &fetch_state,
+        &progress,
         &run_sync,
+        &sync_one,
         &run_enrich,
+        &run_images,
         &run_all,
         &stop_fetch,
         &separator(),
@@ -108,8 +139,13 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         status,
         detail,
         fetch_state,
+        progress,
+        progress_rows: RefCell::new(Vec::new()),
         run_sync,
+        sync_one,
+        source_items: RefCell::new(Vec::new()),
         run_enrich,
+        run_images,
         run_all,
         stop_fetch,
         check_now,
@@ -141,9 +177,26 @@ pub fn headline(snapshot: &Snapshot) -> String {
         return snapshot.setup_problems[0].clone();
     }
     if snapshot.fetch_running {
-        return match &snapshot.running_phase {
-            Some(phase) => format!("Running {phase}…"),
+        let what = match &snapshot.running_phase {
+            Some(phase) => format!("Running {phase}"),
             None => "A fetch is running".into(),
+        };
+        // The fraction is the difference between a run that is going and a run
+        // that is getting somewhere. Only while a sweep is on, and only when
+        // there is more than one service in it: "0 of 1" said about a sync of
+        // one service is arithmetic where a word would do.
+        return match (snapshot.run.sync_position(), snapshot.run.current()) {
+            (Some((done, total)), _) if total > 1 => {
+                format!("{what} · {done} of {total} services")
+            }
+            // Not a sweep, so name the pass it is on instead: during the enrich
+            // half of a full run, "IMDb ratings" is the thing worth knowing.
+            // Unless the phase is already called that - "Running the artwork
+            // pass · Artwork" is one fact said twice.
+            (None, Some(step)) if !says_the_same(&what, &step.name) => {
+                format!("{what} · {}", step.name)
+            }
+            _ => format!("{what}…"),
         };
     }
     match snapshot.status {
@@ -154,6 +207,11 @@ pub fn headline(snapshot: &Snapshot) -> String {
     }
 }
 
+/// Whether a line already says what naming the step would say.
+fn says_the_same(line: &str, name: &str) -> bool {
+    line.to_lowercase().contains(&name.to_lowercase())
+}
+
 /// The second line: what to do about it, or what just happened.
 pub fn detail(snapshot: &Snapshot) -> String {
     if snapshot.setup_problems.len() > 1 {
@@ -161,6 +219,21 @@ pub fn detail(snapshot: &Snapshot) -> String {
     }
     if snapshot.restarts_given_up {
         return "Gave up restarting - start it by hand".into();
+    }
+    // While something is running, what it is on now outranks every other thing
+    // this line could say: it is the answer to the question somebody opened the
+    // menu with, and the rest will still be true in an hour.
+    if let Some(step) = snapshot.run.current() {
+        let mut line = format!(
+            "Now: {}, {} in",
+            step.name,
+            runs::compact_duration(step.seconds(Utc::now()))
+        );
+        let failed = snapshot.run.failures().len();
+        if failed > 0 {
+            line.push_str(&format!(" · {failed} failed so far"));
+        }
+        return line;
     }
     if let Some(result) = &snapshot.last_result {
         return result.clone();
@@ -182,26 +255,108 @@ pub fn detail(snapshot: &Snapshot) -> String {
 /// The fetch readout: what is running now, and whether Stop can reach it.
 pub fn fetch_line(snapshot: &Snapshot) -> String {
     if !snapshot.fetch_running {
-        return "Fetch: idle".into();
+        // Idle is a fact about now; what the last run did is the thing somebody
+        // opening the menu at nine in the morning actually wants.
+        return match snapshot.run.outcome() {
+            Some(outcome) => format!("Fetch: idle · last run {outcome}"),
+            None => "Fetch: idle".into(),
+        };
     }
     let what = match &snapshot.running_phase {
         Some(phase) => format!("running {phase}"),
         None => "running (started elsewhere)".into(),
     };
+    let since = match snapshot.run.started_at() {
+        Some(at) => format!(
+            ", {} in",
+            runs::compact_duration((Utc::now() - at).num_seconds().max(0))
+        ),
+        None => String::new(),
+    };
     match snapshot.fetch_pid {
-        Some(pid) => format!("Fetch: {what} (pid {pid})"),
-        None => format!("Fetch: {what}"),
+        Some(pid) => format!("Fetch: {what}{since} (pid {pid})"),
+        None => format!("Fetch: {what}{since}"),
     }
 }
 
 /// The label on the Stop item, which names what it will stop.
 pub fn stop_fetch_label(snapshot: &Snapshot) -> String {
+    if !snapshot.fetch_running {
+        return "Stop the current fetch".into();
+    }
+    // No article of its own: a phase names itself the way a sentence would
+    // have it - "sync", "the full run", "sync of Kan Box" - and prefixing
+    // "the" to all of them produced "Stop the the full run".
     match (&snapshot.running_phase, snapshot.fetch_pid) {
-        _ if !snapshot.fetch_running => "Stop the current fetch".into(),
-        (Some(phase), Some(pid)) => format!("Stop the {phase} (pid {pid})"),
-        (Some(phase), None) => format!("Stop the {phase}"),
+        (Some(phase), Some(pid)) => format!("Stop {phase} (pid {pid})"),
+        (Some(phase), None) => format!("Stop {phase}"),
         (None, Some(pid)) => format!("Stop the running fetch (pid {pid})"),
         (None, None) => "Stop the running fetch".into(),
+    }
+}
+
+/// The progress list: what this run has done, is doing, and has not reached.
+///
+/// One line per step in the order they happened, so the run reads top to bottom
+/// the way it ran. The rows still to come are named rather than counted -
+/// "5 more" answers nothing, and "Kan, then Mako" is the answer to "is it going
+/// to get to the one I care about".
+pub fn progress_lines(run: &RunView) -> Vec<String> {
+    let now = Utc::now();
+    let Some(started) = run.started_at() else {
+        return vec!["Nothing has run yet".into()];
+    };
+
+    let mut lines = vec![match run.finished_at() {
+        Some(finished) => format!(
+            "Ran {} to {} · {}",
+            runs::clock(started),
+            runs::clock(finished),
+            run.did()
+        ),
+        None => format!(
+            "Started {} · {} so far",
+            runs::clock(started),
+            runs::compact_duration((now - started).num_seconds().max(0))
+        ),
+    }];
+
+    for step in &run.steps {
+        lines.push(step.line(now));
+    }
+
+    // Only while something is actually running. A queue shown against a run
+    // that has ended is a promise nobody made: a `sync --source` touches one
+    // service and finishes, and listing the other thirteen underneath it as
+    // though they were coming would be this app inventing a run.
+    if run.current().is_none() {
+        return lines;
+    }
+    // The dot is deliberately not the tick's column: something not started yet
+    // has not earned a mark, and a row of ticks that included the future would
+    // be the one thing this list must not say.
+    let room = MAX_PROGRESS_ROWS.saturating_sub(lines.len());
+    for name in run.waiting.iter().take(room) {
+        lines.push(format!("·  {name}"));
+    }
+    if run.waiting.len() > room {
+        lines.push(format!("·  and {} more", run.waiting.len() - room));
+    }
+    lines
+}
+
+/// The label on the progress submenu itself, so the shape of the run is visible
+/// without opening it.
+pub fn progress_label(run: &RunView) -> String {
+    if run.steps.is_empty() {
+        return "Progress".into();
+    }
+    match (run.current(), run.sync_position()) {
+        (None, _) => format!("Progress · last run, {}", run.did()),
+        (_, Some((done, total))) if total > 1 => {
+            format!("Progress · {done} of {total} services")
+        }
+        (Some(step), _) => format!("Progress · {}", step.name),
     }
 }
 
@@ -237,6 +392,15 @@ pub fn tooltip(snapshot: &Snapshot) -> String {
     format!("Eifo — {}", headline(snapshot))
 }
 
+/// The id a per-source item carries, and the key read back out of one.
+pub fn source_id(key: &str) -> String {
+    format!("{SOURCE_PREFIX}{key}")
+}
+
+pub fn source_key(id: &str) -> Option<&str> {
+    id.strip_prefix(SOURCE_PREFIX)
+}
+
 pub fn apply(items: &Items, snapshot: &Snapshot) {
     items.status.set_text(headline(snapshot));
     let detail_text = detail(snapshot);
@@ -245,16 +409,31 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
     items.detail.set_enabled(false);
 
     items.fetch_state.set_text(fetch_line(snapshot));
+    items.progress.set_text(progress_label(&snapshot.run));
+    fill(
+        &items.progress,
+        &items.progress_rows,
+        &progress_lines(&snapshot.run),
+    );
 
     let busy = snapshot.fetch_running || matches!(snapshot.update, UpdateView::Installing { .. });
-    items.run_sync.set_enabled(!busy);
-    items.run_enrich.set_enabled(!busy);
-    items.run_all.set_enabled(!busy);
+    for item in [
+        &items.run_sync,
+        &items.run_enrich,
+        &items.run_images,
+        &items.run_all,
+    ] {
+        item.set_enabled(!busy);
+    }
     items.run_sync.set_text(if busy {
-        "Run sync now (a run is in progress)"
+        "Sync every service now (a run is in progress)"
     } else {
-        "Run sync now"
+        "Sync every service now"
     });
+    let offered = snapshot.run.sources.iter().filter(|s| s.on).count();
+    items.sync_one.set_enabled(!busy && offered > 0);
+    fill_sources(items, &snapshot.run.sources);
+
     items.stop_fetch.set_enabled(busy);
     items.stop_fetch.set_text(stop_fetch_label(snapshot));
 
@@ -276,9 +455,88 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
     items.update.set_enabled(update_enabled);
 }
 
+/// Make a submenu hold exactly these lines, adding and removing rows to fit.
+///
+/// Rows are reused rather than replaced, so the common case - the same run, a
+/// minute later - changes text and nothing else. Only a run that has reached
+/// another source touches the shape of the menu.
+fn fill(submenu: &Submenu, rows: &RefCell<Vec<MenuItem>>, lines: &[String]) {
+    let mut rows = rows.borrow_mut();
+    while rows.len() < lines.len() {
+        // Disabled: every one of these is a readout. Clicking a source in a
+        // list of what has happened should not start anything.
+        let item = MenuItem::new("", false, None);
+        let _ = submenu.append(&item);
+        rows.push(item);
+    }
+    while rows.len() > lines.len() {
+        if let Some(item) = rows.pop() {
+            let _ = submenu.remove(&item);
+        }
+    }
+    for (row, line) in rows.iter().zip(lines) {
+        row.set_text(line);
+    }
+}
+
+/// One item per service the fetcher would actually collect.
+///
+/// A service that is switched off is left out: `eifo-fetch sync --source` on
+/// one of those syncs nothing and says so in a log nobody is reading, and a
+/// menu item that quietly does nothing is worse than an absent one. Rebuilt
+/// only when the set of services changes, because each item's id is built from
+/// its key and a click is matched by id.
+fn fill_sources(items: &Items, sources: &[SourceOption]) {
+    let now = Utc::now();
+    let offered: Vec<&SourceOption> = sources.iter().filter(|s| s.on).collect();
+    let mut held = items.source_items.borrow_mut();
+
+    let same = held.len() == offered.len()
+        && held
+            .iter()
+            .zip(&offered)
+            .all(|((key, _), source)| key == &source.key);
+    if !same {
+        for (_, item) in held.drain(..) {
+            let _ = items.sync_one.remove(&item);
+        }
+        for source in &offered {
+            let item = MenuItem::with_id(source_id(&source.key), source.label(now), true, None);
+            let _ = items.sync_one.append(&item);
+            held.push((source.key.clone(), item));
+        }
+        return;
+    }
+    for ((_, item), source) in held.iter().zip(&offered) {
+        item.set_text(source.label(now));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runs::{RunView, Step, StepState};
+
+    /// A run part-way through a sweep: one service done, one going, two to come.
+    fn mid_run() -> RunView {
+        let started = Utc::now() - chrono::Duration::minutes(20);
+        let on_it = Utc::now() - chrono::Duration::minutes(12);
+        let stamp = |at: chrono::DateTime<Utc>| at.format("%Y-%m-%d %H:%M:%S").to_string();
+        RunView {
+            steps: vec![
+                Step::sample(
+                    "Netflix",
+                    "sync",
+                    StepState::Ok,
+                    &stamp(started),
+                    Some(&stamp(on_it)),
+                ),
+                Step::sample("FreeTV", "sync", StepState::Running, &stamp(on_it), None),
+            ],
+            waiting: vec!["Kan Box".into(), "Mako VOD".into()],
+            sources: Vec::new(),
+        }
+    }
 
     fn snapshot() -> Snapshot {
         Snapshot {
@@ -289,6 +547,7 @@ mod tests {
             running_phase: None,
             fetch_pid: None,
             last_result: None,
+            run: RunView::default(),
             server_owned: true,
             server_pid: Some(1234),
             keep_server_up: true,
@@ -322,7 +581,7 @@ mod tests {
         s.fetch_running = true;
         s.running_phase = None;
         s.fetch_pid = Some(5150);
-        assert_eq!(headline(&s), "A fetch is running");
+        assert_eq!(headline(&s), "A fetch is running…");
         assert_eq!(
             fetch_line(&s),
             "Fetch: running (started elsewhere) (pid 5150)"
@@ -404,5 +663,125 @@ mod tests {
         let mut s = snapshot();
         s.restarts_given_up = true;
         assert!(detail(&s).contains("by hand"));
+    }
+
+    #[test]
+    fn a_source_item_carries_its_key_and_gives_it_back() {
+        assert_eq!(source_key(&source_id("kan")), Some("kan"));
+        assert_eq!(source_key("stop_fetch"), None);
+    }
+
+    #[test]
+    fn a_phase_that_names_itself_is_not_given_a_second_article() {
+        let mut s = snapshot();
+        s.fetch_running = true;
+        s.running_phase = Some("the full run".into());
+        s.fetch_pid = Some(4242);
+        assert_eq!(stop_fetch_label(&s), "Stop the full run (pid 4242)");
+        s.running_phase = Some("sync".into());
+        assert_eq!(stop_fetch_label(&s), "Stop sync (pid 4242)");
+    }
+
+    #[test]
+    fn a_sweep_says_how_far_through_it_is() {
+        // The whole point: "running" for two hours says nothing, and the
+        // fraction is the difference between going and getting somewhere.
+        let mut s = snapshot();
+        s.fetch_running = true;
+        s.running_phase = Some("sync".into());
+        s.run = mid_run();
+        assert_eq!(headline(&s), "Running sync · 1 of 4 services");
+        assert_eq!(detail(&s), "Now: FreeTV, 12m in");
+        assert_eq!(progress_label(&s.run), "Progress · 1 of 4 services");
+    }
+
+    #[test]
+    fn the_progress_list_shows_what_is_done_what_is_going_and_what_is_next() {
+        let lines = progress_lines(&mid_run());
+        assert!(lines[0].starts_with("Started "), "{:?}", lines[0]);
+        assert!(
+            lines[1].starts_with("✓  Netflix - 100 items"),
+            "{:?}",
+            lines[1]
+        );
+        assert_eq!(lines[2], "▶  FreeTV - 12m so far");
+        assert_eq!(&lines[3..], ["·  Kan Box", "·  Mako VOD"]);
+    }
+
+    #[test]
+    fn a_run_that_has_ended_promises_nothing_further() {
+        // A `sync --source` touches one service and stops. Listing the other
+        // thirteen underneath it would be a queue this app invented.
+        let mut run = mid_run();
+        run.steps[1].state = StepState::Ok;
+        run.steps[1].finished_at = Some(Utc::now());
+        let lines = progress_lines(&run);
+        assert_eq!(lines.len(), 3, "a header and the two steps: {lines:?}");
+        assert!(lines[0].starts_with("Ran "), "{:?}", lines[0]);
+        assert!(progress_label(&run).starts_with("Progress · last run"));
+    }
+
+    #[test]
+    fn a_phase_that_is_not_a_sweep_is_named_rather_than_counted() {
+        // During the enrich half of a full run there is no queue of services
+        // left, and "14 of 14" would be a true sentence about something that
+        // has stopped happening.
+        let mut s = snapshot();
+        s.fetch_running = true;
+        s.running_phase = Some("the full run".into());
+        let mut run = mid_run();
+        run.steps[1].state = StepState::Ok;
+        run.steps[1].finished_at = Some(Utc::now());
+        run.steps.push(Step::sample(
+            "IMDb ratings",
+            "enrich",
+            StepState::Running,
+            &Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            None,
+        ));
+        s.run = run;
+        assert_eq!(headline(&s), "Running the full run · IMDb ratings");
+    }
+
+    #[test]
+    fn an_idle_menu_still_says_what_the_last_run_did() {
+        // Opening the menu at nine in the morning, the question is not "is
+        // anything running" - it plainly is not - but "did the night go well".
+        let mut s = snapshot();
+        let mut run = mid_run();
+        run.steps[1].state = StepState::Failed;
+        run.steps[1].finished_at = Some(Utc::now());
+        s.run = run;
+        assert!(
+            fetch_line(&s).contains("last run finished at"),
+            "{}",
+            fetch_line(&s)
+        );
+        assert!(fetch_line(&s).contains("1 failed"), "{}", fetch_line(&s));
+    }
+
+    #[test]
+    fn a_phase_is_not_named_twice_in_one_line() {
+        let mut s = snapshot();
+        s.fetch_running = true;
+        s.running_phase = Some("the artwork pass".into());
+        let mut run = mid_run();
+        run.steps[1].state = StepState::Ok;
+        run.steps[1].finished_at = Some(Utc::now());
+        run.steps.push(Step::sample(
+            "Artwork",
+            "images",
+            StepState::Running,
+            &Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            None,
+        ));
+        s.run = run;
+        assert_eq!(headline(&s), "Running the artwork pass…");
+    }
+
+    #[test]
+    fn nothing_run_yet_says_so_rather_than_showing_an_empty_list() {
+        assert_eq!(progress_lines(&RunView::default()), ["Nothing has run yet"]);
+        assert_eq!(progress_label(&RunView::default()), "Progress");
     }
 }

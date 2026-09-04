@@ -14,10 +14,17 @@ use chrono::Local;
 use crate::config::Config;
 use crate::health::{self, Health, Status};
 use crate::procs::{self, FetcherState, Phase, Server};
+use crate::runs::{self, RunView};
 use crate::{platform, schedule, update};
 
 /// How often to ask the API how it is.
 const POLL_EVERY: Duration = Duration::from_secs(20);
+/// How often to look while a fetch is going, whoever started it.
+///
+/// The progress list is only worth having if it is current: a source that
+/// finished twenty seconds ago and is still shown as running is the same
+/// not-knowing this exists to end. Two small queries against a local file.
+const WATCH_EVERY: Duration = Duration::from_secs(3);
 /// How often to ask GitHub whether there is a newer release. Twice a day: an
 /// update is not urgent, and a menu-bar app that hammers an API is a bad guest.
 const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(12 * 60 * 60);
@@ -88,6 +95,8 @@ pub struct Snapshot {
     pub fetch_pid: Option<u32>,
     /// What the last run did, once it is over.
     pub last_result: Option<String>,
+    /// The run log: what this run has done, is doing, and has yet to reach.
+    pub run: RunView,
     pub server_owned: bool,
     pub server_pid: Option<u32>,
     pub keep_server_up: bool,
@@ -123,6 +132,15 @@ struct Worker {
     wake: Box<dyn Fn() + Send>,
     health: Health,
     fetch: Option<procs::Fetch>,
+    /// The run log as of the last publish, so the menu shows the same picture
+    /// the last reading gave rather than one query's worth of a different one.
+    run: RunView,
+    /// Whether a fetch was running at the last publish. The change from true to
+    /// false is the moment a run ends, and the only moment worth a banner.
+    fetching: bool,
+    /// Set once the first reading has been taken, so a run that finished while
+    /// the app was closed is not announced as though it had just happened.
+    seen_a_reading: bool,
     last_result: Option<String>,
     restart_attempt: usize,
     restarts_given_up: bool,
@@ -144,6 +162,9 @@ impl Worker {
             wake,
             health: Health::unknown("starting up"),
             fetch: None,
+            run: RunView::default(),
+            fetching: false,
+            seen_a_reading: false,
             last_result: None,
             restart_attempt: 0,
             restarts_given_up: false,
@@ -171,10 +192,14 @@ impl Worker {
 
         loop {
             // A running fetch is watched more closely than the API is polled:
-            // the point of the Stop item is that it takes effect promptly, and
-            // a finished run should show its result without a twenty-second wait.
-            let wait = if self.fetch.is_some() || self.update_job.is_some() {
-                Duration::from_secs(3)
+            // the point of the Stop item is that it takes effect promptly, a
+            // finished run should show its result without a twenty-second
+            // wait, and a progress list that is twenty seconds behind is the
+            // not-knowing it was built to end. Any fetch counts, not only ours
+            // - the nightly run the LaunchAgent fires is the long one nobody
+            // is sitting next to.
+            let wait = if self.fetch.is_some() || self.update_job.is_some() || self.fetching {
+                WATCH_EVERY
             } else {
                 POLL_EVERY
             };
@@ -364,10 +389,10 @@ impl Worker {
         let Some(outcome) = fetch.poll() else {
             return;
         };
-        let phase = fetch.phase;
+        let phase = fetch.phase.clone();
         self.fetch = None;
         self.last_result = Some(match outcome {
-            Ok(()) => format!("{} finished", capitalise(phase.label())),
+            Ok(()) => format!("{} finished", capitalise(&phase.label())),
             Err(err) => err,
         });
         // The catalog just changed, so the reading from before it is stale.
@@ -378,9 +403,9 @@ impl Worker {
     /// kill by pid for one another process started.
     fn stop_fetch(&mut self) {
         if let Some(mut fetch) = self.fetch.take() {
-            let phase = fetch.phase;
+            let phase = fetch.phase.clone();
             fetch.stop();
-            self.last_result = Some(format!("{} stopped", capitalise(phase.label())));
+            self.last_result = Some(format!("{} stopped", capitalise(&phase.label())));
             self.poll();
             return;
         }
@@ -507,6 +532,36 @@ impl Worker {
         self.relaunch = true;
     }
 
+    /// Say so when a run ends, whoever started it.
+    ///
+    /// A banner rather than a line in a menu nobody has open: the runs worth
+    /// knowing about are the long ones, and the whole point of a two-hour sweep
+    /// running in the background is that somebody is doing something else.
+    /// Once per run - on the change from running to not - and never for a run
+    /// that had already finished before this app looked, which would announce
+    /// last night as though it were news.
+    fn announce_finish(&mut self, fetch_running: bool) {
+        let was = self.fetching;
+        self.fetching = fetch_running;
+        if !self.seen_a_reading {
+            self.seen_a_reading = true;
+            return;
+        }
+        if !was || fetch_running {
+            return;
+        }
+        let Some(outcome) = self.run.outcome() else {
+            return;
+        };
+        let failures = self.run.failures().len();
+        let title = if failures > 0 {
+            "Eifo finished with failures"
+        } else {
+            "Eifo finished a run"
+        };
+        platform::notify(title, &capitalise(&outcome));
+    }
+
     fn publish(&mut self) {
         let setup_problems = self.config.problems();
         let status = if !setup_problems.is_empty() {
@@ -523,17 +578,37 @@ impl Worker {
         // Ours if we started it; otherwise whatever the lock file says, so a
         // nightly run fired by the LaunchAgent or an `eifo-fetch` typed in a
         // terminal still shows up here.
-        let (fetch_running, running_phase, fetch_pid) = match &self.fetch {
-            Some(fetch) => (
-                true,
-                Some(fetch.phase.label().to_string()),
-                Some(fetch.pid()),
-            ),
+        let (fetch_running, fetch_pid) = match &self.fetch {
+            Some(fetch) => (true, Some(fetch.pid())),
             None => match procs::fetcher_state(&self.config) {
-                FetcherState::Running { pid } => (true, None, pid),
-                FetcherState::Idle => (false, None, None),
+                FetcherState::Running { pid } => (true, pid),
+                FetcherState::Idle => (false, None),
             },
         };
+
+        self.run = runs::read(&self.config);
+        // A run of one source, or of a phase that touches no source, has no
+        // queue of sources behind it. Saying "3 to go" about a `sync --source
+        // kan` would be a queue this app invented.
+        if self.fetch.as_ref().is_some_and(|f| !f.phase.is_sweep()) {
+            self.run.waiting.clear();
+        }
+        // Nothing holds the lock, so nothing is running - whatever a row left
+        // open by a process that died says about it.
+        if !fetch_running {
+            self.run.forget_abandoned();
+        }
+
+        // What is running, named. Ours we know outright; one started elsewhere
+        // is named by the row it opened, which is why a nightly run says
+        // "Running sync" rather than the shrug it used to.
+        let running_phase = match (&self.fetch, self.run.current()) {
+            (Some(fetch), _) => Some(fetch.phase.label()),
+            (None, Some(step)) if fetch_running => Some(step.phase_label()),
+            _ => None,
+        };
+
+        self.announce_finish(fetch_running);
 
         let snapshot = Snapshot {
             status,
@@ -543,6 +618,7 @@ impl Worker {
             running_phase,
             fetch_pid,
             last_result: self.last_result.clone(),
+            run: self.run.clone(),
             server_owned: self.server.is_running(),
             server_pid: self.server.pid(),
             keep_server_up: self.config.keep_server_up,

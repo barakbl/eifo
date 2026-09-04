@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.0](https://github.com/barakbl/eifo/compare/v0.8.0...v0.9.0) (2026-09-04)
+
+
+### Features
+
+* the sidecar shows the run happening, and syncs one service ([cb17671](https://github.com/barakbl/eifo/commit/cb17671a1f2a73b3f704cb0aa379b228f5cccd44))
+* the sidecar shows the run happening, and syncs one service ([0c3b7c1](https://github.com/barakbl/eifo/commit/0c3b7c14dd461d87570ee63f1aff76e9ac195ca4))
+
 ## [0.8.0](https://github.com/barakbl/eifo/compare/v0.7.0...v0.8.0) (2026-09-04)
 
 

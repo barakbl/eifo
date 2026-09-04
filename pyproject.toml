@@ -1,6 +1,6 @@
 [project]
 name = "eifo"
-version = "0.5.1"  # x-release-please-version
+version = "0.6.0"  # x-release-please-version
 description = "Eifo - Israeli VOD aggregator (workspace root)"
 readme = "README.md"
 requires-python = ">=3.12"

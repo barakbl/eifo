@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/barakbl/eifo/compare/v0.6.0...v0.7.0) (2026-09-04)
+
+
+### Features
+
+* a What's new page, by service and by arrival ([25acffa](https://github.com/barakbl/eifo/commit/25acffaa0f2d36c84b770b0cb3bf58fb71862a30))
+* a What's new page, by service and by arrival ([6abd6ab](https://github.com/barakbl/eifo/commit/6abd6abff3bf05b209d81613241ec65baa246198))
+
 ## [0.6.0](https://github.com/barakbl/eifo/compare/v0.5.1...v0.6.0) (2026-09-04)
 
 

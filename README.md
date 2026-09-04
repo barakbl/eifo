@@ -50,6 +50,10 @@ people actually trust, and puts a search box in front of it.
   read - [Coverage](#coverage) says why.
 - **Filter by what you already pay for.** Tick your services once; the catalog narrows to
   what you can watch tonight without buying anything new. "Everything" stays one tap away.
+- **Filter by the evening you have.** Two hours free is a filter, not a guess: pick a
+  ceiling - an hour and a half, two hours, two and a half - and the catalog keeps to films
+  that fit it. A series' runtime is one episode, a different claim, so series stay out of
+  that answer.
 - **Ratings worth trusting, side by side.** IMDb, Rotten Tomatoes (critics and audience),
   TMDB and the Israeli site Seret - each with a link back to where it came from, plus a
   weighted aggregate that **shows its working** rather than asking you to take a number on
@@ -114,6 +118,12 @@ everyone with no sign-in at all.
 </table>
 
 <br />
+
+<img src="docs/screenshots/length.jpg" width="70%" alt="The more-filters panel open, a Length row of three chips with up to an hour and a half chosen, and the catalog behind it down to 10,643 titles" />
+
+<sub><b>Say how long you have. The length filter keeps to films that fit the evening - a series' runtime is one episode, so it stays out of the answer.</b></sub>
+
+<br /><br />
 
 <img src="docs/screenshots/suggest.jpg" width="45%" alt="The search box open, suggesting five titles and a person, each with its poster and year" />
 

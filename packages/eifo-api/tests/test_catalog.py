@@ -173,6 +173,20 @@ class TestOtherFilters:
 
         assert ids(body) == [catalog.foxtrot]
 
+    def test_filters_by_length(self, client: TestClient, catalog: Seeded) -> None:
+        """Two hours free means a film that fits, not one that might."""
+        body = client.get("/api/v1/titles", params={"runtime_max": 120, "available": "any"}).json()
+
+        # Foxtrot runs 113 minutes; the orphan film's runtime is unknown.
+        assert ids(body) == [catalog.foxtrot]
+
+    def test_length_excludes_series(self, client: TestClient, catalog: Seeded) -> None:
+        """What we hold for a series is one episode, which is a different claim."""
+        body = client.get("/api/v1/titles", params={"runtime_max": 1000, "available": "any"}).json()
+
+        assert catalog.fauda not in ids(body)
+        assert catalog.shtisel not in ids(body)
+
     def test_a_malformed_genre_list_is_ignored_not_fatal(
         self, client: TestClient, catalog: Seeded
     ) -> None:

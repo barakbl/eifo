@@ -201,6 +201,7 @@ export const DEFAULT_FILTERS = Object.freeze({
   yearMax: "",
   genres: [],
   scoreMin: "",
+  runtimeMax: "",
 });
 
 /** Query-string parameters from the current filter state, omitting defaults. */
@@ -218,6 +219,7 @@ export function filtersToParams(filters) {
   if (filters.yearMax) params.set("year_max", String(filters.yearMax));
   if (filters.genres?.length) params.set("genres", filters.genres.join(","));
   if (filters.scoreMin) params.set("score_min", String(filters.scoreMin));
+  if (filters.runtimeMax) params.set("runtime_max", String(filters.runtimeMax));
   return params;
 }
 
@@ -237,5 +239,6 @@ export function paramsToFilters(search) {
     yearMax: params.get("year_max") ?? "",
     genres: list("genres"),
     scoreMin: params.get("score_min") ?? "",
+    runtimeMax: params.get("runtime_max") ?? "",
   };
 }

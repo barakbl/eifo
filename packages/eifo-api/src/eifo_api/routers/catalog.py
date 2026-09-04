@@ -108,6 +108,10 @@ def list_titles(
     year_min: Annotated[int | None, Query(ge=1880, le=2200)] = None,
     year_max: Annotated[int | None, Query(ge=1880, le=2200)] = None,
     score_min: Annotated[int | None, Query(ge=0, le=100)] = None,
+    runtime_max: Annotated[
+        int | None,
+        Query(ge=1, le=1000, description="Longest film, in minutes; films only"),
+    ] = None,
     sort: Annotated[
         Sort | None,
         Query(description="Ordering; best match when searching, best rated otherwise"),
@@ -130,6 +134,7 @@ def list_titles(
         year_min=year_min,
         year_max=year_max,
         score_min=score_min,
+        runtime_max=runtime_max,
     )
 
     total = session.scalar(select(func.count()).select_from(filtered.subquery())) or 0
@@ -234,6 +239,10 @@ def suggest(
     year_min: Annotated[int | None, Query(ge=1880, le=2200)] = None,
     year_max: Annotated[int | None, Query(ge=1880, le=2200)] = None,
     score_min: Annotated[int | None, Query(ge=0, le=100)] = None,
+    runtime_max: Annotated[
+        int | None,
+        Query(ge=1, le=1000, description="Longest film, in minutes; films only"),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=20)] = SUGGEST_TITLES + SUGGEST_PEOPLE,
 ) -> Suggestions:
     """Titles and people whose names start with what has been typed.
@@ -266,6 +275,7 @@ def suggest(
                 year_min=year_min,
                 year_max=year_max,
                 score_min=score_min,
+                runtime_max=runtime_max,
             ),
         ),
         people=_suggest_people(session, q, limit=max(1, limit - titles)),
@@ -377,6 +387,7 @@ def _filtered_ids(
     year_min: int | None,
     year_max: int | None,
     score_min: int | None,
+    runtime_max: int | None,
 ) -> Select[tuple[int]]:
     """Ids of titles matching every filter, before ordering or paging."""
     statement = select(Title.id)
@@ -393,6 +404,19 @@ def _filtered_ids(
     if score_min is not None:
         statement = statement.where(
             Title.id.in_(select(AggregateScore.title_id).where(AggregateScore.score >= score_min))
+        )
+
+    # An evening is only so long, and a film is the only thing whose length we
+    # can answer for: what we hold for a series is one episode, so letting a
+    # forty-minute drama through "under two hours" would answer a question
+    # nobody asked. A film whose runtime we do not know is left out for the same
+    # reason the year filter leaves out an unknown year - a maybe is not a match
+    # to somebody asking what fits before bed.
+    if runtime_max is not None:
+        statement = statement.where(
+            Title.type == TitleKind.MOVIE,
+            Title.runtime_minutes.is_not(None),
+            Title.runtime_minutes <= runtime_max,
         )
 
     for genre_id in genre_ids:

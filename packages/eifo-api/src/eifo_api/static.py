@@ -31,13 +31,34 @@ API_PREFIXES = ("/api/", "/docs", "/redoc", "/openapi.json", "/images/")
 ASSET_DIRS = ("css", "js", "assets")
 
 
-class ImmutableStaticFiles(StaticFiles):
-    """Static files served with a long-lived cache policy."""
+class CachedStaticFiles(StaticFiles):
+    """Static files served under a stated cache policy."""
+
+    cache_control = ""
 
     def file_response(self, *args: object, **kwargs: object) -> Response:
         response = super().file_response(*args, **kwargs)  # type: ignore[arg-type]
-        response.headers["Cache-Control"] = IMAGE_CACHE_CONTROL
+        response.headers["Cache-Control"] = self.cache_control
         return response
+
+
+class ImmutableStaticFiles(CachedStaticFiles):
+    """Artwork: the path names the variant, so a changed image is a changed URL."""
+
+    cache_control = IMAGE_CACHE_CONTROL
+
+
+class ClientStaticFiles(CachedStaticFiles):
+    """The client's own modules and stylesheets.
+
+    They said nothing about caching, and a browser told nothing guesses - from
+    how old the file already was, so a module untouched for a fortnight was
+    still being served from cache long after it had been replaced on disk. The
+    page itself has always carried this policy; the files it loads had been
+    left out of it, which is a confusing way to ship a change.
+    """
+
+    cache_control = CLIENT_CACHE_CONTROL
 
 
 def is_api_path(path: str) -> bool:
@@ -65,7 +86,7 @@ def mount_client(app: FastAPI, web_dir: Path) -> None:
     for name in ASSET_DIRS:
         directory = web_dir / name
         if directory.is_dir():
-            app.mount(f"/{name}", StaticFiles(directory=directory), name=f"client-{name}")
+            app.mount(f"/{name}", ClientStaticFiles(directory=directory), name=f"client-{name}")
 
     # Consulted by the 404 handler in eifo_api.errors.
     app.state.client_index = index

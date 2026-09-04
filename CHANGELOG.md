@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/barakbl/eifo/compare/v0.5.1...v0.6.0) (2026-09-04)
+
+
+### Features
+
+* filter the catalog by how long a film runs ([948c140](https://github.com/barakbl/eifo/commit/948c140d086e0d47486dbbba7c186ef0dd02e4fd))
+* filter the catalog by how long a film runs ([3813bab](https://github.com/barakbl/eifo/commit/3813babfc2b82932ee55f936a83bf72434179bfb))
+
 ## [0.5.1](https://github.com/barakbl/eifo/compare/v0.5.0...v0.5.1) (2026-09-01)
 
 

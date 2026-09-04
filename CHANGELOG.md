@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.0](https://github.com/barakbl/eifo/compare/v0.9.0...v0.10.0) (2026-09-04)
+
+
+### Features
+
+* rating chips are per service, with the provider's own logo ([67cdc44](https://github.com/barakbl/eifo/commit/67cdc44b6c6baab91ae672a2c8a377dfb100964a))
+* rating chips are per service, with the provider's own logo ([99f9cab](https://github.com/barakbl/eifo/commit/99f9cab685aec21dfcd429a7f1bf362965f2d13f))
+
 ## [0.9.0](https://github.com/barakbl/eifo/compare/v0.8.0...v0.9.0) (2026-09-04)
 
 

@@ -10,7 +10,7 @@ from seed import Seeded
 
 from eifo_api.caching import CATALOG_CACHE_CONTROL, etag_for
 from eifo_api.search import MAX_TERMS, fts_query
-from eifo_api.static import IMAGE_CACHE_CONTROL, is_api_path
+from eifo_api.static import CLIENT_CACHE_CONTROL, IMAGE_CACHE_CONTROL, is_api_path
 
 
 class TestFtsQuery:
@@ -125,6 +125,14 @@ class TestClientServing:
 
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/html")
+
+    def test_the_client_files_are_revalidated_not_guessed_at(self, client: TestClient) -> None:
+        """A module with no policy of its own is cached for as long as a browser
+        feels like, which is how a shipped change goes on not being visible."""
+        response = client.get("/js/app.js")
+
+        assert response.status_code == 200
+        assert response.headers["Cache-Control"] == CLIENT_CACHE_CONTROL
 
     def test_a_deep_link_falls_back_to_the_client(self, client: TestClient) -> None:
         """A stray link should open the app, not a bare 404."""

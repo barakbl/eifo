@@ -164,6 +164,14 @@ describe("filter round-tripping", () => {
     assert.deepEqual(paramsToFilters(filtersToParams(filters).toString()), filters);
   });
 
+  it("carries a length ceiling under the name the API uses", () => {
+    const filters = { ...DEFAULT_FILTERS, type: "movie", runtimeMax: "120" };
+    const params = filtersToParams(filters);
+
+    assert.equal(params.get("runtime_max"), "120");
+    assert.deepEqual(paramsToFilters(params.toString()), filters);
+  });
+
   it("carries a sort direction only when it was argued with", () => {
     const natural = filtersToParams({ ...DEFAULT_FILTERS, sort: "year", order: "" });
     const flipped = filtersToParams({ ...DEFAULT_FILTERS, sort: "year", order: "asc" });

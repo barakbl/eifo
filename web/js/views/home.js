@@ -41,6 +41,16 @@ const DECADES = [
   { key: "older", min: 1880, max: 1979 },
 ];
 /**
+ * "I have an evening this long" - the one filter a viewer already knows the
+ * answer to before they open the site.
+ *
+ * A ceiling rather than a range: nobody with two hours free wants a floor under
+ * them, and one number is one decision. The steps are the runtime bands the
+ * cards already use, so "up to two hours" here and "standard" on a title page
+ * are the same boundary rather than two opinions about the same film.
+ */
+const RUNTIMES = ["90", "120", "150"];
+/**
  * The empty one is "let the catalog decide", and it is the default.
  *
  * Searching asks a question, and the best answer is the closest match - which
@@ -314,39 +324,52 @@ function buildFilterBar({ state, sources, genres, language, user, t, onChange })
   const more = moreFilters({ state, genres, language, t, onChange });
   const direction = sortDirection({ state, t, onChange });
 
-  const selects = [
-    select({
-      values: TYPES,
-      current: state.filters.type,
-      label: (value) => t(`filters.type.${value || "any"}`),
-      onChange: (value) => onChange({ type: value }),
-    }),
-    select({
-      values: AVAILABILITY,
-      current: state.filters.available,
-      label: (value) => t(`filters.available.${value}`),
-      onChange: (value) => onChange({ available: value }),
-    }),
-    select({
-      values: SORTS,
-      current: state.filters.sort,
-      label: (value) => t(`filters.sort.${value}`),
-      // A new field starts the way it reads best; the arrow is for arguing
-      // with that, not something to re-argue on every change.
-      onChange: (value) => onChange({ sort: value, order: "" }),
-    }),
-    direction.node,
-  ];
+  const type = select({
+    values: TYPES,
+    current: state.filters.type,
+    label: (value) => t(`filters.type.${value || "any"}`),
+    // Asking for series drops any length: we hold one episode's runtime, not
+    // a season's, so the two together could only ever mean an empty grid.
+    onChange: (value) =>
+      onChange(value === "series" ? { type: value, runtimeMax: "" } : { type: value }),
+  });
+  const available = select({
+    values: AVAILABILITY,
+    current: state.filters.available,
+    label: (value) => t(`filters.available.${value}`),
+    onChange: (value) => onChange({ available: value }),
+  });
+  const sort = select({
+    values: SORTS,
+    current: state.filters.sort,
+    label: (value) => t(`filters.sort.${value}`),
+    // A new field starts the way it reads best; the arrow is for arguing
+    // with that, not something to re-argue on every change.
+    onChange: (value) => onChange({ sort: value, order: "" }),
+  });
 
   const node = el(
     "div",
     { class: "filters" },
-    el("div", { class: "filters__row shell" }, [combo.node, ...selects, more.node]),
+    el("div", { class: "filters__row shell" }, [
+      combo.node,
+      type,
+      available,
+      sort,
+      direction.node,
+      more.node,
+    ]),
   );
 
   return {
     node,
     sync: () => {
+      // The selects re-read the state like everything else: a length chip in
+      // the panel asks for films, and a row still saying "All" while the grid
+      // shows only films is the bar contradicting itself.
+      type.value = state.filters.type;
+      available.value = state.filters.available;
+      sort.value = state.filters.sort;
       combo.sync();
       more.sync();
       direction.sync();
@@ -399,6 +422,7 @@ function sortDirection({ state, t, onChange }) {
  */
 function moreFilters({ state, genres, language, t, onChange }) {
   const years = yearRange({ state, t, onChange });
+  const length = runtimeChips({ state, t, onChange });
   const chosenGenres = () => new Set(state.filters.genres);
   const boxes = new Map();
 
@@ -440,6 +464,13 @@ function moreFilters({ state, genres, language, t, onChange }) {
       el("span", { class: "combo__caret", "aria-hidden": "true", text: "▾" }),
     ]),
     el("div", { class: "combo__panel combo__panel--wide" }, [
+      // First in the panel: "how long have I got" is the question somebody
+      // opens the site already knowing the answer to.
+      el("div", { class: "morefilters__group" }, [
+        el("h3", { class: "morefilters__heading", text: t("filters.length") }),
+        length.node,
+        el("p", { class: "morefilters__note", text: t("filters.lengthNote") }),
+      ]),
       el("div", { class: "morefilters__group" }, [
         el("h3", { class: "morefilters__heading", text: t("filters.years") }),
         years.node,
@@ -464,6 +495,7 @@ function moreFilters({ state, genres, language, t, onChange }) {
     for (const [id, box] of boxes) box.checked = active.has(id);
     score.value = state.filters.scoreMin;
     years.sync();
+    length.sync();
 
     const count = countActive(state.filters);
     label.textContent = count ? t("filters.moreSome", { count }) : t("filters.more");
@@ -477,10 +509,50 @@ function moreFilters({ state, genres, language, t, onChange }) {
 /** How many of the folded-away filters are doing something. */
 function countActive(filters) {
   return (
+    (filters.runtimeMax ? 1 : 0) +
     (filters.yearMin || filters.yearMax ? 1 : 0) +
     filters.genres.length +
     (filters.scoreMin ? 1 : 0)
   );
+}
+
+/**
+ * "I have this long free": one row of ceilings, at most one of them on.
+ *
+ * A second press on the chip that is already on clears it, so the way out is
+ * the way in - there is no "any length" chip to hunt for. Choosing a length
+ * also asks for films, because a length is a claim we can only make about a
+ * film; leaving the type alone would have quietly meant the same thing while
+ * looking like it did not.
+ */
+function runtimeChips({ state, t, onChange }) {
+  const chips = RUNTIMES.map((minutes) =>
+    el("button", {
+      class: "chip",
+      type: "button",
+      "aria-pressed": "false",
+      text: t(`filters.runtime.${minutes}`),
+      onClick: () =>
+        onChange(
+          state.filters.runtimeMax === minutes
+            ? { runtimeMax: "" }
+            : { runtimeMax: minutes, type: "movie" },
+        ),
+    }),
+  );
+
+  const node = el("div", { class: "morefilters__chips" }, chips);
+
+  function sync() {
+    RUNTIMES.forEach((minutes, index) => {
+      // aria-pressed is both the state and the styling hook, as the decade
+      // shortcuts beneath already use it.
+      chips[index].setAttribute("aria-pressed", String(state.filters.runtimeMax === minutes));
+    });
+  }
+
+  sync();
+  return { node, sync };
 }
 
 /** A genre in the reader's language, falling back rather than showing nothing. */

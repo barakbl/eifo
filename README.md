@@ -55,7 +55,8 @@ people actually trust, and puts a search box in front of it.
   that fit it. A series' runtime is one episode, a different claim, so series stay out of
   that answer.
 - **Ratings worth trusting, side by side.** IMDb, Rotten Tomatoes (critics and audience),
-  TMDB and the Israeli site Seret - each with a link back to where it came from, plus a
+  TMDB and the Israeli site Seret - one chip per site, under its own logo, with both of
+  its figures where it reports two and a link back to the page they came from, plus a
   weighted aggregate that **shows its working** rather than asking you to take a number on
   faith. A score from a handful of voters counts half, and below a floor counts for
   nothing at all: it is still shown with its vote count, it just does not get to outvote
@@ -184,7 +185,11 @@ someone's subscription ([why](#data-attribution-and-fair-use)).
 | **Reshet 13** | ◐ Partial | `reshet13` | The site 403s non-browser clients, so the same stock headless Chromium as `kan` reads the two public screens (all shows, news) and their embedded catalog data - one page view each per sync, nothing else. Series/programmes only, no films. |
 
 Ratings come from IMDb (datasets), TMDB, Rotten Tomatoes and Seret - the last two by scraping,
-so they can lag or break when those sites change. Seret scores appear as its page index
+so they can lag or break when those sites change. How each one is credited on a title page -
+its name, its logo, and whether two of its figures are one service or two raters - is
+declared by the plugin that produces the score and written to the database on every enrich,
+so a new ratings provider brings its own chip and neither the API nor the client learns its
+name. Seret scores appear as its page index
 builds itself over the first month of nightly runs - the site publishes no working title
 search, so its pages have to be indexed from its sitemap first; see
 [Keeping it fresh](#keeping-it-fresh). Adding a service is a ~100-line plugin:

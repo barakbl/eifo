@@ -77,16 +77,65 @@ export function spine(sourceKeys) {
   );
 }
 
-/** A rating pill linking out to the provider it came from. */
-export function ratingPill(rating, language) {
-  const votes = formatVotes(rating.vote_count, language);
-  const children = [
-    el("span", { class: "rating__provider", text: rating.provider_name }),
-    el("span", { class: "rating__value", text: rating.score_display }),
-  ];
-  if (votes) children.push(el("span", { class: "rating__votes", text: votes }));
+/**
+ * The small print under a figure: what it is, and how many voted for it.
+ *
+ * The name is what tells two figures apart, so it is only worth the room when
+ * there are two of them - under a lone score it repeats the mark above it,
+ * which is a chip saying "IMDb" twice about one number.
+ */
+export function scoreCaption(score, { named, language } = {}) {
+  return [named ? score.provider_name : "", formatVotes(score.vote_count, language)]
+    .filter(Boolean)
+    .join(" · ");
+}
 
-  if (!rating.url) return el("li", {}, el("span", { class: "rating" }, children));
+/**
+ * One service's chip: its mark, and every figure it reported.
+ *
+ * A service rather than a score. Rotten Tomatoes measures critics and the
+ * crowd separately and Seret does the same, and as two chips apiece they read
+ * as two sites disagreeing - on a page whose whole business is telling raters
+ * apart. One chip with two numbers is what both sites show on their own pages.
+ *
+ * Nothing here knows the name of a provider. The mark, the name, the labels
+ * and the order all arrive in the payload, written by the plugin that produced
+ * the scores; a provider added tomorrow gets a chip without this file changing.
+ */
+export function ratingChip(group, language) {
+  const scores = group.scores ?? [];
+  if (!scores.length) return null;
+
+  // The mark replaces the name rather than joining it: both would say the same
+  // thing twice, and the chip is small. Hidden from assistive technology
+  // because the link's own label already names the service.
+  const mark = group.logo_url
+    ? el("img", {
+        class: "rating__logo",
+        src: group.logo_url,
+        alt: "",
+        "aria-hidden": "true",
+        loading: "lazy",
+        decoding: "async",
+      })
+    : el("span", { class: "rating__provider", text: group.name });
+
+  const figures = scores.map((score) => {
+    const caption = scoreCaption(score, { named: scores.length > 1, language });
+    return el("span", { class: "rating__score" }, [
+      el("span", { class: "rating__value", text: score.score_display }),
+      caption ? el("span", { class: "rating__caption", text: caption }) : null,
+    ]);
+  });
+
+  const children = [mark, el("span", { class: "rating__scores" }, figures)];
+  const label = `${group.name}: ${scores
+    .map((score) => `${score.provider_name} ${score.score_display}`)
+    .join(", ")}`;
+
+  if (!group.url) {
+    return el("li", {}, el("span", { class: "rating", "aria-label": label }, children));
+  }
 
   return el(
     "li",
@@ -95,9 +144,10 @@ export function ratingPill(rating, language) {
       "a",
       {
         class: "rating",
-        href: rating.url,
+        href: group.url,
         rel: "noopener noreferrer",
         target: "_blank",
+        "aria-label": label,
       },
       children,
     ),

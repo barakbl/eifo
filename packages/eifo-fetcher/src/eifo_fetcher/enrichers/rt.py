@@ -23,7 +23,14 @@ from typing import Any
 import httpx
 
 from eifo_core.enums import RatingProvider, TitleKind
-from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
+from eifo_fetcher.enrichers.base import (
+    ICONS_DIR,
+    Enricher,
+    EnrichResult,
+    ProviderInfo,
+    Rating,
+    TitleView,
+)
 from eifo_fetcher.match import is_hebrew
 from eifo_fetcher.sources.base import FetchContext
 
@@ -43,6 +50,30 @@ class RottenTomatoesEnricher(Enricher):
     """Critic and audience percentages."""
 
     providers = (RatingProvider.RT_CRITICS, RatingProvider.RT_AUDIENCE)
+    #: One service, two things it measured - so one chip with two figures.
+    #: Showing them as two chips made a page with four raters look like it had
+    #: six, and invited the reading that critics and audience disagreeing is
+    #: two sites disagreeing.
+    provider_info = (
+        ProviderInfo(
+            provider=RatingProvider.RT_CRITICS,
+            label="Tomatometer",
+            group_key="rt",
+            group_name="Rotten Tomatoes",
+            icon=ICONS_DIR / "rt.svg",
+            website_url=BASE_URL,
+            position=0,
+        ),
+        ProviderInfo(
+            provider=RatingProvider.RT_AUDIENCE,
+            label="Audience",
+            group_key="rt",
+            group_name="Rotten Tomatoes",
+            icon=ICONS_DIR / "rt.svg",
+            website_url=BASE_URL,
+            position=1,
+        ),
+    )
     host = HOST
     #: What this has always effectively run at - the client-wide default - now
     #: said out loud and settable through ``[enrich.rate_limits] rt``.

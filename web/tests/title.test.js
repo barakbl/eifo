@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { translate } from "../js/i18n.js";
+import { scoreCaption } from "../js/ui.js";
 import { componentNoteKey, providerName } from "../js/views/title.js";
 
 /* The two decisions behind "how this score was computed".
@@ -52,21 +53,67 @@ describe("componentNoteKey", () => {
 });
 
 describe("providerName", () => {
-  const ratings = [
-    { provider: "seret_viewers", provider_name: "סרט - צופים" },
-    { provider: "imdb", provider_name: "IMDb" },
-  ];
+  const title = {
+    rating_groups: [
+      {
+        key: "rt",
+        name: "Rotten Tomatoes",
+        scores: [
+          { provider: "rt_critics", provider_name: "Tomatometer" },
+          { provider: "rt_audience", provider_name: "Audience" },
+        ],
+      },
+      { key: "imdb", name: "IMDb", scores: [{ provider: "imdb", provider_name: "IMDb" }] },
+    ],
+    ratings: [{ provider: "edb", provider_name: "EDB" }],
+  };
 
-  it("names a rater the way the ratings beside it do", () => {
-    assert.equal(providerName("seret_viewers", ratings), "סרט - צופים");
+  it("names the service too when it reported more than one figure", () => {
+    // A table with a row called "Audience" and another called "צופים" is a
+    // table where two different sites' crowds cannot be told apart. The chip
+    // can be terse because the logo above it says which site; a row cannot.
+    assert.equal(providerName("rt_audience", title), "Rotten Tomatoes · Audience");
+  });
+
+  it("leaves a lone figure to its own name", () => {
+    assert.equal(providerName("imdb", title), "IMDb");
+  });
+
+  it("still reads a rater that is only in the flat list", () => {
+    assert.equal(providerName("edb", title), "EDB");
   });
 
   it("falls back to the stored key rather than an empty cell", () => {
-    assert.equal(providerName("rt_critics", ratings), "rt_critics");
+    assert.equal(providerName("tmdb", title), "tmdb");
   });
 
   it("copes with a title carrying no ratings at all", () => {
-    assert.equal(providerName("imdb", []), "imdb");
+    assert.equal(providerName("imdb", { ratings: [], rating_groups: [] }), "imdb");
     assert.equal(providerName("imdb", undefined), "imdb");
+  });
+});
+
+/* The one decision inside a rating chip.
+ *
+ * Everything else it renders arrives in the payload - the mark, the name, the
+ * order - because the client is not taught providers any more. What is left to
+ * decide is whether a figure needs saying what it is, and that depends only on
+ * whether it has a sibling. */
+
+describe("scoreCaption", () => {
+  const critics = { provider_name: "Tomatometer", vote_count: 430 };
+
+  it("names a figure that shares its chip with another", () => {
+    assert.equal(scoreCaption(critics, { named: true, language: "en" }), "Tomatometer · 430");
+  });
+
+  it("leaves a lone figure unnamed - the mark above it already said so", () => {
+    assert.equal(scoreCaption(critics, { named: false, language: "en" }), "430");
+  });
+
+  it("says nothing at all rather than a stray separator", () => {
+    const unvoted = { provider_name: "מבקרים", vote_count: null };
+    assert.equal(scoreCaption(unvoted, { named: false, language: "he" }), "");
+    assert.equal(scoreCaption(unvoted, { named: true, language: "he" }), "מבקרים");
   });
 });

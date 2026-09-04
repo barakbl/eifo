@@ -43,6 +43,7 @@ from eifo_fetcher.pipeline import (
     sync_source,
 )
 from eifo_fetcher.prefetch import FetchUnit, Prefetcher
+from eifo_fetcher.providers import declared_providers, register_declared_providers
 from eifo_fetcher.registry import (
     declared_sources,
     discover_plugins,
@@ -251,6 +252,16 @@ def enrich_all(
         lookup = SeretLookup.load(session)
         available = discover_enrichers(settings, seret_lookup=lookup)
         enrichers = [e for e in available if e.key not in skipped]
+
+        # From everything installed, not from tonight's selection: a provider
+        # skipped for this run still has scores in the catalog, and they still
+        # have to be credited on the page.
+        register_declared_providers(
+            session,
+            declared_providers([*available, ImdbDatasetLoader]),
+            images_dir=Path(settings.images_dir),
+        )
+        session.commit()
 
         unknown = sorted(skipped - {e.key for e in available} - {IMDB_RUN_KEY, SERET_INDEX_RUN_KEY})
         if unknown:

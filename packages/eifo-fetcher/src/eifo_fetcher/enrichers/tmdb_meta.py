@@ -11,7 +11,14 @@ from __future__ import annotations
 from typing import Any
 
 from eifo_core.enums import CreditRole, RatingProvider, TitleKind
-from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
+from eifo_fetcher.enrichers.base import (
+    ICONS_DIR,
+    Enricher,
+    EnrichResult,
+    ProviderInfo,
+    Rating,
+    TitleView,
+)
 from eifo_fetcher.match import is_hebrew, latin_script, similarity, years_match
 from eifo_fetcher.sources.base import FetchContext
 from eifo_fetcher.tmdb import (
@@ -43,6 +50,18 @@ class TmdbMetadataEnricher(Enricher):
     """Fills canonical metadata and TMDB's rating."""
 
     providers = (RatingProvider.TMDB,)
+    #: TMDB's terms ask for the logo by name, which is the one provider here
+    #: where the mark is not merely nicer than the words.
+    provider_info = (
+        ProviderInfo(
+            provider=RatingProvider.TMDB,
+            label="TMDB",
+            group_key="tmdb",
+            group_name="TMDB",
+            icon=ICONS_DIR / "tmdb.svg",
+            website_url="https://www.themoviedb.org",
+        ),
+    )
 
     def __init__(self, client: TmdbClient | None = None) -> None:
         self._client = client

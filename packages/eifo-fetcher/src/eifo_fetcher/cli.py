@@ -38,6 +38,7 @@ from eifo_fetcher.enrichers.seret_index import SERET_KEY, index_status
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.lock import AlreadyRunningError, single_flight
 from eifo_fetcher.pipeline import register_declared_sources
+from eifo_fetcher.providers import refresh_declared_providers
 from eifo_fetcher.registry import (
     declared_sources,
     discover_plugins,
@@ -275,6 +276,15 @@ def _cmd_db(args: argparse.Namespace, settings: Settings) -> int:
         logger.info("upgrading %s to %s", settings.db_url, args.revision)
         migrate.upgrade(settings.db_url, args.revision)
         logger.info("schema is up to date")
+        # This command is what an operator runs having just upgraded, which is
+        # exactly when the installed plugins may have changed. It does not go
+        # through _database - there may have been no schema to open a moment
+        # ago - so it asks for itself.
+        engine = create_engine_from_settings(settings)
+        try:
+            refresh_declared_providers(make_session_factory(engine), settings)
+        finally:
+            engine.dispose()
         return EXIT_OK
 
     if args.db_command == "downgrade":
@@ -653,6 +663,12 @@ def _database(settings: Settings) -> Iterator[sessionmaker[Session]]:
         session_factory = make_session_factory(engine)
         with session_factory() as session:
             close_abandoned_runs(session)
+        # Beside the two above, and for the same reason: things that must be
+        # true of the database for this build, made true once per command
+        # rather than hoped for. What each ratings provider is called and what
+        # its mark looks like is read by the API on every title page, so it
+        # cannot wait for the one phase that happens to write it.
+        refresh_declared_providers(session_factory, settings)
         yield session_factory
     finally:
         engine.dispose()

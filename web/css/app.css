@@ -459,6 +459,11 @@ img {
   color: var(--fg-faint);
 }
 
+/* The pill keeps its size in a row that is otherwise free to squeeze. */
+.suggest__option .score {
+  flex: none;
+}
+
 .suggest__empty {
   padding: var(--space-3) var(--space-2);
   color: var(--fg-faint);

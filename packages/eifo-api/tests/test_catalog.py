@@ -825,6 +825,18 @@ class TestSuggest:
         assert body["total"] >= 1
         assert "Fauda" in [item["name_en"] for item in suggested["titles"]]
 
+    def test_a_suggestion_carries_its_score(self, client: TestClient, catalog: Seeded) -> None:
+        """The dropdown shows the pill the cards show; it needs the number for it."""
+        body = client.get("/api/v1/suggest", params={"q": "fau"}).json()
+
+        assert [item["score"] for item in body["titles"] if item["id"] == catalog.fauda] == [85]
+
+    def test_an_unrated_title_is_still_suggested(self, client: TestClient, catalog: Seeded) -> None:
+        """Unrated is a score of its own, not a reason to drop a title."""
+        body = client.get("/api/v1/suggest", params={"q": "שטיסל", "available": "any"}).json()
+
+        assert [(item["id"], item["score"]) for item in body["titles"]] == [(catalog.shtisel, None)]
+
     def test_a_hebrew_prefix_finds_the_same_title(
         self, client: TestClient, catalog: Seeded
     ) -> None:

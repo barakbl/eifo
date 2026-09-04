@@ -239,7 +239,12 @@ class PersonCredit(BaseModel):
 
 
 class TitleSuggestion(BaseModel):
-    """A title, reduced to what a dropdown row shows."""
+    """A title, reduced to what a dropdown row shows.
+
+    The score is part of that: a suggestion is a preview of a result, and the
+    grid behind it leads with how good the thing is. Null means unrated, which
+    the pill says out loud rather than passing off as a nought.
+    """
 
     id: int
     type: TitleKind
@@ -247,6 +252,7 @@ class TitleSuggestion(BaseModel):
     name_en: str | None = None
     year: int | None = None
     poster_url: str | None = None
+    score: int | None = None
 
 
 class PersonSuggestion(BaseModel):

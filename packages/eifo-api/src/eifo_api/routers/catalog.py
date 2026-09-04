@@ -14,7 +14,7 @@ from enum import StrEnum
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import Select, func, select, text
+from sqlalchemy import Select, func, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from eifo_api.converters import (
@@ -28,6 +28,7 @@ from eifo_api.converters import (
 )
 from eifo_api.deps import SessionDep
 from eifo_api.schemas import (
+    Arrival,
     GenreOut,
     Page,
     PersonDetail,
@@ -159,6 +160,54 @@ def get_title(title_id: int, session: SessionDep) -> TitleDetail:
     if not titles:
         raise HTTPException(status_code=404, detail=f"No title with id {title_id}")
     return to_detail(titles[0])
+
+
+@router.get("/whats-new", response_model=Page[Arrival], summary="Recent arrivals, per service")
+def list_whats_new(
+    session: SessionDep,
+    sources: Annotated[str | None, Query(description="Comma-separated source keys")] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> Page[Arrival]:
+    """What has turned up on each service lately, newest first.
+
+    An arrival belongs to one service. Kung Fu Panda spent years on HBO Max and
+    landed on Netflix last night: that is news about Netflix, and asking what is
+    new on HBO Max must not answer with it. So the row here is the offer rather
+    than the title, and a title that arrived on two services in the same week is
+    two arrivals - which is what it was.
+
+    Only what can be watched now, on a service still tracked: something that
+    arrived and left again is not news anybody can act on.
+    """
+    arrivals = _arrivals(_csv(sources))
+
+    total = session.scalar(select(func.count()).select_from(arrivals.subquery())) or 0
+    rows = session.execute(
+        arrivals.order_by(_ADDED_AT.desc(), Availability.title_id.desc(), Availability.source_id)
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    ).all()
+
+    cards = {
+        title.id: to_card(title)
+        for title in hydrate_titles(session, [row.title_id for row in rows])
+    }
+    return Page(
+        items=[
+            Arrival(
+                added_at=row.added_at,
+                source_key=row.source_key,
+                source_name=row.source_name,
+                title=cards[row.title_id],
+            )
+            for row in rows
+            if row.title_id in cards
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
 
 
 @router.get("/people/{person_id}", response_model=PersonDetail, summary="One person's work")
@@ -425,6 +474,60 @@ def _filtered_ids(
         )
 
     statement = statement.where(Title.id.in_(_availability_ids(source_keys, available)))
+    return statement
+
+
+#: When a title arrived on a service: the earliest offer of any kind it has
+#: there. A film that turned up to rent on Monday and to buy on Friday arrived
+#: on Monday, and saying so twice would be reporting the price list, not news.
+_ADDED_AT = func.min(Availability.first_seen).label("added_at")
+
+
+def _arrivals(source_keys: list[str]) -> Select[tuple[int, int, str, str, dt.datetime]]:
+    """One row per title and service, dated when the title turned up there.
+
+    What a service was already carrying the first time Eifo swept it is left
+    out. Those titles did not arrive; they were found - the whole catalog of a
+    newly tracked service landing in one night would bury every real arrival
+    under it, and would be saying something untrue besides. A source with no
+    completed sync on record is taken at face value rather than silenced, which
+    is what a fixture or a hand-seeded database looks like.
+    """
+    watching_since = (
+        select(FetchRun.source_key, func.min(FetchRun.finished_at).label("since"))
+        .where(
+            FetchRun.phase == FetchPhase.SYNC,
+            FetchRun.status == FetchStatus.OK,
+            FetchRun.finished_at.is_not(None),
+        )
+        .group_by(FetchRun.source_key)
+        .subquery()
+    )
+
+    statement = (
+        select(
+            Availability.title_id,
+            Availability.source_id,
+            Source.key.label("source_key"),
+            Source.name.label("source_name"),
+            _ADDED_AT,
+        )
+        .join(Source, Source.id == Availability.source_id)
+        .outerjoin(watching_since, watching_since.c.source_key == Source.key)
+        .where(
+            Availability.is_current.is_(True),
+            Source.active.is_(True),
+            or_(
+                watching_since.c.since.is_(None),
+                Availability.first_seen > watching_since.c.since,
+            ),
+        )
+        .group_by(Availability.title_id, Availability.source_id, Source.key, Source.name)
+    )
+
+    if source_keys:
+        statement = statement.where(Source.key.in_(source_keys))
+
     return statement
 
 

@@ -196,6 +196,21 @@ class TitleCard(BaseModel):
     availability: list[AvailabilityOut] = Field(default_factory=list)
 
 
+class Arrival(BaseModel):
+    """A title as it turned up on one service.
+
+    The unit is the offer, not the title: a film that has been on HBO Max for
+    years and landed on Netflix last night is news about Netflix, and belongs
+    to Netflix alone. Asking what is new on HBO Max must not answer with it.
+    """
+
+    #: When the title first appeared on this service, as far as Eifo saw.
+    added_at: dt.datetime
+    source_key: str
+    source_name: str
+    title: TitleCard
+
+
 class TitleDetail(TitleCard):
     """A single title in full."""
 

@@ -142,6 +142,13 @@ const STRINGS = {
     "filters.scoreAny": "כל דירוג",
     "filters.scoreAtLeast": "{score} ומעלה",
     "filters.scoreNote": "כותרים שאין להם דירוג לא ייכללו.",
+    "filters.whatsNew": "מה חדש",
+    "whatsnew.title": "מה חדש",
+    "whatsnew.note": "מה נוסף לאחרונה לשירותים, החדש ביותר קודם. סרט שכבר היה בשירות אחר נחשב חדש בשירות שהוסיף אותו.",
+    "whatsnew.on": "חדש ב־{source}",
+    "whatsnew.allServices": "כל השירותים",
+    "whatsnew.empty": "אין כאן חדש",
+    "whatsnew.emptyBody": "עוד לא ראינו תוספות בשירות הזה. נסו שירות אחר.",
     "filters.myServices": "השירותים שלי",
     "filters.myServicesEmpty": "בחרו שירותים בהגדרות",
 
@@ -415,6 +422,14 @@ const STRINGS = {
     "filters.scoreAny": "Any score",
     "filters.scoreAtLeast": "{score} and up",
     "filters.scoreNote": "Titles with no score are left out.",
+    "filters.whatsNew": "What's new",
+    "whatsnew.title": "What's new",
+    "whatsnew.note":
+      "Lately on the services, newest first. A title already on one service counts as new on the service that just added it.",
+    "whatsnew.on": "New on {source}",
+    "whatsnew.allServices": "All services",
+    "whatsnew.empty": "Nothing new here",
+    "whatsnew.emptyBody": "No arrivals seen on this service yet. Try another one.",
     "filters.myServices": "My services",
     "filters.myServicesEmpty": "Pick your services in settings",
 

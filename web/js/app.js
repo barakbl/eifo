@@ -15,6 +15,7 @@ import { createMyListView } from "./views/mylist.js";
 import { createPersonView } from "./views/person.js";
 import { createSettingsView } from "./views/settings.js";
 import { createTitleView } from "./views/title.js";
+import { createWhatsNewView } from "./views/whatsnew.js";
 
 const SEARCH_DEBOUNCE_MS = 250;
 const STORAGE_LANGUAGE = "eifo.language";
@@ -268,6 +269,7 @@ async function start() {
   activeRouter = createRouter(
     {
       home: (route) => home(route),
+      new: (route) => whatsNew(route),
       title: (route) => title(route),
       people: (route) => person(route),
       me: (route) => mylist(route),
@@ -298,6 +300,7 @@ async function start() {
   const settings = createSettingsView({ mount: main, app, router, onSignedOut: () => signOut(router) });
   const person = createPersonView({ mount: main, app, router });
   const manage = createManageView({ mount: main, app, router });
+  const whatsNew = createWhatsNewView({ mount: main, app, router, items });
 
   const [sources, meta, user] = await Promise.all([
     listSources().catch(() => []),

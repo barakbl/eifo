@@ -9,6 +9,7 @@ import {
   filtersToParams,
   formatPrice,
   formatScore,
+  formatWhen,
   languageName,
   offerState,
   personName,
@@ -264,6 +265,42 @@ describe("runtimeBand", () => {
     assert.equal(runtimeBand(null), null);
     assert.equal(runtimeBand(undefined), null);
     assert.equal(runtimeBand("120"), null);
+  });
+});
+
+describe("formatWhen", () => {
+  const now = new Date(2026, 8, 4, 12, 0); // 4 September 2026, local time
+
+  it("says today and yesterday in words", () => {
+    assert.equal(formatWhen(new Date(2026, 8, 4, 1, 0), "en", now), "today");
+    assert.equal(formatWhen(new Date(2026, 8, 3, 23, 0), "en", now), "yesterday");
+  });
+
+  it("counts days rather than hours, so late last night is yesterday", () => {
+    // 13 hours earlier, but a different day - which is what a reader means.
+    assert.equal(formatWhen(new Date(2026, 8, 3, 23, 30), "en", now), "yesterday");
+  });
+
+  it("counts the days up to a month", () => {
+    assert.equal(formatWhen(new Date(2026, 7, 30, 9, 0), "en", now), "5 days ago");
+  });
+
+  it("goes back to a date once counting days stops helping", () => {
+    assert.equal(formatWhen(new Date(2026, 5, 1), "en", now), "1 Jun 2026");
+  });
+
+  it("says it in the reader's language", () => {
+    assert.equal(formatWhen(new Date(2026, 8, 3), "he", now), "אתמול");
+  });
+
+  it("shows a date rather than news from tomorrow", () => {
+    // A clock disagreeing with ours, not something that has not happened yet.
+    assert.equal(formatWhen(new Date(2026, 8, 6), "en", now), "6 Sept 2026");
+  });
+
+  it("has nothing to say about a date that is not one", () => {
+    assert.equal(formatWhen("not a date", "en", now), "");
+    assert.equal(formatWhen(null, "en", now), "");
   });
 });
 

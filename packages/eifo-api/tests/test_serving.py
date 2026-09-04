@@ -79,7 +79,7 @@ class TestCaching:
     def test_sources_and_genres_are_cacheable_too(
         self, client: TestClient, catalog: Seeded
     ) -> None:
-        for path in ("/api/v1/sources", "/api/v1/genres"):
+        for path in ("/api/v1/sources", "/api/v1/genres", "/api/v1/whats-new"):
             assert "ETag" in client.get(path).headers
 
     def test_the_etag_is_stable_for_identical_bodies(self) -> None:

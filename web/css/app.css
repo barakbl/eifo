@@ -599,6 +599,21 @@ img {
   font-size: var(--text-sm);
 }
 
+/* Not a filter: the way to the arrivals page, at the end of the row. Outlined
+   in the accent so it reads as somewhere to go rather than something to set. */
+.control--new {
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--line));
+  color: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.control--new:hover,
+.control--new:focus-visible {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 10%, var(--surface));
+}
+
 /* -- grid ----------------------------------------------------------------- */
 
 .results {
@@ -1327,6 +1342,56 @@ img {
   font-size: var(--text-xl);
   font-weight: var(--weight-black);
   letter-spacing: -0.02em;
+}
+
+/* -- what's new ----------------------------------------------------------- */
+
+.whatsnew__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-block-end: var(--space-4);
+}
+
+.whatsnew__head .page__title {
+  margin-block-end: var(--space-2);
+}
+
+.whatsnew__note {
+  margin: 0;
+  max-inline-size: 46ch;
+  color: var(--fg-faint);
+  font-size: var(--text-sm);
+}
+
+/* Which service it turned up on, and when. The service is the subject of the
+   card, so it gets the colour and the full name rather than a spine segment. */
+/* A line of text rather than a row of boxes, so a long service name wraps the
+   way a sentence does. Truncating it would be worse than wrapping: "Israel Film
+   Archive (Jerusalem)" clipped in a Hebrew line loses its beginning, not its
+   end, and a service named by its last word is a service nobody recognises. */
+.arrival {
+  display: block;
+  margin-block-start: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}
+
+.arrival__dot {
+  display: inline-block;
+  inline-size: 0.5rem;
+  block-size: 0.5rem;
+  margin-inline-end: 0.35rem;
+  border-radius: 50%;
+  background: var(--source-color, var(--fg-faint));
+}
+
+.arrival__when {
+  margin-inline-start: var(--space-2);
+  color: var(--fg-faint);
+  font-family: var(--font-data);
 }
 
 .tabs {

@@ -143,6 +143,40 @@ export function formatDate(value, language = "en") {
   return new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(date);
 }
 
+/* Past a month "37 days ago" stops meaning anything and a date starts meaning
+ * something again. */
+const RELATIVE_DAYS = 30;
+
+/**
+ * A day as "today", "yesterday" or "5 days ago" - and as a date once that
+ * stops being useful.
+ *
+ * Both halves come from Intl rather than from strings we would have to
+ * translate: the reader's own language already has words for this, and one of
+ * ours would be a worse copy of them. A date in the future is somebody's clock
+ * disagreeing with ours, not news from tomorrow, so it is shown as a date.
+ */
+export function formatWhen(value, language = "en", now = new Date()) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+
+  const days = Math.round((startOfDay(date) - startOfDay(now)) / 86_400_000);
+  if (days > 0 || days < -RELATIVE_DAYS) return formatDate(value, language);
+
+  const locale = language === "he" ? "he-IL" : "en-GB";
+  try {
+    // "auto" is what turns -1 into "yesterday" rather than "1 day ago".
+    return new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(days, "day");
+  } catch {
+    return formatDate(value, language);
+  }
+}
+
+/** Midnight, so "yesterday" is a day apart rather than 24 hours apart. */
+function startOfDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
 /**
  * The CSS custom property carrying a source's colour.
  *

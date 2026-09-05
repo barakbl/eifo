@@ -7,10 +7,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 from eifo_api import __version__
 from eifo_api.caching import CatalogCacheMiddleware
+from eifo_api.deps import require_membership
 from eifo_api.errors import install_error_handlers
 from eifo_api.logging_privacy import install_log_filters
 from eifo_api.routers import admin, auth, catalog, me, meta, reviews
@@ -82,12 +83,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_error_handlers(app)
     install_log_filters()
     app.add_middleware(CatalogCacheMiddleware)
-    app.include_router(meta.router, prefix=API_PREFIX)
-    app.include_router(catalog.router, prefix=API_PREFIX)
+    # The catalog surface, closed on a members-only instance. `auth` is not
+    # here and must never be: a gate somebody cannot reach the sign-in through
+    # is a locked building with the key inside.
+    gated = [Depends(require_membership)]
+    app.include_router(meta.router, prefix=API_PREFIX, dependencies=gated)
+    app.include_router(catalog.router, prefix=API_PREFIX, dependencies=gated)
     app.include_router(auth.router, prefix=API_PREFIX)
     app.include_router(me.router, prefix=API_PREFIX)
     app.include_router(admin.router, prefix=API_PREFIX)
-    app.include_router(reviews.router, prefix=API_PREFIX)
+    app.include_router(reviews.router, prefix=API_PREFIX, dependencies=gated)
 
     mount_images(app, Path(settings.images_dir))
     # Registered last: its catch-all route must not shadow the API.

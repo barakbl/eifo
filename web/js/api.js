@@ -260,6 +260,50 @@ export function setSourceEnabled(key, enabled) {
   });
 }
 
+/** Whether this instance is private, and which providers can open it.
+ *
+ * Never gated, and carries nothing about the catalog. It is what a signed-out
+ * visitor is answered with on a members-only instance, and the only thing the
+ * sign-in wall needs in order to have working buttons on it. */
+export function getAuthContext() {
+  return request("/auth/context");
+}
+
+/* Who may sign in. Administrators only; the endpoints 404 for anybody else. */
+
+export function listMembers() {
+  return request("/admin/members");
+}
+
+export function inviteMember(email, role = "member") {
+  return request("/admin/members", { method: "POST", body: { email, role } });
+}
+
+export function setMemberRole(email, role) {
+  return request(`/admin/members/${encodeURIComponent(email)}`, {
+    method: "PATCH",
+    body: { role },
+  });
+}
+
+export function removeMember(email) {
+  return request(`/admin/members/${encodeURIComponent(email)}`, { method: "DELETE" });
+}
+
+/* Your own API tokens. Nothing here is an administrator's business. */
+
+export function listMyTokens() {
+  return request("/me/tokens");
+}
+
+export function createMyToken(name) {
+  return request("/me/tokens", { method: "POST", body: { name } });
+}
+
+export function revokeMyToken(hint) {
+  return request(`/me/tokens/${encodeURIComponent(hint)}`, { method: "DELETE" });
+}
+
 /** Build a runs query from the filter chips. */
 export function runsQuery(
   { source = "", phase = "", status = "" } = {},

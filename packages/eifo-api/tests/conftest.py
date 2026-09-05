@@ -157,7 +157,12 @@ def sign_in(client: TestClient) -> SignIn:
                 follow_redirects=False,
             )
 
-        token: str = client.get("/api/v1/me").json()["csrf_token"]
+        # Empty when the sign-in was refused, which is now a thing that
+        # happens: an instance with an allowlist turns away anybody not on it,
+        # and a test for that should reach its assertion rather than dying in
+        # the fixture.
+        answered = client.get("/api/v1/me")
+        token: str = answered.json()["csrf_token"] if answered.status_code == 200 else ""
         return token
 
     return _sign_in

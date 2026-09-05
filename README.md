@@ -650,10 +650,52 @@ Restart, then sign out and back in - whether you are an administrator is settled
 session is authenticated. The link is in the account menu, beside **My list** and
 **Settings**, and the tab lives at `#/manage`.
 
-There is deliberately no way to become one from inside the product. The first administrator
-has to come from somewhere, and "whoever signed in first" is how a public instance hands
-itself to a stranger. Every endpoint behind the tab answers 404 rather than 403 to everybody
-else: a signed-in stranger is not owed the knowledge that it is there.
+The **first** administrator has to come from configuration - "whoever signed in first" is how
+a public instance hands itself to a stranger, and a configured address is the one thing that
+cannot be demoted through the product's own web interface. Beyond that, an administrator can
+promote anybody on the member list from the Manage tab, without editing a file or restarting.
+Every endpoint behind the tab answers 404 rather than 403 to everybody else: a signed-in
+stranger is not owed the knowledge that it is there.
+
+### Who can sign in
+
+By default anybody with a Google account can, and they get a viewer's account and nothing
+else. Set an administrator, or invite one address, and the instance closes: from then on only
+addresses on the list can sign in, and the **Members** panel in the Manage tab is where the
+list lives. Somebody turned away is told the site is invite-only rather than that sign-in
+failed, and nothing about them is written down.
+
+An empty list is not enforced, deliberately. Signing in is how somebody reaches the Manage
+tab and the Manage tab is where invitations are written, so an instance with nobody
+configured and nobody invited would have nobody who could ever be first.
+
+To close the catalog itself rather than just the Manage tab:
+
+```bash
+EIFO_MEMBERS_ONLY=true
+```
+
+Every catalog endpoint and every poster then answers 401 to a signed-out visitor - artwork
+too, because a poster path is guessable by counting - while the page still loads and offers
+a sign-in button. Configuration rather than a toggle in the Manage tab, for the same reason
+the first administrator is: whether the catalog is public is the deployment's decision.
+
+One consequence worth knowing: the list is keyed on the email address, and X does not always
+supply one. On an instance with a list, only Google sign-in can be matched against it.
+
+### Using the API from a script
+
+Sign in, open **Settings**, and create a token. It is shown once:
+
+```bash
+curl -H "Authorization: Bearer eifo_pat_…" http://localhost:3436/api/v1/titles
+```
+
+A token is a row, not a signed blob, so revoking one takes effect on the next request, and
+only its hash is stored - a copy of the database cannot be replayed as a login. It carries
+exactly the permissions of the account that made it, needs no CSRF header (nothing can make
+a browser attach somebody else's `Authorization`), and cannot mint another token: one leaked
+token should not become permanent access that revoking the original does not touch.
 
 Four panels, the first three on one screen:
 

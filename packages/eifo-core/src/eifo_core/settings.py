@@ -292,6 +292,17 @@ class Settings(BaseSettings):
     #: accepts the line a person would actually write.
     admin_emails: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
+    #: Whether the catalog itself is behind the sign-in, not merely the Manage
+    #: tab. Off, because an instance that wanted a private catalog would say so
+    #: and one that did not should not wake up after an upgrade with its front
+    #: page asking strangers to log in.
+    #:
+    #: Configuration rather than a row an administrator can toggle, for the same
+    #: reason ``admin_emails`` is: this decides whether the catalog is public,
+    #: and a decision of that size should not be one compromised session away.
+    #: Whoever deploys the instance owns it.
+    members_only: bool = False
+
     sources: dict[str, SourceConfig] = Field(default_factory=dict)
     scores: ScoresConfig = Field(default_factory=ScoresConfig)
     fetch: FetchConfig = Field(default_factory=FetchConfig)

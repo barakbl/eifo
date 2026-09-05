@@ -2435,3 +2435,105 @@ img {
     flex-wrap: wrap;
   }
 }
+
+
+/* ---------------------------------------------------------------- members
+ *
+ * Who may sign in, and the tokens they issue. Both are lists of one line each
+ * where the identifier is the point, so both give it the data font and let the
+ * controls sit at the end of the row rather than in a column of their own -
+ * these lists are short, and a table's worth of structure would be scaffolding
+ * around three rows.
+ */
+
+.members__invite,
+.tokens__create {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-4) 0;
+}
+
+.members__invite .input,
+.tokens__create .input {
+  flex: 1 1 16rem;
+}
+
+.members__row,
+.tokens__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--line);
+}
+
+.members__email,
+.tokens__name {
+  flex: 1 1 14rem;
+  font-family: var(--font-data);
+  word-break: break-all;
+}
+
+.members__role {
+  font-size: var(--text-xs);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm, 4px);
+  border: 1px solid var(--line);
+  color: var(--fg-muted);
+}
+
+/* An administrator is the row worth spotting on the way past. */
+.members__role--admin {
+  border-color: var(--accent, var(--line-strong));
+  color: var(--accent, var(--fg));
+}
+
+.members__note,
+.tokens__hint,
+.tokens__used {
+  color: var(--fg-faint);
+  font-size: var(--text-xs);
+}
+
+.tokens__hint {
+  font-family: var(--font-data);
+}
+
+.members__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-inline-start: auto;
+}
+
+.tokens__row .button {
+  margin-inline-start: auto;
+}
+
+/* The one moment a token is readable. Loud on purpose: there is no second
+ * chance to copy it, and a person who misses that has to make another. */
+.tokens__revealed:empty {
+  display: none;
+}
+
+.tokens__warning {
+  color: var(--fg);
+  font-size: var(--text-sm);
+  margin: var(--space-3) 0 var(--space-2);
+}
+
+.tokens__value {
+  width: 100%;
+  font-family: var(--font-data);
+}
+
+/* The sign-in wall's buttons: one per provider, side by side under the
+ * sentence that explains why they are there. */
+.members__wallActions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}

@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.12.0](https://github.com/barakbl/eifo/compare/v0.11.0...v0.12.0) (2026-09-05)
+
+
+### Features
+
+* sign-in is by invitation, and the API has tokens of its own ([c3a68ef](https://github.com/barakbl/eifo/commit/c3a68ef8857b7f7c7c5d8657a5d5386042491fb0))
+* sign-in is by invitation, and the API has tokens of its own ([657dfc3](https://github.com/barakbl/eifo/commit/657dfc3fd0c00050c2d6eaf4118ce92272f3785a))
+
+
+### Bug Fixes
+
+* say where sign-in goes, and let the API be heard at all ([592aa6d](https://github.com/barakbl/eifo/commit/592aa6d8178278445bc8d8e372c54479b8e80773))
+* say where sign-in goes, and let the API be heard at all ([51b2350](https://github.com/barakbl/eifo/commit/51b23506b43698aa399e8220308cdb8048e5c81e))
+
+
+### Performance
+
+* the people dropdown stops reading the people table to rank ([25204c5](https://github.com/barakbl/eifo/commit/25204c56eb82e324898694f701062b853a9164b9))
+* the people dropdown stops reading the people table to rank ([8577b3b](https://github.com/barakbl/eifo/commit/8577b3b693f7dcc862f8faec5fa0d0007bfbe4ce))
+
 ## [0.11.0](https://github.com/barakbl/eifo/compare/v0.10.0...v0.11.0) (2026-09-05)
 
 

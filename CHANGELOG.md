@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/barakbl/eifo/compare/v0.13.1...v0.14.0) (2026-09-05)
+
+
+### Features
+
+* the artwork phase writes through the API, not the disk ([#107](https://github.com/barakbl/eifo/issues/107)) ([903225e](https://github.com/barakbl/eifo/commit/903225e70b3423c91142758d0f69e378085da9cf))
+
 ## [0.13.1](https://github.com/barakbl/eifo/compare/v0.13.0...v0.13.1) (2026-09-05)
 
 

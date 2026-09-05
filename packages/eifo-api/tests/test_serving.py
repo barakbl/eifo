@@ -18,13 +18,39 @@ class TestFtsQuery:
         assert fts_query("fauda") == '"fauda"*'
 
     def test_only_the_last_term_is_a_prefix(self) -> None:
-        assert fts_query("waltz with bashir") == '"waltz" "with" "bashir"*'
+        assert fts_query("waltz with bashir") == '"waltz" AND "with" AND "bashir"*'
 
     def test_strips_punctuation(self) -> None:
-        assert fts_query("marvel's, daredevil!") == '"marvel" "s" "daredevil"*'
+        assert fts_query("marvel's, daredevil!") == '"marvel" AND "s" AND "daredevil"*'
 
-    def test_keeps_hebrew_terms(self) -> None:
-        assert fts_query("פאודה") == '"פאודה"*'
+    def test_a_hebrew_term_is_also_tried_with_the_letters_hebrew_glues_on(self) -> None:
+        """Hebrew writes the definite article as part of the word.
+
+        So "the godfather" is one token, הסנדק, and somebody typing the noun
+        itself - סנדק - matched one unrelated title while הסנדק matched eight.
+        A prefix wildcard only grows a term at the end; this grows it at the
+        front, where Hebrew needs it.
+        """
+        result = fts_query("סנדק")
+
+        assert result is not None
+        assert result.startswith('("סנדק"* OR "הסנדק"*')
+        assert '"שסנדק"*' in result
+
+    def test_a_hebrew_term_that_already_has_a_prefix_is_left_alone(self) -> None:
+        # Growing a second prefix onto a word that has one asks for a form
+        # nobody writes, and doubles the terms for nothing.
+        assert fts_query("הסנדק") == '"הסנדק"*'
+
+    def test_a_latin_term_is_not_given_hebrew_prefixes(self) -> None:
+        assert fts_query("godfather") == '"godfather"*'
+
+    def test_only_the_term_being_typed_is_expanded(self) -> None:
+        # The earlier terms are settled; only the last one is half-written.
+        result = fts_query("הבית של סנדק")
+
+        assert result is not None
+        assert result.startswith('"הבית" AND "של" AND (')
 
     @pytest.mark.parametrize("query", ["", "   ", "!!!", "--", "()"])
     def test_input_with_no_terms_yields_no_filter(self, query: str) -> None:
@@ -36,7 +62,7 @@ class TestFtsQuery:
         result = fts_query(query)
 
         if result is not None:
-            assert result.startswith('"')
+            assert result.startswith(('"', "("))
 
     def test_a_very_long_query_is_capped(self) -> None:
         result = fts_query(" ".join(f"term{index}" for index in range(50)))

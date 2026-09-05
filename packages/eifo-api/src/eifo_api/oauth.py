@@ -15,6 +15,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, ClassVar
+from urllib.parse import urlparse
 
 import httpx
 from authlib.integrations.httpx_client import OAuth2Client
@@ -244,6 +245,50 @@ def build_provider(provider: AuthProvider, settings: Settings) -> OAuthProvider:
         client_id=client_id,
         client_secret=client_secret,
         redirect_uri=redirect_uri(provider, settings),
+    )
+
+
+#: Hosts that mean "this machine". A ``public_origin`` naming one of these is a
+#: development instance and nothing sits in front of it, which is what makes a
+#: port mismatch checkable there and unknowable anywhere else.
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "[::1]", "::1"})
+
+
+def origin_mismatch(settings: Settings, arriving_at: str) -> str | None:
+    """Why sign-in is about to fail, when it is about to fail for this reason.
+
+    ``public_origin`` is what the redirect URI is built from, so a stale one
+    sends the provider somewhere nothing is listening - and the only symptom is
+    a sign-in that dies at a dead port, several redirects away from the setting
+    that caused it. This instance had it happen: the port moved from 8000 to
+    3436 and one config file did not.
+
+    Only for a loopback origin, and that restriction is the whole design.
+    Behind a proxy the request arrives at an internal address while
+    ``public_origin`` is the external one, and they are *supposed* to differ -
+    warning there would fire on every real deployment until nobody read it. A
+    loopback origin means nothing is in front of us, so a difference is a fault.
+
+    Returns the sentence to log, or None when there is nothing wrong to say.
+    """
+    configured = urlparse(settings.public_origin.rstrip("/"))
+    if configured.hostname not in LOOPBACK_HOSTS:
+        return None
+
+    actual = urlparse(arriving_at.rstrip("/"))
+    if (configured.hostname, configured.port) == (actual.hostname, actual.port):
+        return None
+    if actual.hostname not in LOOPBACK_HOSTS:
+        # Reached by some other name than the one it is configured under. Not
+        # necessarily wrong, and not this check's business to guess about.
+        return None
+
+    return (
+        f"public_origin is {settings.public_origin!r} but this request arrived at "
+        f"{arriving_at!r}. Sign-in sends the provider a redirect URI built from "
+        f"public_origin, so it will fail - at a dead port if nothing is listening "
+        f"there, or with redirect_uri_mismatch if the provider has not been told "
+        f"about it. Set public_origin to the address you actually open."
     )
 
 

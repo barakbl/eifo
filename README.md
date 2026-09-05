@@ -872,6 +872,11 @@ than as silently missing data.
 Small modules with one job, public functions typed and docstringed, comments that explain
 *why* rather than narrate the code, and Conventional Commits.
 
+Pull requests land with **rebase** or **squash**, never a merge commit - the button is off
+in the repository settings. A merge commit puts two commits on `main` for one pull request,
+and release-please credits the same conventional title to both, which is how the changelog
+came to list every entry twice.
+
 If this is your first change here, add yourself to [AUTHORS](AUTHORS) as the last commit
 of the pull request. That is the whole formality - there is no CLA.
 

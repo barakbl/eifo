@@ -25,10 +25,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from eifo_core.enums import FetchPhase, FetchStatus
+from eifo_core.ingest import ABANDONED_AFTER, REMOTE_PHASES
 from eifo_core.models import FetchRun
 from eifo_core.types import utcnow
 
@@ -231,15 +232,39 @@ def close_run(
 def close_abandoned_runs(session: Session) -> int:
     """Mark runs left open by a process that is no longer here.
 
-    Safe to assert because the caller holds the fetcher lock: it is the only
-    fetcher there is, and it has not opened anything yet, so every row still
-    RUNNING belongs to a run that ended without being able to say so.
+    This used to sweep every RUNNING row, and the justification was the lock:
+    the caller holds the only one, so it is the only fetcher there is, and
+    anything still open belongs to a run that ended without being able to say
+    so.
+
+    That justification is gone. The artwork phase writes through the API, so a
+    fetcher on somebody else's laptop can be mid-run against this catalog while
+    this process holds a lock that means nothing to it. Sweeping on sight would
+    mark that live run crashed - and the commonest way to trigger it would be
+    running any ``eifo-fetch`` command on the server while a remote fetcher was
+    working.
+
+    So age decides for those, on the same threshold the API sweeps by: a run
+    open for a day is not a run still going, whoever started it.
+
+    Only for those. Every other phase still opens the database directly, so it
+    can only be running on the machine holding the lock, and waiting a day to
+    say a sync died would be a worse answer than the one this gave before - a
+    dead source would sit there reading "running" until tomorrow.
 
     Returns:
         How many were marked, which is normally zero.
     """
     abandoned = list(
-        session.scalars(select(FetchRun).where(FetchRun.status == FetchStatus.RUNNING)).all()
+        session.scalars(
+            select(FetchRun).where(
+                FetchRun.status == FetchStatus.RUNNING,
+                or_(
+                    FetchRun.phase.not_in(REMOTE_PHASES),
+                    FetchRun.started_at < utcnow() - ABANDONED_AFTER,
+                ),
+            )
+        ).all()
     )
     if not abandoned:
         return 0

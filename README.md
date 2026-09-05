@@ -357,6 +357,62 @@ sync creates, and artwork needs the URLs enrichment fills in. The start time com
 `[schedule]` in `config/eifo.toml`. They can still be run one at a time
 (`eifo-fetch sync`, `enrich`, `images`) when you want just one of them.
 
+**The artwork phase needs an API token**, because it no longer writes posters itself - it
+posts them to `/api/v1/ingest`. On a single-box install that is the API on this machine and
+the only thing to set is the token:
+
+```bash
+eifo-fetch token create fetcher          # prints it once
+export EIFO_API_TOKEN=eifo_pat_…
+```
+
+Without one, `eifo-fetch images` says so and stops rather than failing later with a 401
+from a URL you never typed. The token must belong to an administrator; anyone else gets a
+404, which is what this API says instead of "you are not allowed".
+
+### A fetcher somewhere else
+
+The point of the change: the machine that downloads the posters no longer has to be the
+machine that keeps them. Point the fetcher at the server and it fills that catalog instead
+of a local one:
+
+```bash
+export EIFO_API_BASE_URL=https://eifo.example.com
+export EIFO_API_TOKEN=eifo_pat_…          # issued on the server
+uv run eifo-fetch images
+```
+
+It asks the server which titles are missing artwork, downloads and resizes them locally,
+and uploads them a hundred at a time as a `.tar.gz`. Nothing is left behind: the staging
+directory is temporary, because those are not this machine's posters.
+
+Interrupting it costs at most the batch in flight. What is outstanding is derived from the
+catalog - titles with no `poster_path` - and never from anything the fetcher remembers, so
+the next run simply picks up where this one stopped. The same is true of a poster the
+server refuses: it is reported per title with the reason, the other ninety-nine in the
+batch are stored, and that one is offered again next time.
+
+**A run that could not reach the server still leaves a trace.** The record of a run lives
+in the catalog, and the catalog is reached over HTTP - so the one failure that cannot
+record itself is the failure to reach it. That would leave a broken night looking exactly
+like a night nobody scheduled anything, which is the state the run log exists to abolish.
+So the fetcher writes what happened beside its lock file, and the next run that *does*
+reach the server posts it as the failed run it was:
+
+```
+id  phase   status   started    stats
+1   images  crashed  03:00:04   {"errors": ["could not reach the API: No API token configured…"]}
+2   images  ok       03:00:12   {"downloaded": 412, "failed": 0}
+```
+
+A fetcher killed outright - power cut, closed lid - writes nothing, because it had no
+chance to. Its row is already open on the server, though, and the server closes it once it
+is old enough to be certainly dead. Between the two, a run that vanishes leaves a trace
+whichever way it went.
+
+Only artwork works this way so far. `sync` and `enrich` still need the database on the
+same machine.
+
 <details>
 <summary><b>On macOS, use launchd rather than cron</b></summary>
 
@@ -763,15 +819,25 @@ to invent an account: with more than one, name whose it is with `--email`.
 
 ```
   streaming services ──► eifo-fetcher ──► SQLite ◄── eifo-api ──► web client
-   ratings providers        plugins                                (no build)
+   ratings providers        plugins                      ▲          (no build)
+                              └──────────────────────────┘
+                               artwork, over HTTP
 ```
 
 | Path | What it is |
 |---|---|
-| `packages/eifo-core` | Settings, SQLAlchemy schema, Alembic migrations - the only contract between the services |
+| `packages/eifo-core` | Settings, SQLAlchemy schema, Alembic migrations, and the ingest wire format - the contract between the services |
 | `packages/eifo-fetcher` | `eifo-fetch` CLI: catalog sync, enrichment, artwork |
 | `packages/eifo-api` | FastAPI REST service; also serves the client and the images |
 | `web/` | Static HTML + JS client, vanilla ES modules |
+
+**Artwork is the exception, and it is the first of several.** Sync and enrichment
+write to SQLite directly, which works exactly as long as the two halves share a disk.
+The artwork phase does not: it asks the API what needs downloading, fetches and resizes
+the posters, and posts them back as a `.tar.gz` - so it can run on a laptop and fill a
+catalog on a server whose filesystem it cannot see. `eifo_core.ingest` holds the shape of
+that exchange, for the same reason the schema lives in core: two definitions of what an
+upload looks like would be two things that must never disagree.
 
 Three deliberate choices, in case you were about to ask:
 

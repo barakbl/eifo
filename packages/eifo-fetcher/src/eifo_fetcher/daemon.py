@@ -22,10 +22,13 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
+from eifo_core.enums import FetchPhase
 from eifo_core.fts import ensure_search_triggers
 from eifo_core.settings import Settings
+from eifo_fetcher import attempts
 from eifo_fetcher.heartbeat import ping
 from eifo_fetcher.http import HttpClient
+from eifo_fetcher.ingest import IngestClient
 from eifo_fetcher.lock import AlreadyRunningError, single_flight
 from eifo_fetcher.pipeline import requested_backfills
 from eifo_fetcher.runner import enrich_all, fetch_images, sync_all
@@ -82,7 +85,11 @@ def _run_phase(settings: Settings, phase: str) -> bool:
             elif phase == "enrich":
                 enrich_all(session_factory, settings, http=http)
             else:
-                fetch_images(session_factory, settings, http=http)
+                with (
+                    attempts.attempted(settings, FetchPhase.IMAGES),
+                    IngestClient.from_settings(settings) as api,
+                ):
+                    fetch_images(settings, http=http, api=api)
         return True
     except Exception:
         # A scheduled run must never take the daemon down with it.

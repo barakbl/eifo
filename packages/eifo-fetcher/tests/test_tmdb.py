@@ -12,9 +12,7 @@ import pytest
 import respx
 from pydantic import SecretStr
 
-from eifo_core.db import create_engine_from_settings, make_session_factory
 from eifo_core.enums import OfferType, SourceKind, TitleKind
-from eifo_core.models import Base
 from eifo_core.settings import Settings, SourceConfig
 from eifo_fetcher.enrichers.tmdb_meta import _client_from as _enricher_client_from
 from eifo_fetcher.http import HttpClient, RateLimiter
@@ -366,7 +364,7 @@ class TestTheRateItIsAskedAt:
         assert self._spacing(limited, "www.mako.co.il") == pytest.approx(1.0)
 
     def test_the_image_cdn_is_raised_for_the_artwork_phase(
-        self, limited: HttpClient, tmp_path: Any
+        self, limited: HttpClient, tmp_path: Any, ingest_api: Any
     ) -> None:
         """A static CDN was being asked for one poster a second."""
         settings = Settings(
@@ -374,13 +372,10 @@ class TestTheRateItIsAskedAt:
             db_url="sqlite:///:memory:",
             images_dir=tmp_path,
             tmdb={"rate_limit_rps": 10.0},
+            api_token="eifo_pat_test",
         )
-        engine = create_engine_from_settings(settings)
-        Base.metadata.create_all(engine)
-        try:
-            fetch_images(make_session_factory(engine), settings, http=limited)
-        finally:
-            engine.dispose()
+        with ingest_api.client() as api:
+            fetch_images(settings, http=limited, api=api)
 
         assert self._spacing(limited, IMAGE_HOST) == pytest.approx(0.1)
 

@@ -11,11 +11,19 @@ it, and would turn a genuinely missing API path into a 200 page.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse, Response
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session, sessionmaker
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from eifo_api.security import SESSION_COOKIE, bearer_token
+from eifo_api.sessions import resolve_api_token, resolve_session
+from eifo_core.settings import Settings
 
 logger = logging.getLogger("eifo.api.static")
 
@@ -66,6 +74,52 @@ def is_api_path(path: str) -> bool:
     return any(path.startswith(prefix) for prefix in API_PREFIXES)
 
 
+class MembersOnlyImages(BaseHTTPMiddleware):
+    """Close the artwork to strangers when the catalog is closed to them.
+
+    Artwork is catalog. A poster path is ``/images/posters/<title id>/w500.jpg``
+    - guessable by counting - so leaving the mount open on a private instance
+    would publish, one integer at a time, exactly the thing the sign-in was put
+    there to keep private.
+
+    Middleware rather than a dependency because a ``StaticFiles`` mount has no
+    dependencies to hang one on. It does the same work ``require_membership``
+    does, through the same functions, so the two cannot come to different
+    conclusions.
+    """
+
+    async def dispatch(self, request: Request, call_next: Callable[..., Any]) -> Response:
+        if not request.url.path.startswith("/images/"):
+            return await call_next(request)
+
+        settings: Settings = request.app.state.settings
+        if not settings.members_only:
+            return await call_next(request)
+
+        factory: sessionmaker[Session] = request.app.state.session_factory
+        with factory() as session:
+            allowed = _has_a_caller(session, request)
+
+        if allowed:
+            return await call_next(request)
+        # Never cached, whatever the mount says about artwork being immutable:
+        # a shared cache holding a 401 would serve it to a member who signs in
+        # afterwards, and holding the opposite would be worse.
+        return JSONResponse(
+            {"detail": "This catalog is for members. Please sign in."},
+            status_code=401,
+            headers={"Cache-Control": "no-store"},
+        )
+
+
+def _has_a_caller(session: Session, request: Request) -> bool:
+    """Whether this request carries a live session or a live API token."""
+    if resolve_session(session, request.cookies.get(SESSION_COOKIE)) is not None:
+        return True
+    token = bearer_token(request.headers.get("Authorization"))
+    return resolve_api_token(session, token) is not None
+
+
 def mount_images(app: FastAPI, images_dir: Path) -> None:
     """Serve downloaded artwork at ``/images``.
 
@@ -73,6 +127,7 @@ def mount_images(app: FastAPI, images_dir: Path) -> None:
     that should not stop the API from starting.
     """
     images_dir.mkdir(parents=True, exist_ok=True)
+    app.add_middleware(MembersOnlyImages)
     app.mount("/images", ImmutableStaticFiles(directory=images_dir), name="images")
 
 

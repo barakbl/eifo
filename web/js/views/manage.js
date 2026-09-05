@@ -11,7 +11,17 @@
  * to be the only one that is right.
  */
 
-import { getAdminStats, getRun, listAdminSources, listRuns, setSourceEnabled } from "../api.js";
+import {
+  getAdminStats,
+  getRun,
+  inviteMember,
+  listAdminSources,
+  listMembers,
+  listRuns,
+  removeMember,
+  setMemberRole,
+  setSourceEnabled,
+} from "../api.js";
 import { formatDate } from "../format.js";
 import { el, replace, stateBlock } from "../ui.js";
 import { createReviewView } from "./review.js";
@@ -22,6 +32,7 @@ const TABS = [
   { key: "overview", label: "manage.tab.overview" },
   { key: "runs", label: "manage.tab.runs" },
   { key: "review", label: "manage.tab.review" },
+  { key: "members", label: "manage.tab.members" },
 ];
 
 export function createManageView({ mount, app, router }) {
@@ -64,6 +75,7 @@ export function createManageView({ mount, app, router }) {
 
     if (tab.key === "review") return review.mount(panel, params);
     if (tab.key === "runs") return runsPanel(panel, { t, app, params, router });
+    if (tab.key === "members") return membersPanel(panel, { t, user });
     return overviewPanel(panel, { t, app });
   };
 }
@@ -677,4 +689,137 @@ async function toggleLog(button, slot, runId, t) {
   } finally {
     button.disabled = false;
   }
+}
+
+
+/* Who may sign in.
+ *
+ * The list an instance is actually governed by, so it says where each row came
+ * from: an address named in the configuration file cannot be edited here, and
+ * offering a button that the server will refuse is worse than not offering one.
+ */
+async function membersPanel(panel, { t, user }) {
+  let rows;
+  try {
+    rows = await listMembers();
+  } catch (error) {
+    replace(
+      panel,
+      stateBlock({
+        title: t("error.title"),
+        body: error?.detail || t("error.body"),
+      }),
+    );
+    return null;
+  }
+
+  const problem = el("p", { class: "form__problem", role: "alert" });
+  const table = el("div", { class: "members" });
+
+  const draw = (current) => {
+    replace(
+      table,
+      current.length
+        ? current.map((row) => memberRow(row, { t, user, refresh, problem }))
+        : el("p", { class: "state__body", text: t("members.none") }),
+    );
+  };
+
+  async function refresh() {
+    problem.textContent = "";
+    try {
+      draw(await listMembers());
+    } catch (error) {
+      problem.textContent = error?.detail || t("error.body");
+    }
+  }
+
+  draw(rows);
+  replace(panel, [
+    el("h2", { class: "section__heading", text: t("members.title") }),
+    el("p", { class: "state__body", text: t("members.explain") }),
+    inviteForm({ t, refresh, problem }),
+    problem,
+    table,
+  ]);
+  return null;
+}
+
+function inviteForm({ t, refresh, problem }) {
+  const email = el("input", {
+    class: "input",
+    type: "email",
+    name: "email",
+    required: true,
+    placeholder: t("members.emailPlaceholder"),
+    "aria-label": t("members.email"),
+  });
+  const role = el("select", { class: "input", name: "role", "aria-label": t("members.role") }, [
+    el("option", { value: "member", text: t("members.roleMember") }),
+    el("option", { value: "admin", text: t("members.roleAdmin") }),
+  ]);
+
+  return el(
+    "form",
+    {
+      class: "members__invite",
+      onSubmit: async (event) => {
+        event.preventDefault();
+        problem.textContent = "";
+        try {
+          await inviteMember(email.value.trim(), role.value);
+          email.value = "";
+          await refresh();
+        } catch (error) {
+          problem.textContent = error?.detail || t("members.inviteFailed");
+        }
+      },
+    },
+    [email, role, el("button", { class: "button", type: "submit", text: t("members.invite") })],
+  );
+}
+
+/* One address, and what can be done about it.
+ *
+ * Two rows carry no buttons: one named in the configuration file, which this
+ * page cannot change, and your own, because removing yourself from the list you
+ * are reading is a way to lose an instance rather than a feature. */
+function memberRow(row, { t, user, refresh, problem }) {
+  const isSelf = row.email === (user?.email ?? "").toLowerCase();
+  const act = async (run) => {
+    problem.textContent = "";
+    try {
+      await run();
+      await refresh();
+    } catch (error) {
+      problem.textContent = error?.detail || t("error.body");
+    }
+  };
+
+  return el("div", { class: "members__row" }, [
+    el("span", { class: "members__email", text: row.email }),
+    el("span", {
+      class: `members__role members__role--${row.role}`,
+      text: row.role === "admin" ? t("members.roleAdmin") : t("members.roleMember"),
+    }),
+    row.from_config
+      ? el("span", { class: "members__note", text: t("members.fromConfig") })
+      : isSelf
+        ? el("span", { class: "members__note", text: t("members.you") })
+        : el("span", { class: "members__actions" }, [
+            el("button", {
+              class: "button button--quiet",
+              type: "button",
+              text: row.role === "admin" ? t("members.demote") : t("members.promote"),
+              onClick: () =>
+                act(() => setMemberRole(row.email, row.role === "admin" ? "member" : "admin")),
+            }),
+            el("button", {
+              class: "button button--quiet",
+              type: "button",
+              text: t("members.remove"),
+              onClick: () => act(() => removeMember(row.email)),
+            }),
+          ]),
+  ]);
 }

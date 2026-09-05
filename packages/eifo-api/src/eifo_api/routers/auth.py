@@ -16,8 +16,10 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from eifo_api import members
 from eifo_api.deps import CsrfDep, PrincipalDep, SessionDep, SettingsDep
-from eifo_api.oauth import Identity, OAuthError, build_provider
+from eifo_api.oauth import Identity, OAuthError, build_provider, configured_providers
+from eifo_api.schemas import AuthContext
 from eifo_api.security import (
     OAUTH_COOKIE,
     OAuthHandoff,
@@ -37,6 +39,11 @@ from eifo_core.types import utcnow
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+#: The outcome for an address that completed a provider sign-in but is not on
+#: the allowlist. Not one of the provider's errors - nothing went wrong at the
+#: provider - so it is named here.
+NOT_INVITED = "not_invited"
+
 logger = logging.getLogger("eifo.api.auth")
 
 #: Long enough that guessing is hopeless; it only has to survive one redirect.
@@ -46,6 +53,23 @@ VERIFIER_BYTES = 48
 #: Provider-side outcomes that mean "the person changed their mind", which is
 #: not an error to shout about - they go back to the app.
 CANCELLED_ERRORS = frozenset({"access_denied", "user_cancelled_login", "user_cancelled_authorize"})
+
+
+@router.get("/context", response_model=AuthContext, summary="How to get in")
+def context(settings: SettingsDep) -> AuthContext:
+    """Whether this instance is private, and which providers can open it.
+
+    Deliberately outside the gate, and deliberately carrying nothing about the
+    catalog - no counts, no source names, nothing that says what is inside. It
+    exists because the sign-in wall needs two facts to render, and both of them
+    used to arrive on `/meta`: a members-only instance answered 401 there and
+    the client was left showing an error with no button on it. A gate whose key
+    is behind the gate is not a gate.
+    """
+    return AuthContext(
+        members_only=settings.members_only,
+        login_providers=configured_providers(settings),
+    )
 
 
 @router.get("/login/{provider}", summary="Start sign-in with a provider")
@@ -98,6 +122,14 @@ def callback(
         raise HTTPException(
             status_code=502, detail="The sign-in provider could not confirm who you are."
         ) from None
+
+    # Checked before anything is written. An instance that has decided who may
+    # come in should not be storing rows about people it is turning away - and
+    # a `users` row created here would be exactly that, complete with the name
+    # and address of somebody who was refused.
+    if not members.may_sign_in(session, settings, identity.email):
+        logger.info("sign-in refused: not invited", extra={"provider": provider.value})
+        return _abandon(NOT_INVITED, settings)
 
     user = _upsert_user(session, identity)
     token = start_session(session, user)
@@ -173,6 +205,12 @@ def _abandon(error: str, settings: Settings) -> RedirectResponse:
     Someone who pressed "cancel" is not looking at a problem document; they are
     looking for the page they came from.
     """
+    # Three outcomes, because they need three different sentences. "Sign-in
+    # failed, please try again" is actively unhelpful to somebody who was not
+    # invited: trying again is the one thing that will never work.
+    if error == NOT_INVITED:
+        return RedirectResponse(_app_url(settings, f"#/?login={NOT_INVITED}"), status_code=302)
+
     cancelled = error in CANCELLED_ERRORS
     if not cancelled:
         logger.info("provider refused sign-in", extra={"oauth_error": error})

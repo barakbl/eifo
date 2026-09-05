@@ -77,6 +77,18 @@ class AuthProvider(StrEnum):
     X = "x"
 
 
+class MemberRole(StrEnum):
+    """What an invited address may do once it signs in.
+
+    Two roles and no more. A third would need a reason, and "can see the
+    catalog" against "can change what the catalog collects" is the only line
+    this instance has ever drawn.
+    """
+
+    MEMBER = "member"
+    ADMIN = "admin"
+
+
 class ItemStatus(StrEnum):
     """The name of one of a user's lists.
 

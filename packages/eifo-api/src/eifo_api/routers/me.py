@@ -15,6 +15,9 @@ from sqlalchemy.orm import Session
 from eifo_api.converters import hydrate_titles, to_user, to_user_item
 from eifo_api.deps import CsrfDep, PrincipalDep, SessionDep
 from eifo_api.schemas import (
+    ApiTokenCreate,
+    ApiTokenCreated,
+    ApiTokenOut,
     ItemUpsert,
     ListService,
     MeResponse,
@@ -23,13 +26,21 @@ from eifo_api.schemas import (
     UserItemOut,
     UserOut,
 )
+from eifo_api.security import hash_token, new_api_token
 from eifo_core.enums import ItemStatus
-from eifo_core.models import Availability, Source, Title, User, UserItem
+from eifo_core.models import ApiToken, Availability, Source, Title, User, UserItem
 from eifo_core.types import utcnow
 
 router = APIRouter(tags=["user"])
 
 MAX_PAGE_SIZE = 100
+
+#: How many tokens one account may hold at once.
+#:
+#: Not a security boundary - it is a tidiness one. A list nobody prunes is a
+#: list nobody reads, and the value of `last_used_at` is being able to see
+#: which of a handful is doing nothing.
+MAX_TOKENS = 10
 DEFAULT_PAGE_SIZE = 24
 
 
@@ -75,6 +86,110 @@ def delete_me(principal: PrincipalDep, _csrf: CsrfDep, session: SessionDep) -> R
     catalog data we might want back (docs.internal/09-auth-privacy.md).
     """
     session.delete(principal.user)
+    session.commit()
+    return Response(status_code=204)
+
+
+#: How much of a token is shown afterwards. Enough to tell two apart at a
+#: glance, far short of enough to reconstruct one: what follows the prefix is
+#: 256 bits, and four characters of it is not a start.
+HINT_LENGTH = 4
+
+
+@router.get("/me/tokens", response_model=list[ApiTokenOut], summary="Your API tokens")
+def list_my_tokens(principal: PrincipalDep, session: SessionDep) -> list[ApiTokenOut]:
+    """Every token you hold, newest first.
+
+    Without the tokens. They are shown once, at creation, and nothing here can
+    show one again - which is the point of storing only the hash.
+    """
+    rows = session.scalars(
+        select(ApiToken)
+        .where(ApiToken.user_id == principal.user.id)
+        .order_by(ApiToken.created_at.desc())
+    ).all()
+    return [
+        ApiTokenOut(
+            name=row.name,
+            hint=row.token_hash[:HINT_LENGTH],
+            created_at=row.created_at,
+            last_used_at=row.last_used_at,
+        )
+        for row in rows
+    ]
+
+
+@router.post(
+    "/me/tokens",
+    response_model=ApiTokenCreated,
+    status_code=201,
+    summary="Issue an API token",
+)
+def create_my_token(
+    body: ApiTokenCreate,
+    principal: PrincipalDep,
+    _csrf: CsrfDep,
+    session: SessionDep,
+) -> ApiTokenCreated:
+    """Issue a token, and return it the one time it is readable.
+
+    Only a browser may do this, never a token. A credential that can mint more
+    credentials turns one leaked token into permanent access that revoking the
+    original does not touch - so minting stays with the thing that required a
+    person and an identity provider.
+    """
+    if principal.via_token:
+        raise HTTPException(
+            status_code=403,
+            detail="Sign in to issue a token. A token cannot issue another one.",
+        )
+    if len(principal.user.api_tokens) >= MAX_TOKENS:
+        raise HTTPException(
+            status_code=409,
+            detail=f"You already have {MAX_TOKENS} tokens. Revoke one first.",
+        )
+
+    token = new_api_token()
+    row = ApiToken(
+        token_hash=hash_token(token),
+        user_id=principal.user.id,
+        name=body.name.strip(),
+    )
+    session.add(row)
+    session.commit()
+
+    return ApiTokenCreated(
+        name=row.name,
+        hint=row.token_hash[:HINT_LENGTH],
+        created_at=row.created_at,
+        last_used_at=None,
+        token=token,
+    )
+
+
+@router.delete("/me/tokens/{hint}", status_code=204, summary="Revoke an API token")
+def revoke_my_token(
+    hint: str,
+    principal: PrincipalDep,
+    _csrf: CsrfDep,
+    session: SessionDep,
+) -> Response:
+    """Revoke one of your tokens, by the hint the list shows.
+
+    Scoped to your own tokens by the query rather than checked afterwards, so
+    there is no path where somebody's hint collides with a stranger's and
+    revokes theirs.
+    """
+    row = session.scalars(
+        select(ApiToken).where(
+            ApiToken.user_id == principal.user.id,
+            ApiToken.token_hash.startswith(hint),
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No token of yours matches that.")
+
+    session.delete(row)
     session.commit()
     return Response(status_code=204)
 

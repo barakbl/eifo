@@ -18,7 +18,7 @@ from eifo_api.security import (
     hash_token,
     new_session_token,
 )
-from eifo_core.models import User, UserSession
+from eifo_core.models import ApiToken, User, UserSession
 from eifo_core.types import utcnow
 
 
@@ -84,6 +84,39 @@ def _renew(session: Session, row: UserSession, now: dt.datetime) -> None:
     row.last_used_at = now
     row.expires_at = now + SESSION_TTL
     session.commit()
+
+
+#: How stale a token's "last used" may get before it is worth a write.
+#:
+#: A token is read on every request it authenticates, and a write per read
+#: would be a poor trade for a timestamp shown as "2 hours ago".
+TOKEN_TOUCH_AFTER = dt.timedelta(minutes=5)
+
+
+def resolve_api_token(
+    session: Session,
+    token: str | None,
+    *,
+    now: dt.datetime | None = None,
+) -> ApiToken | None:
+    """The API token a bearer header refers to, if it is a live one.
+
+    Tokens do not expire. They are named, listed and revocable, which is the
+    control a long-lived credential actually needs - an expiry would mostly
+    arrange for scripts to break at an hour nobody chose.
+    """
+    if not token:
+        return None
+
+    row = session.get(ApiToken, hash_token(token))
+    if row is None:
+        return None
+
+    moment = now or utcnow()
+    if row.last_used_at is None or moment - row.last_used_at >= TOKEN_TOUCH_AFTER:
+        row.last_used_at = moment
+        session.commit()
+    return row
 
 
 def end_session(session: Session, token_hash: str) -> None:

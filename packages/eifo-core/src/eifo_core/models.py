@@ -34,6 +34,7 @@ from eifo_core.enums import (
     FetchPhase,
     FetchStatus,
     MatchDecision,
+    MemberRole,
     OfferType,
     RatingProvider,
     SourceKind,
@@ -640,6 +641,10 @@ class User(Base):
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
     last_login_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
 
+    api_tokens: Mapped[list[ApiToken]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     sessions: Mapped[list[UserSession]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -651,6 +656,90 @@ class User(Base):
 
     def __repr__(self) -> str:
         return f"<User {self.id} {self.auth_provider}:{self.auth_subject}>"
+
+
+def normalised_email(email: str) -> str:
+    """The stored form of an address: trimmed and casefolded.
+
+    One place, because two would eventually be two different answers - and the
+    consequence of disagreeing is somebody who was invited being turned away,
+    or worse, somebody who was removed still getting in. Providers are
+    inconsistent about the case they present, and nobody typing an address into
+    an invite form thinks about it at all.
+
+    Casefold rather than lower: it is the one that handles the scripts a
+    catalog in two languages will eventually be handed.
+    """
+    return email.strip().casefold()
+
+
+class Member(TimestampMixin, Base):
+    """An address that is allowed to sign in.
+
+    An allowlist, not an account. A row here exists before its person ever
+    arrives and survives them deleting their account, because it is a decision
+    somebody made about who may come in - not a record of who has.
+
+    Sign-in used to be open to anyone with a Google account: whoever completed
+    the flow got a ``users`` row, and only the Manage tab was gated. That is the
+    right shape for a public instance and the wrong one for a private catalog,
+    which is what most of these are.
+
+    Keyed on the address, casefolded, because that is what the identity provider
+    vouches for and the only thing known about somebody who has not arrived yet.
+    Providers are inconsistent about case and nobody typing an address into a
+    form thinks about it, so it is normalised on the way in
+    (:func:`normalised_email`) rather than compared loosely on the way out.
+    """
+
+    __tablename__ = "members"
+
+    email: Mapped[str] = mapped_column(String(320), primary_key=True)
+    role: Mapped[MemberRole] = mapped_column(
+        _enum(MemberRole, "member_role"),
+        default=MemberRole.MEMBER,
+    )
+    #: Who let them in, for a list that has to be answerable to somebody. Null
+    #: for the rows the upgrade wrote for people who were already here.
+    invited_by: Mapped[str | None] = mapped_column(String(320))
+
+    def __repr__(self) -> str:
+        return f"<Member {self.email!r} {self.role}>"
+
+
+class ApiToken(Base):
+    """A token that stands in for a session, for things that are not browsers.
+
+    The same shape as :class:`UserSession` and for the same reasons: a row
+    rather than a self-contained token, so revoking one takes effect on the next
+    request, and only the SHA-256 of the value is kept, so a copy of this table
+    cannot be replayed as a login.
+
+    Unlike a session it is named and long-lived, because the point is to paste
+    it into something once and forget it. ``last_used_at`` is the answer to "is
+    this one still doing anything, or can I revoke it".
+    """
+
+    __tablename__ = "api_tokens"
+    __table_args__ = (Index("ix_api_tokens_user", "user_id"),)
+
+    #: Hex SHA-256 of the token that was shown once; the token is never stored.
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    #: What it is for, in the owner's words. The only way to tell two apart:
+    #: the token itself is unreadable after the moment it was created.
+    name: Mapped[str] = mapped_column(String(100))
+
+    created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+    #: Null until it is used. Never updated more than once a minute: a token is
+    #: read on every request, and a write per read would be a poor trade for a
+    #: timestamp nobody reads to the second.
+    last_used_at: Mapped[dt.datetime | None]
+
+    user: Mapped[User] = relationship(back_populates="api_tokens")
+
+    def __repr__(self) -> str:
+        return f"<ApiToken {self.name!r} user={self.user_id}>"
 
 
 class UserSession(Base):

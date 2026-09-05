@@ -1,6 +1,14 @@
-/* `#/settings` - services, profile, and the way out. */
+/* `#/settings` - services, profile, API tokens, and the way out. */
 
-import { ApiError, deleteMe, patchMe } from "../api.js";
+import {
+  ApiError,
+  createMyToken,
+  deleteMe,
+  listMyTokens,
+  patchMe,
+  revokeMyToken,
+} from "../api.js";
+import { formatDate } from "../format.js";
 import { el, replace, stateBlock } from "../ui.js";
 
 export function createSettingsView({ mount, app, router, onSignedOut }) {
@@ -48,6 +56,7 @@ export function createSettingsView({ mount, app, router, onSignedOut }) {
         servicesSection({ user, sources, t, save }),
         profileSection({ user: () => app.get().user, t, save }),
         el("div", { class: "settings__status" }, [saved, problem]),
+        tokensSection({ t }),
         dangerSection({ t, onSignedOut }),
       ]),
     );
@@ -170,5 +179,106 @@ function dangerSection({ t, onSignedOut }) {
     el("p", { class: "settings__help", text: t("settings.dangerBody") }),
     confirmation,
     button,
+  ]);
+}
+
+
+/* Your API tokens.
+ *
+ * A token is shown exactly once, when it is made. Everything after that is a
+ * name, four characters of its hash and when it was last used - enough to tell
+ * which one a script is holding and whether it is doing anything, and not
+ * enough to reconstruct it. The server stores no more than that either.
+ */
+function tokensSection({ t }) {
+  const list = el("div", { class: "tokens__list" });
+  const problem = el("p", { class: "actions__problem", role: "alert" });
+  const revealed = el("div", { class: "tokens__revealed" });
+
+  const draw = (rows) =>
+    replace(
+      list,
+      rows.length
+        ? rows.map((row) => tokenRow(row, { t, refresh, problem }))
+        : el("p", { class: "state__body", text: t("tokens.none") }),
+    );
+
+  async function refresh() {
+    problem.textContent = "";
+    try {
+      draw(await listMyTokens());
+    } catch (error) {
+      problem.textContent = error?.detail || t("item.saveFailed");
+    }
+  }
+
+  const name = el("input", {
+    class: "input",
+    type: "text",
+    maxlength: "100",
+    required: true,
+    placeholder: t("tokens.namePlaceholder"),
+    "aria-label": t("tokens.name"),
+  });
+
+  const form = el(
+    "form",
+    {
+      class: "tokens__create",
+      onSubmit: async (event) => {
+        event.preventDefault();
+        problem.textContent = "";
+        try {
+          const made = await createMyToken(name.value.trim());
+          name.value = "";
+          // Rendered as text into a read-only input, never into markup: it is
+          // a credential, and this file hands nothing to innerHTML.
+          replace(revealed, [
+            el("p", { class: "tokens__warning", text: t("tokens.created") }),
+            el("input", { class: "input tokens__value", readonly: true, value: made.token }),
+          ]);
+          await refresh();
+        } catch (error) {
+          problem.textContent = error?.detail || t("item.saveFailed");
+        }
+      },
+    },
+    [name, el("button", { class: "button", type: "submit", text: t("tokens.create") })],
+  );
+
+  refresh();
+  return el("section", { class: "settings__section" }, [
+    el("h2", { class: "section__heading", text: t("tokens.title") }),
+    el("p", { class: "state__body", text: t("tokens.explain") }),
+    form,
+    revealed,
+    problem,
+    list,
+  ]);
+}
+
+function tokenRow(row, { t, refresh, problem }) {
+  const used = row.last_used_at
+    ? t("tokens.lastUsed", { when: formatDate(row.last_used_at) })
+    : t("tokens.neverUsed");
+
+  return el("div", { class: "tokens__row" }, [
+    el("span", { class: "tokens__name", text: row.name }),
+    el("span", { class: "tokens__hint", text: `${row.hint}\u2026` }),
+    el("span", { class: "tokens__used", text: used }),
+    el("button", {
+      class: "button button--quiet",
+      type: "button",
+      text: t("tokens.revoke"),
+      onClick: async () => {
+        problem.textContent = "";
+        try {
+          await revokeMyToken(row.hint);
+          await refresh();
+        } catch (error) {
+          problem.textContent = error?.detail || t("item.saveFailed");
+        }
+      },
+    }),
   ]);
 }

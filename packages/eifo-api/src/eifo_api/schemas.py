@@ -9,13 +9,14 @@ import datetime as dt
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from eifo_core.enums import (
     AuthProvider,
     CreditRole,
     FetchPhase,
     FetchStatus,
+    MemberRole,
     OfferType,
     RatingProvider,
     SourceKind,
@@ -478,6 +479,91 @@ class RunDetail(RunOut):
     """One fetcher run, with whatever it said while it ran."""
 
     log: str | None = None
+
+
+class AuthContext(BaseModel):
+    """What a signed-out visitor needs in order to stop being one.
+
+    Two facts and nothing else. This is the one thing a members-only instance
+    answers to a stranger, so it must not carry a hint of what is inside.
+    """
+
+    members_only: bool
+    login_providers: list[AuthProvider] = Field(default_factory=list)
+
+
+class MemberOut(BaseModel):
+    """One address on the allowlist."""
+
+    email: str
+    role: MemberRole
+    #: True when the role comes from the configuration file rather than this
+    #: row. Those cannot be edited from here, and the UI has to be able to say
+    #: so rather than offering a button that will be refused.
+    from_config: bool = False
+    invited_by: str | None = None
+    created_at: dt.datetime
+
+
+class MemberInvite(BaseModel):
+    """Let an address in."""
+
+    email: str = Field(min_length=3, max_length=320)
+    role: MemberRole = MemberRole.MEMBER
+
+    @field_validator("email")
+    @classmethod
+    def _looks_like_an_address(cls, value: str) -> str:
+        """A shape check, not a validation.
+
+        Whether an address exists is not knowable from here and does not matter:
+        the thing that decides is Google, at sign-in, and an address nobody owns
+        simply never arrives. What this catches is the typo worth catching -
+        a name with no domain, a stray space, two addresses pasted into one
+        box - which would otherwise sit on the list looking like an invitation
+        somebody had been given.
+
+        No dependency for it. `pydantic[email]` brings a DNS library to answer
+        a question that is not being asked.
+        """
+        address = value.strip()
+        local, at, domain = address.partition("@")
+        if not at or not local or "." not in domain or any(c.isspace() for c in address):
+            raise ValueError("Enter one email address, like name@example.com")
+        return address
+
+
+class MemberRoleChange(BaseModel):
+    """Promote or demote somebody already on the list."""
+
+    role: MemberRole
+
+
+class ApiTokenOut(BaseModel):
+    """A token that exists, described without giving it away.
+
+    There is deliberately no field for the token itself: it is shown once, when
+    it is created, and never stored in a form anything could show again.
+    """
+
+    name: str
+    #: The first characters, so a person can tell which of their tokens a
+    #: script is holding without being able to reconstruct it.
+    hint: str
+    created_at: dt.datetime
+    last_used_at: dt.datetime | None = None
+
+
+class ApiTokenCreated(ApiTokenOut):
+    """A token, the one time it is readable."""
+
+    token: str
+
+
+class ApiTokenCreate(BaseModel):
+    """Ask for a token, and say what it is for."""
+
+    name: str = Field(min_length=1, max_length=100)
 
 
 class ScoringProvider(BaseModel):

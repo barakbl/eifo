@@ -17,32 +17,41 @@ import logging
 from dataclasses import dataclass
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import Select, case, func, select
+from fastapi import APIRouter, HTTPException, Query, Response
+from sqlalchemy import Select, case, delete, func, select
 from sqlalchemy.orm import Session
 
+from eifo_api import members
 from eifo_api.converters import ProviderRegistry
 from eifo_api.deps import AdminDep, CsrfDep, SessionDep, SettingsDep
 from eifo_api.schemas import (
     AdminSource,
     AdminStats,
+    MemberInvite,
+    MemberOut,
+    MemberRoleChange,
     Page,
     RunDetail,
     RunOut,
     ScoringProvider,
     SourceToggle,
 )
-from eifo_core.enums import EnrichOutcome, FetchPhase, FetchStatus, RatingProvider
+from eifo_core.enums import EnrichOutcome, FetchPhase, FetchStatus, MemberRole, RatingProvider
 from eifo_core.models import (
     AggregateScore,
+    ApiToken,
     Availability,
     EnrichAttempt,
     ExternalRating,
     FetchRun,
     MatchReview,
+    Member,
     Person,
     Source,
     Title,
+    User,
+    UserSession,
+    normalised_email,
 )
 from eifo_core.settings import Settings
 from eifo_core.types import utcnow
@@ -50,6 +59,11 @@ from eifo_core.types import utcnow
 logger = logging.getLogger("eifo.api.admin")
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+#: Stands in for "we have no idea when", which is true of a configured
+#: administrator who has never signed in. Shown as a date nobody will mistake
+#: for a real one rather than left null, so the column has one shape.
+_EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.UTC)
 
 MAX_PAGE_SIZE = 100
 DEFAULT_PAGE_SIZE = 25
@@ -133,6 +147,166 @@ def toggle_source(
         last=_last_sync_by_source(session).get(source.key),
         stale_before=stale_before,
     )
+
+
+@router.get("/members", response_model=list[MemberOut], summary="Who may sign in")
+def list_members(
+    _admin: AdminDep,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> list[MemberOut]:
+    """The allowlist, administrators first.
+
+    Configured administrators are listed alongside the rows, marked as coming
+    from configuration. They are not in the table and cannot be edited here,
+    and a list that quietly left them out would be a list of who may sign in
+    that omits the people who certainly may.
+    """
+    rows = {row.email: row for row in members.listed(session)}
+    configured = [normalised_email(address) for address in settings.admin_emails]
+
+    listed = [
+        MemberOut(
+            email=address,
+            role=MemberRole.ADMIN,
+            from_config=True,
+            invited_by=None,
+            created_at=rows[address].created_at if address in rows else _EPOCH,
+        )
+        for address in configured
+    ]
+    listed += [
+        MemberOut(
+            email=row.email,
+            role=row.role,
+            from_config=False,
+            invited_by=row.invited_by,
+            created_at=row.created_at,
+        )
+        for row in rows.values()
+        if row.email not in set(configured)
+    ]
+    return listed
+
+
+@router.post(
+    "/members",
+    response_model=MemberOut,
+    status_code=201,
+    summary="Invite an address, or change its role",
+)
+def invite_member(
+    body: MemberInvite,
+    admin: AdminDep,
+    _csrf: CsrfDep,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> MemberOut:
+    """Add an address to the allowlist.
+
+    Inviting somebody already invited changes their role rather than failing:
+    it is not an error worth a red message, it is somebody making sure.
+    """
+    if settings.is_admin(body.email):
+        raise HTTPException(
+            status_code=409,
+            detail="That address is an administrator through the configuration file already.",
+        )
+
+    row = members.invite(
+        session,
+        body.email,
+        role=body.role,
+        invited_by=admin.user.email,
+    )
+    session.commit()
+    return MemberOut(
+        email=row.email,
+        role=row.role,
+        from_config=False,
+        invited_by=row.invited_by,
+        created_at=row.created_at,
+    )
+
+
+@router.patch(
+    "/members/{email}",
+    response_model=MemberOut,
+    summary="Promote or demote a member",
+)
+def change_member_role(
+    email: str,
+    body: MemberRoleChange,
+    _admin: AdminDep,
+    _csrf: CsrfDep,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> MemberOut:
+    row = _editable_member(session, settings, email)
+    row.role = body.role
+    session.commit()
+    return MemberOut(
+        email=row.email,
+        role=row.role,
+        from_config=False,
+        invited_by=row.invited_by,
+        created_at=row.created_at,
+    )
+
+
+@router.delete("/members/{email}", status_code=204, summary="Withdraw an invitation")
+def remove_member(
+    email: str,
+    _admin: AdminDep,
+    _csrf: CsrfDep,
+    session: SessionDep,
+    settings: SettingsDep,
+) -> Response:
+    """Take an address off the allowlist, and end its sessions.
+
+    Both halves matter. Removing the invitation without revoking what they are
+    holding would leave somebody signed in for up to thirty days after being
+    removed, which is not what anybody pressing this button means by it - and
+    the tokens they have issued would outlive the sessions.
+    """
+    row = _editable_member(session, settings, email)
+    session.delete(row)
+    _revoke_everything(session, row.email)
+    session.commit()
+    return Response(status_code=204)
+
+
+def _editable_member(session: Session, settings: Settings, email: str) -> Member:
+    """The row for an address, or a refusal that says which kind.
+
+    A configured administrator is refused with 409 rather than 404: the address
+    is real and the answer is "not from here", which is a different thing from
+    "no such person" and leads somewhere different - to the configuration file.
+    """
+    if settings.is_admin(email):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "That address is an administrator through the configuration file. "
+                "Change EIFO_ADMIN_EMAILS to alter it."
+            ),
+        )
+    row = members.find(session, email)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Nobody by that address has been invited.")
+    return row
+
+
+def _revoke_everything(session: Session, email: str) -> None:
+    """End every session and token held by the accounts on this address.
+
+    By address rather than by account, because one address can have signed in
+    through more than one provider and each of those is its own account. Taking
+    the invitation away should not leave one of them still holding a key.
+    """
+    user_ids = select(User.id).where(func.lower(func.trim(User.email)) == email)
+    session.execute(delete(UserSession).where(UserSession.user_id.in_(user_ids)))
+    session.execute(delete(ApiToken).where(ApiToken.user_id.in_(user_ids)))
 
 
 @router.get("/runs", response_model=Page[RunOut], summary="Recent fetcher runs")

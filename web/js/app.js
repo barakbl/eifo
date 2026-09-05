@@ -1,6 +1,6 @@
 /* The app shell: header, language and theme, routing, footer attribution. */
 
-import { getMe, getMeta, listSources, logout, setCsrfToken } from "./api.js";
+import { getAuthContext, getMe, getMeta, listSources, loginUrl, logout, setCsrfToken } from "./api.js";
 import { accountMenu } from "./account.js";
 import { DEFAULT_LANGUAGE, directionOf, isSupported, translator } from "./i18n.js";
 import { createItemStore } from "./items.js";
@@ -210,10 +210,18 @@ async function signOut(router) {
 function loginNotice(t) {
   const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
   const outcome = params.get("login");
-  if (outcome !== "cancelled" && outcome !== "failed") return null;
+  // Three outcomes and three sentences. "Please try again" is actively
+  // unhelpful to somebody who was not invited: trying again is the one thing
+  // that will never work for them.
+  const said = {
+    cancelled: "auth.cancelled",
+    failed: "auth.failed",
+    not_invited: "auth.notInvited",
+  }[outcome];
+  if (!said) return null;
 
   return el("div", { class: "notice", role: "status" }, [
-    el("span", { text: t(outcome === "cancelled" ? "auth.cancelled" : "auth.failed") }),
+    el("span", { text: t(said) }),
     el("button", {
       class: "notice__dismiss",
       type: "button",
@@ -221,6 +229,34 @@ function loginNotice(t) {
       "aria-label": t("empty.clear"),
       onClick: (event) => event.currentTarget.closest(".notice")?.remove(),
     }),
+  ]);
+}
+
+/* What a members-only instance shows somebody who is not a member.
+ *
+ * Deliberately not the error state. Nothing went wrong: the catalog is private
+ * and they are not signed in, which is a sentence with an action in it rather
+ * than a fault to retry. */
+function signInWall() {
+  const { t, loginProviders } = app.get();
+
+  return el("main", { class: "shell members__wall", id: "main" }, [
+    el("div", { class: "state", role: "status" }, [
+      el("div", { class: "state__mark", "aria-hidden": "true" }),
+      el("p", { class: "state__title", text: t("members.wallTitle") }),
+      el("p", { class: "state__body", text: t("members.wallBody") }),
+      el(
+        "div",
+        { class: "members__wallActions" },
+        loginProviders.map((provider) =>
+          el("a", {
+            class: "button",
+            href: loginUrl(provider),
+            text: t("auth.signInWith", { provider: t(`auth.provider.${provider}`) }),
+          }),
+        ),
+      ),
+    ]),
   ]);
 }
 
@@ -302,12 +338,28 @@ async function start() {
   const manage = createManageView({ mount: main, app, router });
   const whatsNew = createWhatsNewView({ mount: main, app, router, items });
 
-  const [sources, meta, user] = await Promise.all([
+  const [context, sources, meta, user] = await Promise.all([
+    getAuthContext().catch(() => null),
     listSources().catch(() => []),
     getMeta().catch(() => null),
     getMe().catch(() => null),
   ]);
-  app.set({ sources, user, loginProviders: meta?.login_providers ?? [] });
+  // From the ungated endpoint, falling back to /meta. On a members-only
+  // instance /meta answers 401 to a stranger, and taking the sign-in buttons
+  // from it left the wall with nothing to press.
+  app.set({
+    sources,
+    user,
+    loginProviders: context?.login_providers ?? meta?.login_providers ?? [],
+  });
+
+  // Nothing to show and no way in: the catalog is private and nobody is signed
+  // in. A wall rather than the router's error state, which reads as a fault -
+  // this is not broken, it is closed, and the difference is a button.
+  if (context?.members_only && !user) {
+    replace(root, buildHeader({ router }), loginNotice(app.get().t), signInWall(), buildFooter(null));
+    return;
+  }
 
   replace(root, buildHeader({ router }), loginNotice(app.get().t), main, buildFooter(meta));
 

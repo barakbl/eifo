@@ -15,6 +15,10 @@ use serde::Deserialize;
 /// write lock for a moment.
 const TIMEOUT: Duration = Duration::from_secs(8);
 
+/// The one status code that means "you, specifically, may not" rather than
+/// "something is wrong".
+const UNAUTHORIZED: u16 = 401;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     /// The server answers and every source it still collects is fresh.
@@ -68,25 +72,58 @@ impl Health {
             problems: Vec::new(),
         }
     }
+
+    /// The catalog is private and this app is not holding the key.
+    ///
+    /// Amber rather than red, because nothing is broken: the server is up and
+    /// the operator has some typing to do. Red would send somebody to look at
+    /// a process that is serving perfectly well.
+    pub fn locked(had_token: bool) -> Self {
+        Self {
+            status: Status::Attention,
+            summary: if had_token {
+                "the API token was refused - it may have been revoked".into()
+            } else {
+                "this catalog is members-only and needs an API token".into()
+            },
+            problems: Vec::new(),
+        }
+    }
 }
 
 /// Ask the API how it is.
-pub fn poll(base_url: &str) -> Health {
+pub fn poll(base_url: &str, token: Option<&str>) -> Health {
     let url = format!("{}/api/v1/meta", base_url.trim_end_matches('/'));
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT))
         .build()
         .new_agent();
 
-    match agent.get(&url).call() {
+    let mut request = agent.get(&url);
+    if let Some(token) = token {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+
+    match request.call() {
         Ok(mut response) => match response.body_mut().read_json::<Meta>() {
             Ok(meta) => evaluate(&meta),
             // Answering with something this app cannot read is not the same as
             // not answering: the port is served by something, just not by Eifo.
             Err(err) => Health::down(format!("the API answered but not with Eifo's meta ({err})")),
         },
+        // A refusal is an answer. The server is up, it understood the request
+        // and it declined it - which is nothing like a dead port, and calling
+        // it "not answering" sent somebody looking for a crashed process that
+        // was serving perfectly well the whole time.
+        Err(ureq::Error::StatusCode(UNAUTHORIZED)) => Health::locked(has_token(token)),
         Err(_) => Health::down("the web server is not answering"),
     }
+}
+
+/// Whether a token was sent, which is the difference between the two ways of
+/// being refused and the only thing that changes what to do about it.
+fn has_token(token: Option<&str>) -> bool {
+    token.is_some_and(|value| !value.trim().is_empty())
 }
 
 /// Turn one `/meta` reading into a colour and a sentence.
@@ -240,6 +277,26 @@ mod tests {
             sources: vec![source("kan", true, false, Some("running"))],
         };
         assert_eq!(evaluate(&meta).status, Status::Ok);
+    }
+
+    #[test]
+    fn a_refusal_is_not_a_dead_server() {
+        // The whole of the bug. A members-only catalog answers 401, which ureq
+        // reports as an error - and reading every error as "not answering"
+        // turned the dot red about a server that was serving perfectly well.
+        let locked = Health::locked(false);
+
+        assert_eq!(locked.status, Status::Attention, "amber: nothing is broken");
+        assert!(locked.summary.contains("token"));
+    }
+
+    #[test]
+    fn a_refused_token_and_a_missing_one_are_different_problems() {
+        // Only one of them is fixed by pasting, so only one of them should say
+        // so. Being told to paste a token you have already pasted is the kind
+        // of advice that makes somebody distrust the rest of the menu.
+        assert_ne!(Health::locked(true).summary, Health::locked(false).summary);
+        assert!(Health::locked(true).summary.contains("refused"));
     }
 
     #[test]

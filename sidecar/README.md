@@ -125,6 +125,56 @@ default where there is not - the same rule the fetcher applies.
 already sync and enrich; the pass that fetches missing posters was the one thing
 it could not reach.
 
+## A members-only catalog
+
+`EIFO_MEMBERS_ONLY` closes the catalog to anybody who is not signed in, and
+`/api/v1/meta` - the one thing this app reads - is part of what closes. Without
+a token it gets a 401 and can say only that the catalog is private.
+
+The dot goes **amber**, not red. A refusal is an answer: the server is up, it
+understood the question and declined it, which is nothing like a dead port.
+Reading every error as "not answering" is what the first version of this did,
+and it sent somebody looking for a crashed process that had been serving
+perfectly well the whole time.
+
+To give it the key: create a token in the web app's **Settings**, copy it, and
+choose **Paste API token from clipboard**. The clipboard rather than a text
+field, because the token is shown once, beside a sentence telling you to copy it
+now - asking for it to be pasted into a second box is asking somebody to do the
+thing they have just done.
+
+**It goes in the Keychain, not in `config.json`.** Everything else this app
+remembers is a preference and a JSON file is right for those. A token is a
+credential that reads a private catalog, and a credential in a plaintext file is
+readable by every process running as you, backed up in the clear, and sitting in
+a folder people open to see what an app remembers. It is reached through the
+Security framework rather than by running `/usr/bin/security`, because the CLI
+takes the password as a command-line argument and arguments are visible in `ps`.
+
+The menu says which state it is in, because the alternative did not:
+
+```
+API token: none                          <- greyed "Forget" now has a reason
+Paste API token from clipboard
+Forget API token                         (greyed)
+```
+
+```
+API token: in your Keychain · revoke it in Settings
+Replace API token from clipboard
+Forget API token
+```
+
+Look for **Eifo / api-token** in Keychain Access. **Forget** puts down this
+app's copy and nothing more - the token goes on working for anything else
+holding one until it is revoked in Settings, which is why the item does not say
+"Delete". A menu item should not promise something it cannot do.
+
+Two refusals, and they need different sentences. No token says to paste one;
+a token that was refused says it may have been revoked - because being told to
+paste a token you have already pasted is the kind of advice that makes somebody
+distrust the rest of the menu.
+
 ## Scheduling
 
 The app owns the nightly chain: at the configured hour (03:00 by default) it
@@ -219,6 +269,7 @@ a stale file with a live pid in it is possible, an unheld `flock` is not.
 |---|---|
 | `config.rs` | The checkout, the schedule, what is remembered |
 | `health.rs` | `/meta` → a colour and a sentence |
+| `keychain.rs` | The API token, kept where a credential belongs |
 | `runs.rs` | The run log → what is done, going, and still to come |
 | `icons.rs` | The dot, drawn rather than shipped |
 | `procs.rs` | Starting, stopping, and the single-flight check |

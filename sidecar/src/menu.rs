@@ -55,6 +55,9 @@ pub struct Items {
     pub open_app: MenuItem,
     pub open_manage: MenuItem,
     pub update: MenuItem,
+    pub token_state: MenuItem,
+    pub paste_token: MenuItem,
+    pub forget_token: MenuItem,
     pub choose_folder: MenuItem,
     pub login_item: CheckMenuItem,
     pub about: MenuItem,
@@ -93,6 +96,9 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
     let open_app = MenuItem::new("Open Eifo", true, None);
     let open_manage = MenuItem::new("Open Manage", true, None);
     let update = MenuItem::new("Check for updates", true, None);
+    let token_state = MenuItem::new("API token: none", false, None);
+    let paste_token = MenuItem::new("Paste API token from clipboard", true, None);
+    let forget_token = MenuItem::new("Forget API token", true, None);
     let choose_folder = MenuItem::new("Choose Eifo folder…", true, None);
     let login_item = CheckMenuItem::new("Open at login", true, login_enabled, None);
     let about = MenuItem::new("About Eifo", true, None);
@@ -128,6 +134,9 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         &separator(),
         &update,
         &separator(),
+        &token_state,
+        &paste_token,
+        &forget_token,
         &choose_folder,
         &login_item,
         &about,
@@ -160,6 +169,9 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         open_app,
         open_manage,
         update,
+        token_state,
+        paste_token,
+        forget_token,
         choose_folder,
         login_item,
         about,
@@ -219,6 +231,11 @@ pub fn detail(snapshot: &Snapshot) -> String {
     }
     if snapshot.restarts_given_up {
         return "Gave up restarting - start it by hand".into();
+    }
+    // Above the running fetch, because a catalog this app cannot read is the
+    // thing to fix first and the only one with an instruction attached.
+    if snapshot.status == Status::Attention && !snapshot.has_token && snapshot.problems.is_empty() {
+        return "Create one in Settings, copy it, then Paste API token".into();
     }
     // While something is running, what it is on now outranks every other thing
     // this line could say: it is the answer to the question somebody opened the
@@ -360,6 +377,20 @@ pub fn progress_label(run: &RunView) -> String {
     }
 }
 
+/// Whether this app is holding a key to the catalog, and what that means.
+///
+/// "Forget" rather than "Revoke", and the line says why: this app can only put
+/// down its own copy. The token goes on working for anything else holding one
+/// until it is revoked where it was made, and a menu item that said "Delete"
+/// would be promising something it cannot do.
+pub fn token_line(snapshot: &Snapshot) -> String {
+    if snapshot.has_token {
+        "API token: in your Keychain · revoke it in Settings".into()
+    } else {
+        "API token: none".into()
+    }
+}
+
 /// What the server line says about a process this app may or may not own.
 pub fn server_line(snapshot: &Snapshot) -> String {
     match (snapshot.server_owned, snapshot.status) {
@@ -449,6 +480,18 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
         .start_on_open
         .set_checked(snapshot.start_server_on_open);
     items.keep_up.set_checked(snapshot.keep_server_up);
+
+    // A readout above the two actions, like the fetch and server lines above.
+    // Without it, "Forget API token" was greyed out and gave no clue why - the
+    // first person to see it asked what it was for and why they could not press
+    // it, which is the whole answer to whether a disabled item explains itself.
+    items.token_state.set_text(token_line(snapshot));
+    items.paste_token.set_text(if snapshot.has_token {
+        "Replace API token from clipboard"
+    } else {
+        "Paste API token from clipboard"
+    });
+    items.forget_token.set_enabled(snapshot.has_token);
 
     let (update_text, update_enabled) = update_line(&snapshot.update);
     items.update.set_text(update_text);
@@ -556,6 +599,7 @@ mod tests {
             next_run: "tomorrow at 03:00".into(),
             restarts_given_up: false,
             setup_problems: Vec::new(),
+            has_token: false,
             update: UpdateView::Unknown,
             relaunch: false,
         }
@@ -663,6 +707,71 @@ mod tests {
         let mut s = snapshot();
         s.restarts_given_up = true;
         assert!(detail(&s).contains("by hand"));
+    }
+
+    #[test]
+    fn the_menu_says_why_forget_is_greyed_out() {
+        // It was greyed with nothing to explain it, and the first person to see
+        // it asked what the item was for and why it would not press. A disabled
+        // control that needs asking about is not explaining itself.
+        let mut s = snapshot();
+        assert_eq!(token_line(&s), "API token: none");
+
+        s.has_token = true;
+        assert!(token_line(&s).contains("Keychain"));
+    }
+
+    #[test]
+    fn the_line_says_where_a_token_is_actually_revoked() {
+        // This app can only put down its own copy. A menu that implied
+        // otherwise would be promising something it cannot do.
+        let mut s = snapshot();
+        s.has_token = true;
+
+        assert!(token_line(&s).contains("Settings"));
+    }
+
+    #[test]
+    fn a_locked_catalog_is_not_reported_as_a_dead_server() {
+        // The bug this fixes: members-only answered 401, ureq called that an
+        // error, and the dot went red saying the server was not answering -
+        // about a server that was answering promptly and correctly.
+        let mut s = snapshot();
+        s.status = Status::Attention;
+        s.summary = "this catalog is members-only and needs an API token".into();
+
+        assert!(headline(&s).starts_with("Needs attention"));
+        assert!(headline(&s).contains("members-only"));
+        assert_eq!(
+            detail(&s),
+            "Create one in Settings, copy it, then Paste API token"
+        );
+    }
+
+    #[test]
+    fn a_token_that_was_refused_says_so_rather_than_asking_for_one() {
+        // Two ways of being refused, and only one of them is fixed by pasting.
+        let mut s = snapshot();
+        s.status = Status::Attention;
+        s.has_token = true;
+        s.summary = "the API token was refused - it may have been revoked".into();
+
+        assert!(headline(&s).contains("refused"));
+        assert_ne!(
+            detail(&s),
+            "Create one in Settings, copy it, then Paste API token"
+        );
+    }
+
+    #[test]
+    fn a_stale_source_still_reads_as_a_stale_source() {
+        // The locked-catalog line must not swallow the ordinary amber state,
+        // which is also Attention and has its own thing to say.
+        let mut s = snapshot();
+        s.status = Status::Attention;
+        s.problems = vec!["Mako is not fresh".into()];
+
+        assert_eq!(detail(&s), "Mako is not fresh");
     }
 
     #[test]

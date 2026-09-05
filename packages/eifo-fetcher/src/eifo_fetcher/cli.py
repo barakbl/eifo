@@ -23,8 +23,17 @@ from eifo_core import migrate
 from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
 from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.fts import ensure_search_triggers
-from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
+from eifo_core.models import (
+    ApiToken,
+    Availability,
+    FetchRun,
+    MatchReview,
+    Source,
+    Title,
+    User,
+)
 from eifo_core.settings import MissingSettingsError, Settings, get_settings
+from eifo_core.tokens import hash_token, new_api_token
 from eifo_fetcher import rematch, review
 from eifo_fetcher.dedupe import (
     apply_merges,
@@ -202,6 +211,32 @@ def build_parser() -> argparse.ArgumentParser:
     sources.add_subparsers(dest="sources_command", required=True).add_parser(
         "list", help="show every source with its last run"
     )
+
+    token = subcommands.add_parser(
+        "token",
+        help="issue and revoke API tokens without a browser",
+        description=(
+            "The web app is the ordinary way to make a token: Settings, create, copy. "
+            "This is the way in when that is not available - a members-only instance "
+            "whose sign-in has broken is one where the only route to a token is behind "
+            "the thing that is broken, and an escape hatch is worth having before it is "
+            "needed rather than after."
+        ),
+    )
+    token_actions = token.add_subparsers(dest="token_command", required=True)
+    token_create = token_actions.add_parser("create", help="issue a token and print it once")
+    token_create.add_argument("name", help="what it is for, e.g. 'sidecar'")
+    token_create.add_argument(
+        "--email",
+        default=None,
+        help=(
+            "whose token it is. Only needed when more than one account exists; "
+            "the token carries exactly that account's permissions"
+        ),
+    )
+    token_actions.add_parser("list", help="show the tokens that exist, without their values")
+    token_revoke = token_actions.add_parser("revoke", help="revoke one token by its hint")
+    token_revoke.add_argument("hint", help="the first characters shown by `token list`")
 
     review = subcommands.add_parser("review", help="work through unresolved matches")
     review_actions = review.add_subparsers(dest="review_command", required=True)
@@ -539,6 +574,118 @@ def _cmd_all(_args: argparse.Namespace, settings: Settings) -> int:
     return EXIT_OK if run_nightly(settings) else EXIT_PARTIAL
 
 
+def _cmd_token(args: argparse.Namespace, settings: Settings) -> int:
+    """Issue, list and revoke API tokens from a terminal.
+
+    The web app is the ordinary way. This exists because the ordinary way is
+    reachable only by signing in, and an instance whose sign-in has broken -
+    a stale ``public_origin``, a redirect URI the provider does not know, an
+    OAuth client somebody rotated - is exactly the instance where a token is
+    the thing you need and cannot get. An escape hatch that only exists after
+    it is needed is not one.
+
+    It mints for an account that already exists rather than conjuring one. A
+    token carries an account's permissions, so it needs an account to carry
+    them from; and an identity nothing has vouched for is not something a
+    command-line flag should be able to create.
+    """
+    with _database(settings) as session_factory, session_factory() as session:
+        if args.token_command == "list":
+            return _list_tokens(session)
+        if args.token_command == "revoke":
+            return _revoke_token(session, args.hint)
+        return _create_token(session, args.name, args.email)
+
+
+def _create_token(session: Session, name: str, email: str | None) -> int:
+    user = _whose_token(session, email)
+    if user is None:
+        return EXIT_FATAL
+
+    raw = new_api_token()
+    session.add(
+        ApiToken(
+            token_hash=hash_token(raw),
+            user_id=user.id,
+            name=name.strip(),
+        )
+    )
+    session.commit()
+
+    # To stdout, alone on its line, so it can be piped. The one and only time
+    # it is readable: the row keeps a hash, exactly as the web app's does.
+    logger.info("issued %r for %s", name, user.email or user.display_name)
+    print(raw)
+    return EXIT_OK
+
+
+def _whose_token(session: Session, email: str | None) -> User | None:
+    """The account to issue for, or None with the reason already reported."""
+    if email is not None:
+        user = session.scalar(
+            select(User).where(func.lower(func.trim(User.email)) == email.strip().casefold())
+        )
+        if user is None:
+            logger.error("no account here has signed in as %s", email)
+        return user
+
+    users = list(session.scalars(select(User).order_by(User.id)).all())
+    if not users:
+        logger.error(
+            "no accounts yet - somebody has to sign in through the web app once "
+            "before there is an identity to issue a token for"
+        )
+        return None
+    if len(users) > 1:
+        logger.error(
+            "%d accounts here; say which with --email (%s)",
+            len(users),
+            ", ".join(sorted(user.email or "no address" for user in users)),
+        )
+        return None
+    return users[0]
+
+
+def _list_tokens(session: Session) -> int:
+    """Every token, described without giving one away."""
+    rows = list(
+        session.execute(
+            select(ApiToken, User)
+            .join(User, User.id == ApiToken.user_id)
+            .order_by(ApiToken.created_at.desc())
+        ).all()
+    )
+    if not rows:
+        print("No tokens have been issued.")
+        return EXIT_OK
+
+    print(f"{'HINT':<8} {'NAME':<28} {'WHOSE':<32} LAST USED")
+    for row, user in rows:
+        used = row.last_used_at.strftime("%Y-%m-%d %H:%M") if row.last_used_at else "never"
+        whose = user.email or user.display_name
+        print(f"{row.token_hash[:4]:<8} {row.name[:28]:<28} {whose[:32]:<32} {used}")
+    return EXIT_OK
+
+
+def _revoke_token(session: Session, hint: str) -> int:
+    """Revoke by the hint the list shows, which is all anybody has to go on."""
+    matches = list(
+        session.scalars(select(ApiToken).where(ApiToken.token_hash.startswith(hint))).all()
+    )
+    if not matches:
+        logger.error("no token starts with %r", hint)
+        return EXIT_FATAL
+    if len(matches) > 1:
+        logger.error("%d tokens start with %r; use more characters", len(matches), hint)
+        return EXIT_FATAL
+
+    name = matches[0].name
+    session.delete(matches[0])
+    session.commit()
+    logger.info("revoked %r; it stops working on the next request", name)
+    return EXIT_OK
+
+
 def _cmd_sources(_args: argparse.Namespace, settings: Settings) -> int:
     plugins = discover_plugins()
     declared = declared_sources(plugins)
@@ -764,6 +911,7 @@ _COMMANDS = {
     "rescore": _cmd_rescore,
     "seret": _cmd_seret,
     "sources": _cmd_sources,
+    "token": _cmd_token,
     "review": _cmd_review,
     "daemon": _cmd_daemon,
 }

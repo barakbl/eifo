@@ -16,12 +16,12 @@ from eifo_api.security import (
     SESSION_RENEW_AFTER,
     SESSION_TTL,
     csrf_token_for,
-    hash_token,
     new_session_token,
 )
 from eifo_api.sessions import resolve_session, start_session
 from eifo_core.enums import AuthProvider
 from eifo_core.models import User, UserSession
+from eifo_core.tokens import hash_token
 from eifo_core.types import utcnow
 
 

@@ -13,6 +13,21 @@ import {
   translator,
 } from "../js/i18n.js";
 
+/** The key sets of both string tables, read out of the source.
+ *
+ * The tables are not exported, and exporting them so a test could compare them
+ * would be widening a module's surface to let a test look at its insides. */
+function keysByLanguage() {
+  const source = readFileSync(new URL("../js/i18n.js", import.meta.url), "utf8");
+  const blocks = source.split(/^  (?:he|en): \{$/m).slice(1);
+
+  assert.equal(blocks.length, LANGUAGES.length, "expected one block per language");
+  return blocks.map(
+    (block) =>
+      new Set([...block.split(/^  \},?$/m)[0].matchAll(/^\s*"([^"]+)":/gm)].map((m) => m[1])),
+  );
+}
+
 describe("language setup", () => {
   it("defaults to Hebrew, because the catalog is Israeli", () => {
     assert.equal(DEFAULT_LANGUAGE, "he");
@@ -76,15 +91,40 @@ describe("translate", () => {
     }
   });
 
-  it("covers every key in both languages", () => {
-    const keys = new Set();
-    for (const language of LANGUAGES) {
-      for (const key of ["title.watch", "error.retry", "offer.untracked", "empty.title"]) {
-        keys.add(`${language}:${translate(language, key)}`);
-        assert.notEqual(translate(language, key), key, `${key} missing in ${language}`);
-      }
+  /* This used to name four keys and assert that translate() did not hand back
+     the key itself - which it never would, because the fallback returns the
+     default language's string. So the test could not fail for the thing its
+     name promised, and did not: every `suggest.*` string existed in Hebrew and
+     none in English, and an English reader saw "כותרים" above their search
+     results from the day the dropdown shipped.
+
+     Read from the source for the same reason the duplicate check is: the
+     tables are not exported, and a test that needed them to be would be
+     widening a module's surface to look at its insides. */
+  it("defines every key in both languages", () => {
+    const [he, en] = keysByLanguage();
+
+    assert.deepEqual([...he].filter((key) => !en.has(key)).sort(), [], "missing from en");
+    assert.deepEqual([...en].filter((key) => !he.has(key)).sort(), [], "missing from he");
+  });
+
+  it("gives a key the same placeholders in both languages", () => {
+    /* "{count} titles" against a translation with no {count} is a string that
+       silently drops a number, which reads to whoever sees it as a bug in the
+       data rather than in the wording. */
+    const source = readFileSync(new URL("../js/i18n.js", import.meta.url), "utf8");
+    const tables = source.split(/^  (?:he|en): \{$/m).slice(1);
+    const entries = (block) =>
+      new Map([...block.split(/^  \},?$/m)[0].matchAll(/^\s*"([^"]+)": "(.*)",?$/gm)]
+        .map((match) => [match[1], match[2]]));
+    const placeholders = (text) => [...text.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+
+    const [he, en] = tables.map(entries);
+    for (const [key, hebrew] of he) {
+      const english = en.get(key);
+      if (english === undefined) continue;
+      assert.deepEqual(placeholders(english), placeholders(hebrew), `placeholders differ: ${key}`);
     }
-    assert.ok(keys.size > 0);
   });
 });
 

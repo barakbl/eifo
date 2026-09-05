@@ -15,10 +15,10 @@ from sqlalchemy.orm import Session
 from eifo_api.security import (
     SESSION_RENEW_AFTER,
     SESSION_TTL,
-    hash_token,
     new_session_token,
 )
 from eifo_core.models import ApiToken, User, UserSession
+from eifo_core.tokens import hash_token
 from eifo_core.types import utcnow
 
 

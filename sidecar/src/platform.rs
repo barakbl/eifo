@@ -9,7 +9,9 @@
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSOpenPanel, NSWorkspace};
+use objc2_app_kit::{
+    NSApplication, NSOpenPanel, NSPasteboard, NSPasteboardTypeString, NSWorkspace,
+};
 use objc2_foundation::{NSDictionary, NSString, NSURL};
 
 pub const REPO_URL: &str = "https://github.com/barakbl/eifo";
@@ -43,6 +45,18 @@ fn applescript_string(value: &str) -> String {
     }
     out.push('"');
     out
+}
+
+/// Whatever text is on the clipboard, if any.
+///
+/// Used for one thing: taking the API token the web app just told somebody to
+/// copy. Read at the moment they ask for it and never held, so this app is not
+/// a second place their clipboard lives.
+pub fn clipboard_text() -> Option<String> {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    // SAFETY: the string type constant, read through the standard accessor.
+    let text = unsafe { pasteboard.stringForType(NSPasteboardTypeString) }?;
+    Some(text.to_string())
 }
 
 /// Open a URL in the user's browser.

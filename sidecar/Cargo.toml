@@ -32,6 +32,8 @@ objc2-app-kit = { version = "0.3", features = [
     "NSWorkspace",
     "NSAlert",
     "NSRunningApplication",
+    # Reading the API token the web app just told somebody to copy.
+    "NSPasteboard",
 ] }
 objc2-foundation = { version = "0.3", features = ["NSString", "NSURL", "NSArray", "NSDictionary", "NSAttributedString"] }
 objc2-service-management = { version = "0.3", features = ["SMAppService"] }
@@ -45,6 +47,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # The system SQLite is used rather than a bundled copy: macOS ships one, and the
 # only statement here is a count.
 rusqlite = "0.32"
+security-framework = "3.6.0"
 
 [profile.release]
 strip = true

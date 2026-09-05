@@ -18,6 +18,7 @@ mod about;
 mod config;
 mod health;
 mod icons;
+mod keychain;
 mod menu;
 mod platform;
 mod procs;
@@ -184,6 +185,10 @@ fn main() {
                         .detail
                         .set_text(format!("Could not change login item: {err}"));
                 }
+            } else if id == items.paste_token.id() {
+                let _ = to_worker.send(Command::PasteToken);
+            } else if id == items.forget_token.id() {
+                let _ = to_worker.send(Command::ForgetToken);
             } else if id == items.choose_folder.id() {
                 if let Some(dir) = platform::choose_directory(mtm, "Choose your Eifo folder") {
                     if Config::looks_like_eifo(&dir) {

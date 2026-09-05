@@ -13,6 +13,7 @@ use chrono::Local;
 
 use crate::config::Config;
 use crate::health::{self, Health, Status};
+use crate::keychain;
 use crate::procs::{self, FetcherState, Phase, Server};
 use crate::runs::{self, RunView};
 use crate::{platform, schedule, update};
@@ -55,6 +56,10 @@ pub enum Command {
     SetKeepServerUp(bool),
     SetStartServerOnOpen(bool),
     SetScheduleEnabled(bool),
+    /// Take the API token off the clipboard and keep it in the Keychain.
+    PasteToken,
+    /// Forget the stored token.
+    ForgetToken,
     /// Ask GitHub now, rather than waiting for the twice-a-day check.
     CheckUpdate,
     /// Move the checkout to the newer release and relaunch.
@@ -106,6 +111,9 @@ pub struct Snapshot {
     pub restarts_given_up: bool,
     /// Problems with the configured directory itself, which outrank everything.
     pub setup_problems: Vec<String>,
+    /// Whether this app is holding an API token. Never the token itself: the
+    /// menu has no use for it and a snapshot is a thing that gets logged.
+    pub has_token: bool,
     /// Whether a newer release exists, and how far along installing it is.
     pub update: UpdateView,
     /// Set once, when an update has been built and the app must relaunch to
@@ -135,6 +143,10 @@ struct Worker {
     /// The run log as of the last publish, so the menu shows the same picture
     /// the last reading gave rather than one query's worth of a different one.
     run: RunView,
+    /// The API token, read from the Keychain at startup and whenever it
+    /// changes. Held rather than fetched per poll: the Keychain is a system
+    /// service, and this polls every three seconds while a fetch runs.
+    token: Option<String>,
     /// Whether a fetch was running at the last publish. The change from true to
     /// false is the moment a run ends, and the only moment worth a banner.
     fetching: bool,
@@ -163,6 +175,7 @@ impl Worker {
             health: Health::unknown("starting up"),
             fetch: None,
             run: RunView::default(),
+            token: keychain::token(),
             fetching: false,
             seen_a_reading: false,
             last_result: None,
@@ -266,6 +279,13 @@ impl Worker {
                 self.config.schedule_enabled = on;
                 let _ = self.config.save();
             }
+            Command::PasteToken => self.paste_token(),
+            Command::ForgetToken => {
+                keychain::forget();
+                self.token = None;
+                self.last_result = Some("Forgot the API token".into());
+                self.poll();
+            }
             Command::CheckUpdate => self.check_update(),
             Command::RunUpdate => self.run_update(),
             Command::Shutdown(_) => {}
@@ -328,7 +348,7 @@ impl Worker {
             }
             self.quiet_until = None;
         }
-        self.health = health::poll(&self.config.base_url);
+        self.health = health::poll(&self.config.base_url, self.token.as_deref());
     }
 
     /// Put the server back up if it has gone, unless told not to.
@@ -414,6 +434,25 @@ impl Worker {
             self.last_result = Some("stopped the running fetch".into());
             self.poll();
         }
+    }
+
+    /// Take whatever is on the clipboard and try to keep it as the token.
+    ///
+    /// The clipboard rather than a text field, because the token was on the
+    /// clipboard a moment ago: it is shown once, in the web app, next to a
+    /// sentence telling you to copy it now. Asking somebody to paste it into a
+    /// second box is asking them to do the thing they have already done.
+    fn paste_token(&mut self) {
+        let pasted = platform::clipboard_text().unwrap_or_default();
+        match keychain::store(&pasted) {
+            Ok(()) => {
+                self.token = keychain::token();
+                self.last_result = Some("Saved the API token to the Keychain".into());
+            }
+            // The reason, not the value. This line goes on the menu.
+            Err(problem) => self.last_result = Some(problem),
+        }
+        self.poll();
     }
 
     /// Ask GitHub about the newest release once the interval is up - or once on
@@ -627,6 +666,7 @@ impl Worker {
             next_run,
             restarts_given_up: self.restarts_given_up,
             setup_problems,
+            has_token: self.token.is_some(),
             update: self.update.clone(),
             relaunch: self.relaunch,
         };

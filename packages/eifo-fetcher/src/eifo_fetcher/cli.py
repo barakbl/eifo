@@ -34,7 +34,7 @@ from eifo_core.models import (
 )
 from eifo_core.settings import MissingSettingsError, Settings, get_settings
 from eifo_core.tokens import hash_token, new_api_token
-from eifo_fetcher import rematch, review
+from eifo_fetcher import attempts, rematch, review
 from eifo_fetcher.dedupe import (
     apply_merges,
     dangling_references,
@@ -45,6 +45,7 @@ from eifo_fetcher.enrich import recompute_all_aggregates
 from eifo_fetcher.enrichers.seret import DEFAULT_RATE_LIMIT_RPS as SERET_DEFAULT_RPS
 from eifo_fetcher.enrichers.seret_index import SERET_KEY, index_status
 from eifo_fetcher.http import HttpClient
+from eifo_fetcher.ingest import IngestClient, IngestError
 from eifo_fetcher.lock import AlreadyRunningError, single_flight
 from eifo_fetcher.pipeline import register_declared_sources
 from eifo_fetcher.providers import refresh_declared_providers
@@ -354,10 +355,28 @@ def _cmd_sync(args: argparse.Namespace, settings: Settings) -> int:
 
 
 def _cmd_images(args: argparse.Namespace, settings: Settings) -> int:
-    with single_flight(settings), _database(settings) as session_factory, HttpClient() as http:
-        result = fetch_images(
-            session_factory, settings, http=http, force=args.force, limit=args.limit
-        )
+    """Download artwork, and post it to the API rather than write it here.
+
+    The only phase that opens no database. It still takes the single-flight
+    lock, because that lock is about not running two fetchers on *this*
+    machine - which is as true of one that uploads as of one that writes.
+    """
+    try:
+        with (
+            single_flight(settings),
+            attempts.attempted(settings, FetchPhase.IMAGES),
+            HttpClient() as http,
+            IngestClient.from_settings(settings) as api,
+        ):
+            result = fetch_images(settings, http=http, api=api, force=args.force, limit=args.limit)
+    except IngestError as exc:
+        # A refusal from the API is an operator problem with an operator
+        # answer, and the answer is in the message. A traceback would bury it.
+        # The attempt is kept on this machine so the next run that does reach
+        # the server says this one happened, rather than leaving the night
+        # looking like one where nothing was scheduled.
+        logger.error("%s", exc)
+        return EXIT_FATAL
     return EXIT_PARTIAL if result.failed else EXIT_OK
 
 

@@ -11,6 +11,7 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -19,6 +20,7 @@ from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.models import Title
 from eifo_core.settings import Settings
 from eifo_core.types import utcnow
+from eifo_fetcher import attempts
 from eifo_fetcher.enrich import (
     EnrichResultTally,
     enrich_titles,
@@ -35,6 +37,7 @@ from eifo_fetcher.enrichers.seret_index import (
 )
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.images import ImageFetcher, ImageResult
+from eifo_fetcher.ingest import IngestClient, IngestError
 from eifo_fetcher.pipeline import (
     SyncResult,
     clear_backfill_requests,
@@ -467,45 +470,55 @@ def repair_names(
 
 
 def fetch_images(
-    session_factory: sessionmaker[Session],
     settings: Settings,
     *,
     http: HttpClient,
+    api: IngestClient,
     force: bool = False,
     limit: int | None = None,
 ) -> ImageResult:
-    """Download artwork for titles that still lack it."""
+    """Download artwork for titles that still lack it, and post it to the API.
+
+    Takes no ``session_factory``: this phase no longer opens the database at
+    all. Where every other phase writes rows itself, this one asks the API what
+    is outstanding, sends back what it downloaded, and reports the run over the
+    same connection - which is what makes it the phase that can be run from a
+    machine the catalog is not on.
+    """
     started_at = utcnow()
     # Most artwork comes from TMDB's image CDN, which was being asked for one
     # poster a second - a static CDN, at the pace set for scraping somebody's
     # website. Anything hosted elsewhere keeps the polite default.
     http.rate_limiter.set_host_rate(IMAGE_HOST, settings.tmdb.rate_limit_rps)
-    fetcher = ImageFetcher(http, Path(settings.images_dir))
-    with session_factory() as session:
-        # FetchPhase.IMAGES existed and had never once been written: poster
-        # downloads reported themselves only to a log line that scrolled away.
-        run = open_run(session, phase=FetchPhase.IMAGES, started_at=started_at)
-        with capture_log() as captured:
-            try:
-                result = fetcher.fetch_missing(session, force=force, limit=limit)
-            except Exception as exc:
-                logger.exception("artwork download failed")
-                session.rollback()
-                close_run(
-                    session,
-                    run,
-                    status=FetchStatus.FAILED,
-                    stats={"errors": [f"fatal: {type(exc).__name__}: {exc}"]},
-                    log=captured.text(),
-                )
-                raise
-        close_run(
-            session,
-            run,
-            status=FetchStatus.FAILED if result.failed else FetchStatus.OK,
-            stats=result.as_stats(),
-            log=captured.text(),
-        )
+    fetcher = ImageFetcher(http, api)
+
+    _report_previous_attempt(settings, api)
+
+    # FetchPhase.IMAGES existed and had never once been written: poster
+    # downloads reported themselves only to a log line that scrolled away.
+    run_id = api.open_run(FetchPhase.IMAGES, started_at=started_at)
+    with capture_log() as captured:
+        try:
+            result = fetcher.fetch_missing(force=force, limit=limit)
+        except Exception as exc:
+            logger.exception("artwork download failed")
+            _close_quietly(
+                settings,
+                api,
+                run_id,
+                status=FetchStatus.FAILED,
+                stats={"errors": [f"fatal: {type(exc).__name__}: {exc}"]},
+                log=captured.text(),
+            )
+            raise
+    _close_quietly(
+        settings,
+        api,
+        run_id,
+        status=FetchStatus.FAILED if result.failed else FetchStatus.OK,
+        stats=result.as_stats(),
+        log=captured.text(),
+    )
     logger.info(
         "images: %d downloaded, %d skipped, %d failed",
         result.downloaded,
@@ -513,6 +526,63 @@ def fetch_images(
         result.failed,
     )
     return result
+
+
+def _close_quietly(
+    settings: Settings,
+    api: IngestClient,
+    run_id: int,
+    *,
+    status: FetchStatus,
+    stats: dict[str, Any],
+    log: str | None,
+) -> None:
+    """Close the run, and do not let failing to say so become the failure.
+
+    The row is bookkeeping. If the API has gone away between the work and the
+    report, the interesting news is whatever the work did - and raising here
+    would replace it with a second, less useful exception thrown while handling
+    the first.
+
+    The row stays open when it cannot be closed, which is what an unfinished
+    run is supposed to look like - and the server closes it once it is old
+    enough to be certainly dead. No note is left here for it: the open row is
+    already the record, and a note would produce a second row saying the same
+    thing.
+    """
+    try:
+        api.close_run(run_id, status=status, stats=stats, log=log)
+    except IngestError as exc:
+        logger.warning("could not record how the run ended: %s", exc)
+
+
+def _report_previous_attempt(settings: Settings, api: IngestClient) -> None:
+    """Post the run the last attempt could not report, now that we can.
+
+    Late, and deliberately so: a fetcher that could not reach the server had
+    nowhere to put this at the time. The alternative is that the night it
+    failed leaves no trace at all, which is indistinguishable from a night
+    nobody asked it to run.
+    """
+    previous = attempts.pending(settings)
+    if previous is None:
+        return
+
+    try:
+        run_id = api.open_run(previous.phase, started_at=previous.started_at)
+        api.close_run(run_id, status=FetchStatus.CRASHED, stats=previous.as_stats(), log=None)
+    except IngestError as exc:
+        # Still cannot reach it. The note keeps until something can.
+        logger.warning("the previous attempt still cannot be reported: %s", exc)
+        return
+
+    logger.info(
+        "recorded the %s attempt of %s, which could not report itself: %s",
+        previous.phase.value,
+        previous.started_at,
+        previous.reason,
+    )
+    attempts.clear(settings)
 
 
 def _tmdb_client(http: HttpClient, settings: Settings) -> TmdbClient | None:

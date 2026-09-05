@@ -8,7 +8,9 @@ import logging
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
+import httpx
 import pytest
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, select, text
@@ -65,6 +67,28 @@ def migrated(db_path: Path) -> Path:
 
 
 @pytest.fixture
+def configured_api(monkeypatch: pytest.MonkeyPatch, respx_mock: Any) -> Any:
+    """A token in the environment, and an API at the other end of it.
+
+    ``eifo-fetch images`` builds its own client out of the settings, so this
+    exercises that construction rather than stepping around it - which is the
+    part worth testing, since a missing token is now the likeliest reason the
+    command does not work.
+    """
+    monkeypatch.setenv("EIFO_API_TOKEN", "eifo_pat_test")
+    get_settings.cache_clear()
+    base = "http://127.0.0.1:3436/api/v1/ingest"
+    respx_mock.get(url__startswith=f"{base}/posters/pending").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    respx_mock.post(f"{base}/runs").mock(return_value=httpx.Response(201, json={"id": 1}))
+    respx_mock.patch(url__startswith=f"{base}/runs/").mock(
+        return_value=httpx.Response(200, json={"id": 1})
+    )
+    return respx_mock
+
+
+@pytest.fixture
 def factory(migrated: Path) -> Iterator[sessionmaker[Session]]:
     engine = create_engine_from_settings(Settings(_env_file=None, db_url=f"sqlite:///{migrated}"))
     yield make_session_factory(engine)
@@ -110,14 +134,20 @@ class TestDatabaseCommands:
 
 class TestCommandsRewireSearchBeforeWriting:
     def test_a_command_restores_triggers_a_rebuild_removed(self, migrated: Path) -> None:
-        """This is the process that writes titles: it must not write into a dead index."""
+        """A process that writes titles must not write into a dead index.
+
+        ``sync`` rather than ``images``: artwork no longer writes anything here
+        at all, it posts to the API, and the API repairs the triggers at its own
+        startup. The guarantee did not go away - it moved to whoever is doing
+        the writing, which is the point of the change.
+        """
         engine = create_engine(f"sqlite:///{migrated}")
         try:
             with engine.begin() as connection:
                 for name in TITLES.triggers:
                     connection.execute(text(f"DROP TRIGGER {name}"))
 
-            assert main(["images"]) == EXIT_OK
+            assert main(["sync", "--source", "not_a_real_source"]) == EXIT_OK
 
             with engine.connect() as connection:
                 assert missing_triggers(connection) == ()
@@ -434,8 +464,18 @@ class TestSyncCommand:
         """An unknown --source is a warning, not a crash."""
         assert main(["sync", "--source", "not_a_real_source"]) == EXIT_OK
 
-    def test_images_with_nothing_to_do_succeeds(self, migrated: Path) -> None:
+    def test_images_with_nothing_to_do_succeeds(self, migrated: Path, configured_api: Any) -> None:
         assert main(["images"]) == EXIT_OK
+
+    def test_images_without_a_token_says_how_to_get_one(
+        self, migrated: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The command writes through the API now, so this is the first thing
+        anybody upgrading will hit. A traceback would bury the answer."""
+        with caplog.at_level(logging.ERROR):
+            assert main(["images"]) == EXIT_FATAL
+
+        assert "token create" in caplog.text
 
     def test_concurrency_below_one_is_refused(self, migrated: Path) -> None:
         """Zero readers would be a run that quietly does nothing at all."""

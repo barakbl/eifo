@@ -264,8 +264,22 @@ class Settings(BaseSettings):
     #: to serve a database that is missing or behind.
     auto_migrate: bool = True
 
+    #: Where the fetcher sends its work.
+    #:
+    #: The fetcher no longer writes to the database or the images directory: it
+    #: asks this API what needs doing and posts the results back, which is what
+    #: lets it run on a laptop and fill a catalog on a server it has no disk
+    #: access to. Unset, it talks to the API on this machine - so a single-box
+    #: install needs no configuration for it, and the remote case is one line.
+    api_base_url: str | None = None
+
     # Secrets - never in the TOML file.
     secret_key: SecretStr | None = None
+    #: How the fetcher proves it may write. An ``eifo_pat_`` token belonging to
+    #: an administrator; ``eifo-fetch token create`` issues one from the machine
+    #: that holds the database, which is the way in when the web app cannot be
+    #: reached to press the button in Settings.
+    api_token: SecretStr | None = None
     tmdb_api_key: SecretStr | None = None
     #: Pinged when the nightly run starts, finishes and fails, so a run that
     #: stops happening is noticed by something other than a person wondering
@@ -354,6 +368,19 @@ class Settings(BaseSettings):
         if not email:
             return False
         return email.strip().casefold() in {entry.casefold() for entry in self.admin_emails}
+
+    def api_url(self) -> str:
+        """Where the fetcher posts its work, with no trailing slash.
+
+        Falls back to the API this machine serves. That is the right default
+        rather than a placeholder: the common install runs both on one box, and
+        making it configure a URL to talk to itself would be ceremony. Setting
+        ``api_base_url`` is what turns the same fetcher into a remote one.
+        """
+        configured = (self.api_base_url or "").strip()
+        if configured:
+            return configured.rstrip("/")
+        return f"http://{self.serve_host}:{self.serve_port}"
 
     def enabled_source_keys(self) -> list[str]:
         """Source keys currently switched on, in configuration order."""

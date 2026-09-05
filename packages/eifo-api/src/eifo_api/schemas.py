@@ -35,6 +35,11 @@ from eifo_core.models import (
 HANDLE_PATTERN = r"^[a-z0-9_]+$"
 HANDLE_MIN_LENGTH = 3
 
+#: Cap on a run log arriving over the wire. The sender keeps the tail of what a
+#: run said and trims it to 64KB; this is that with room to spare, so a sender
+#: that trims correctly is never refused and one that does not is.
+MAX_RUN_LOG_CHARS = 200_000
+
 #: Cap on one bulk ruling. Big enough for "dismiss every Sing Along on this
 #: page", small enough that a mistake is reviewable and one request is one
 #: transaction that finishes.
@@ -479,6 +484,58 @@ class RunDetail(RunOut):
     """One fetcher run, with whatever it said while it ran."""
 
     log: str | None = None
+
+
+class RunOpen(BaseModel):
+    """A fetcher saying it has started a phase.
+
+    ``started_at`` is the fetcher's clock rather than the server's, because the
+    fetcher is where the work began and the two machines are no longer
+    guaranteed to be the same one. Left out, the server uses its own - which is
+    the honest answer when nobody said otherwise.
+    """
+
+    phase: FetchPhase
+    source_key: str | None = Field(default=None, max_length=50)
+    started_at: dt.datetime | None = None
+
+
+class RunClose(BaseModel):
+    """A fetcher saying how a phase ended."""
+
+    status: FetchStatus
+    finished_at: dt.datetime | None = None
+    stats: dict[str, Any] = Field(default_factory=dict)
+    #: The tail of what the run said. Capped here as well as at the sender,
+    #: because a cap that only one side enforces is a cap on well-behaved
+    #: senders.
+    log: str | None = Field(default=None, max_length=MAX_RUN_LOG_CHARS)
+
+
+class PendingPoster(BaseModel):
+    """One title that still needs its artwork downloaded."""
+
+    title_id: int
+    source_url: str
+
+
+class RejectedPoster(BaseModel):
+    """One title whose artwork was not stored, and why.
+
+    Reported per title rather than failing the batch: one unreadable image
+    among a hundred good ones should cost that one image, and the reason has
+    to reach whoever can act on it - which is the sender, not this log.
+    """
+
+    title_id: int
+    reason: str
+
+
+class IngestResult(BaseModel):
+    """What an upload achieved."""
+
+    stored: int
+    rejected: list[RejectedPoster] = Field(default_factory=list)
 
 
 class AuthContext(BaseModel):

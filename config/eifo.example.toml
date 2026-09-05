@@ -8,6 +8,16 @@ db_url = "sqlite:///data/eifo.db"
 images_dir = "data/images"
 public_origin = "http://localhost:3436"
 
+# Where the fetcher sends downloaded artwork. The artwork phase writes through
+# the API rather than to the disk, so it can run on one machine and fill the
+# catalog on another. Left unset it talks to the API on this machine, which is
+# what a single-box install wants; set it to reach a server elsewhere.
+#
+# The token that goes with it is a secret and lives in the environment:
+#   eifo-fetch token create fetcher     # on the machine with the database
+#   export EIFO_API_TOKEN=eifo_pat_...
+# api_base_url = "https://eifo.example.com"
+
 # Titles whose availability data is older than this are reported as stale by
 # GET /api/v1/meta (the health endpoint).
 stale_after_hours = 48

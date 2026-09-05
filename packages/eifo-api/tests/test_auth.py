@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 import respx
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from helpers import SignIn
 from providers import (
@@ -23,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_api.app import create_app
-from eifo_api.oauth import GoogleProvider, XProvider
+from eifo_api.oauth import GoogleProvider, XProvider, origin_mismatch
 from eifo_api.security import OAUTH_COOKIE, SESSION_COOKIE
 from eifo_core.enums import AuthProvider
 from eifo_core.models import User, UserSession
@@ -333,3 +334,77 @@ class TestUnconfiguredDeployment:
 class TestConfiguredDeployment:
     def test_meta_advertises_both_providers(self, client: TestClient) -> None:
         assert client.get("/api/v1/meta").json()["login_providers"] == ["google", "x"]
+
+
+class TestSayingWhereSignInGoes:
+    """The redirect URI is built from `public_origin`, and nothing printed it.
+
+    So a stale one produced a sign-in that failed several redirects away from
+    the setting responsible: this instance had the port move from 8000 to 3436
+    and one config file not follow, and the only symptom was a callback landing
+    on a port nothing was listening to.
+
+    The rule is tested directly rather than through a request, because the test
+    client arrives from `http://testserver` - which is not an address anybody
+    deploys to, and not one the check has an opinion about.
+    """
+
+    def settings_at(self, origin: str) -> Settings:
+        return Settings(_env_file=None, public_origin=origin)
+
+    def test_a_stale_port_is_named(self) -> None:
+        said = origin_mismatch(self.settings_at("http://localhost:8000"), "http://localhost:3436/")
+
+        assert said is not None
+        assert "8000" in said and "3436" in said
+        # The word somebody has to search for to fix it.
+        assert "public_origin" in said
+
+    def test_a_matching_origin_says_nothing(self) -> None:
+        assert (
+            origin_mismatch(self.settings_at("http://localhost:3436"), "http://localhost:3436/")
+            is None
+        )
+
+    def test_a_trailing_slash_is_not_a_mismatch(self) -> None:
+        assert (
+            origin_mismatch(self.settings_at("http://localhost:3436/"), "http://localhost:3436/")
+            is None
+        )
+
+    def test_the_two_ways_of_writing_this_machine_are_not_confused(self) -> None:
+        """127.0.0.1 and localhost are the same machine and different origins.
+
+        Providers compare the redirect URI as a string, so one configured as
+        localhost and reached as 127.0.0.1 really will fail - and saying so is
+        more use than being clever about what they mean.
+        """
+        said = origin_mismatch(self.settings_at("http://localhost:3436"), "http://127.0.0.1:3436/")
+
+        assert said is not None
+
+    def test_a_proxied_deployment_is_left_alone(self) -> None:
+        """The reason the check only looks at loopback origins.
+
+        Behind a proxy the request arrives at an internal address while
+        `public_origin` is the external one, and they are *supposed* to differ.
+        Warning there would fire on every real deployment until nobody read it.
+        """
+        proxied = self.settings_at("https://eifo.example.com")
+
+        assert origin_mismatch(proxied, "http://localhost:8000/") is None
+        assert origin_mismatch(proxied, "http://10.0.0.4:8000/") is None
+
+    def test_the_warning_does_not_stop_the_sign_in(self, client: TestClient, app: FastAPI) -> None:
+        """It is a diagnosis, not a refusal.
+
+        The provider may well have been told about that URI; this cannot know,
+        and refusing to start a sign-in over a suspicion would be worse than the
+        problem it is warning about.
+        """
+        app.state.settings.public_origin = "http://localhost:8000"
+
+        started = client.get("/api/v1/auth/login/google", follow_redirects=False)
+
+        assert started.status_code == 302
+        assert "accounts.google.com" in started.headers["location"]

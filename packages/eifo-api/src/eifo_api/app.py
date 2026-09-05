@@ -14,6 +14,7 @@ from eifo_api.caching import CatalogCacheMiddleware
 from eifo_api.deps import require_membership
 from eifo_api.errors import install_error_handlers
 from eifo_api.logging_privacy import install_log_filters
+from eifo_api.oauth import configured_providers, redirect_uri
 from eifo_api.routers import admin, auth, catalog, me, meta, reviews
 from eifo_api.static import mount_client, mount_images
 from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
@@ -55,9 +56,25 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                         "Run `eifo-fetch db upgrade` to restore them."
                     )
         logger.info("eifo-api %s ready", __version__)
+        _say_where_sign_in_goes(settings)
         yield
     finally:
         engine.dispose()
+
+
+def _say_where_sign_in_goes(settings: Settings) -> None:
+    """Log the redirect URI sign-in will hand the provider.
+
+    One line, at startup, because the value is derived from ``public_origin``
+    and nothing else prints it - so getting it wrong produced a sign-in that
+    failed several redirects away from the setting responsible, with nothing
+    anywhere to compare against the provider's own list. It is not a secret; it
+    is in the address bar of every sign-in.
+    """
+    for provider in configured_providers(settings):
+        logger.info(
+            "sign-in with %s returns to %s", provider.value, redirect_uri(provider, settings)
+        )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

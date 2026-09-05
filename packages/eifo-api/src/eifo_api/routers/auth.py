@@ -18,7 +18,13 @@ from sqlalchemy.orm import Session
 
 from eifo_api import members
 from eifo_api.deps import CsrfDep, PrincipalDep, SessionDep, SettingsDep
-from eifo_api.oauth import Identity, OAuthError, build_provider, configured_providers
+from eifo_api.oauth import (
+    Identity,
+    OAuthError,
+    build_provider,
+    configured_providers,
+    origin_mismatch,
+)
 from eifo_api.schemas import AuthContext
 from eifo_api.security import (
     OAUTH_COOKIE,
@@ -73,9 +79,21 @@ def context(settings: SettingsDep) -> AuthContext:
 
 
 @router.get("/login/{provider}", summary="Start sign-in with a provider")
-def login(provider: AuthProvider, settings: SettingsDep) -> RedirectResponse:
+def login(
+    provider: AuthProvider,
+    request: Request,
+    settings: SettingsDep,
+) -> RedirectResponse:
     """Redirect to the provider, remembering state and PKCE on the way out."""
     secret = signing_secret(settings)
+    # Checked here rather than at startup, because here is the only place that
+    # knows where the request actually arrived - and it is the moment the fault
+    # matters. Said out loud rather than corrected: rewriting the redirect URI
+    # to match would break the provider's own list of allowed ones, so the
+    # honest thing is to name the setting and let somebody fix it.
+    complaint = origin_mismatch(settings, str(request.base_url))
+    if complaint is not None:
+        logger.warning("%s", complaint)
     handoff = OAuthHandoff(
         provider=provider.value,
         state=secrets.token_urlsafe(STATE_BYTES),

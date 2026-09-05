@@ -1,6 +1,6 @@
 [project]
 name = "eifo-fetcher"
-version = "0.13.0"  # x-release-please-version
+version = "0.13.1"  # x-release-please-version
 description = "Eifo catalog fetcher and metadata enricher"
 requires-python = ">=3.12"
 license = "MIT"

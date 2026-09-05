@@ -151,9 +151,24 @@ a folder people open to see what an app remembers. It is reached through the
 Security framework rather than by running `/usr/bin/security`, because the CLI
 takes the password as a command-line argument and arguments are visible in `ps`.
 
-Look for **Eifo / api-token** in Keychain Access. Revoking it from the web app's
-Settings is what actually ends it; **Forget API token** only stops this app
-holding a copy.
+The menu says which state it is in, because the alternative did not:
+
+```
+API token: none                          <- greyed "Forget" now has a reason
+Paste API token from clipboard
+Forget API token                         (greyed)
+```
+
+```
+API token: in your Keychain · revoke it in Settings
+Replace API token from clipboard
+Forget API token
+```
+
+Look for **Eifo / api-token** in Keychain Access. **Forget** puts down this
+app's copy and nothing more - the token goes on working for anything else
+holding one until it is revoked in Settings, which is why the item does not say
+"Delete". A menu item should not promise something it cannot do.
 
 Two refusals, and they need different sentences. No token says to paste one;
 a token that was refused says it may have been revoked - because being told to

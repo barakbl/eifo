@@ -55,6 +55,7 @@ pub struct Items {
     pub open_app: MenuItem,
     pub open_manage: MenuItem,
     pub update: MenuItem,
+    pub token_state: MenuItem,
     pub paste_token: MenuItem,
     pub forget_token: MenuItem,
     pub choose_folder: MenuItem,
@@ -95,6 +96,7 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
     let open_app = MenuItem::new("Open Eifo", true, None);
     let open_manage = MenuItem::new("Open Manage", true, None);
     let update = MenuItem::new("Check for updates", true, None);
+    let token_state = MenuItem::new("API token: none", false, None);
     let paste_token = MenuItem::new("Paste API token from clipboard", true, None);
     let forget_token = MenuItem::new("Forget API token", true, None);
     let choose_folder = MenuItem::new("Choose Eifo folder…", true, None);
@@ -132,6 +134,7 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         &separator(),
         &update,
         &separator(),
+        &token_state,
         &paste_token,
         &forget_token,
         &choose_folder,
@@ -166,6 +169,7 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         open_app,
         open_manage,
         update,
+        token_state,
         paste_token,
         forget_token,
         choose_folder,
@@ -373,6 +377,20 @@ pub fn progress_label(run: &RunView) -> String {
     }
 }
 
+/// Whether this app is holding a key to the catalog, and what that means.
+///
+/// "Forget" rather than "Revoke", and the line says why: this app can only put
+/// down its own copy. The token goes on working for anything else holding one
+/// until it is revoked where it was made, and a menu item that said "Delete"
+/// would be promising something it cannot do.
+pub fn token_line(snapshot: &Snapshot) -> String {
+    if snapshot.has_token {
+        "API token: in your Keychain · revoke it in Settings".into()
+    } else {
+        "API token: none".into()
+    }
+}
+
 /// What the server line says about a process this app may or may not own.
 pub fn server_line(snapshot: &Snapshot) -> String {
     match (snapshot.server_owned, snapshot.status) {
@@ -463,13 +481,16 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
         .set_checked(snapshot.start_server_on_open);
     items.keep_up.set_checked(snapshot.keep_server_up);
 
+    // A readout above the two actions, like the fetch and server lines above.
+    // Without it, "Forget API token" was greyed out and gave no clue why - the
+    // first person to see it asked what it was for and why they could not press
+    // it, which is the whole answer to whether a disabled item explains itself.
+    items.token_state.set_text(token_line(snapshot));
     items.paste_token.set_text(if snapshot.has_token {
         "Replace API token from clipboard"
     } else {
         "Paste API token from clipboard"
     });
-    // Nothing to forget, so nothing to press. A greyed item says "there is no
-    // token here" better than an enabled one that does nothing.
     items.forget_token.set_enabled(snapshot.has_token);
 
     let (update_text, update_enabled) = update_line(&snapshot.update);
@@ -686,6 +707,28 @@ mod tests {
         let mut s = snapshot();
         s.restarts_given_up = true;
         assert!(detail(&s).contains("by hand"));
+    }
+
+    #[test]
+    fn the_menu_says_why_forget_is_greyed_out() {
+        // It was greyed with nothing to explain it, and the first person to see
+        // it asked what the item was for and why it would not press. A disabled
+        // control that needs asking about is not explaining itself.
+        let mut s = snapshot();
+        assert_eq!(token_line(&s), "API token: none");
+
+        s.has_token = true;
+        assert!(token_line(&s).contains("Keychain"));
+    }
+
+    #[test]
+    fn the_line_says_where_a_token_is_actually_revoked() {
+        // This app can only put down its own copy. A menu that implied
+        // otherwise would be promising something it cannot do.
+        let mut s = snapshot();
+        s.has_token = true;
+
+        assert!(token_line(&s).contains("Settings"));
     }
 
     #[test]

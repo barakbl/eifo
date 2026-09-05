@@ -26,9 +26,9 @@ from eifo_api.schemas import (
     UserItemOut,
     UserOut,
 )
-from eifo_api.security import hash_token, new_api_token
 from eifo_core.enums import ItemStatus
 from eifo_core.models import ApiToken, Availability, Source, Title, User, UserItem
+from eifo_core.tokens import hash_token, new_api_token
 from eifo_core.types import utcnow
 
 router = APIRouter(tags=["user"])

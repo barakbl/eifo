@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_core.db import create_engine_from_settings, make_session_factory
 from eifo_core.enums import (
+    AuthProvider,
     FetchPhase,
     FetchStatus,
     MatchDecision,
@@ -28,6 +29,7 @@ from eifo_core.fts import TITLES, missing_triggers
 from eifo_core.migrate import alembic_config, upgrade
 from eifo_core.models import (
     AggregateScore,
+    ApiToken,
     Availability,
     EnrichAttempt,
     ExternalRating,
@@ -35,8 +37,10 @@ from eifo_core.models import (
     MatchReview,
     Source,
     Title,
+    User,
 )
 from eifo_core.settings import Settings, get_settings
+from eifo_core.tokens import API_TOKEN_PREFIX, hash_token
 from eifo_fetcher import cli
 from eifo_fetcher.cli import EXIT_FATAL, EXIT_OK, EXIT_PARTIAL, build_parser, main
 from eifo_fetcher.lock import single_flight
@@ -582,3 +586,126 @@ class TestRematchCommand:
         assert "tmdb 284053" in out
         assert "nothing written; pass --apply" in out
         assert applied == []
+
+
+class TestTokensFromATerminal:
+    """The way in when the way in is broken.
+
+    Making a token is ordinarily a button in the web app's Settings. That
+    button is behind a sign-in, so an instance whose sign-in has broken - a
+    stale public_origin, a redirect URI the provider does not know - is exactly
+    the instance where a token is what you need and cannot get.
+    """
+
+    def _account(self, factory: sessionmaker[Session], email: str = "owner@example.com") -> None:
+        with factory() as session:
+            session.add(
+                User(
+                    auth_provider=AuthProvider.GOOGLE,
+                    auth_subject=email,
+                    email=email,
+                    display_name="Owner",
+                )
+            )
+            session.commit()
+
+    def test_it_issues_a_token_the_api_would_accept(
+        self, factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._account(factory)
+
+        assert main(["token", "create", "sidecar"]) == EXIT_OK
+
+        printed = capsys.readouterr().out.strip()
+        assert printed.startswith(API_TOKEN_PREFIX)
+        with factory() as session:
+            stored = session.scalars(select(ApiToken)).one()
+            # The row keeps the hash and nothing else, exactly as the web app's
+            # does - one definition of a token, in eifo_core.tokens.
+            assert stored.token_hash == hash_token(printed)
+            assert stored.name == "sidecar"
+
+    def test_the_token_is_the_only_thing_on_stdout(
+        self, factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """So it can be piped. Everything else it has to say goes to the log."""
+        self._account(factory)
+
+        main(["token", "create", "sidecar"])
+
+        assert len(capsys.readouterr().out.strip().splitlines()) == 1
+
+    def test_it_will_not_invent_an_account_to_issue_for(
+        self, factory: sessionmaker[Session], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A token carries an account's permissions, so it needs one to carry.
+
+        An identity nothing has vouched for is not something a command-line
+        flag should be able to create - the answer to "nobody has signed in
+        yet" is to fix the sign-in, and the message says so.
+        """
+        with caplog.at_level(logging.ERROR):
+            assert main(["token", "create", "sidecar"]) == EXIT_FATAL
+
+        assert "sign in" in caplog.text
+
+    def test_more_than_one_account_has_to_be_told_apart(
+        self, factory: sessionmaker[Session], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Guessing which person a credential belongs to is not a guess to make."""
+        self._account(factory, "one@example.com")
+        self._account(factory, "two@example.com")
+
+        with caplog.at_level(logging.ERROR):
+            assert main(["token", "create", "sidecar"]) == EXIT_FATAL
+
+        assert "--email" in caplog.text
+        # And it names them, so the next command can be typed rather than guessed.
+        assert "one@example.com" in caplog.text
+
+    def test_naming_the_account_resolves_it(
+        self, factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._account(factory, "one@example.com")
+        self._account(factory, "two@example.com")
+
+        assert main(["token", "create", "sidecar", "--email", "TWO@example.com"]) == EXIT_OK
+
+        with factory() as session:
+            owner = session.scalars(select(User).where(User.email == "two@example.com")).one()
+            assert session.scalars(select(ApiToken)).one().user_id == owner.id
+
+    def test_listing_never_shows_a_token(
+        self, factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._account(factory)
+        main(["token", "create", "sidecar"])
+        issued = capsys.readouterr().out.strip()
+
+        assert main(["token", "list"]) == EXIT_OK
+
+        listed = capsys.readouterr().out
+        assert "sidecar" in listed and "owner@example.com" in listed
+        assert issued not in listed, "a listing must not hand back the credential"
+
+    def test_revoking_by_hint(
+        self, factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._account(factory)
+        main(["token", "create", "sidecar"])
+        issued = capsys.readouterr().out.strip()
+
+        assert main(["token", "revoke", hash_token(issued)[:4]]) == EXIT_OK
+
+        with factory() as session:
+            assert session.scalars(select(ApiToken)).all() == []
+
+    def test_a_hint_matching_nothing_says_so(
+        self, factory: sessionmaker[Session], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        self._account(factory)
+
+        with caplog.at_level(logging.ERROR):
+            assert main(["token", "revoke", "zzzz"]) == EXIT_FATAL
+
+        assert "no token starts with" in caplog.text

@@ -425,6 +425,11 @@ const STRINGS = {
     "auth.unavailable": "Sign-in is not available on this installation.",
     "auth.menu": "Account menu",
 
+    "suggest.titles": "Titles",
+    "suggest.people": "People",
+    "suggest.credits": "{count} titles",
+    "suggest.empty": "No suggestions",
+
     "filters.order.desc": "Highest first \u2014 click to reverse",
     "filters.order.asc": "Lowest first \u2014 click to reverse",
     "filters.more": "More filters",

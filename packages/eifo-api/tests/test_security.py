@@ -12,13 +12,13 @@ from eifo_api.security import (
     OAuthHandoff,
     csrf_matches,
     csrf_token_for,
-    hash_token,
     new_session_token,
     seal_handoff,
     signing_secret,
     unseal_handoff,
 )
 from eifo_core.settings import Settings
+from eifo_core.tokens import hash_token
 
 HANDOFF = OAuthHandoff(provider="google", state="the-state", code_verifier="the-verifier")
 

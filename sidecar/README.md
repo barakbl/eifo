@@ -143,6 +143,14 @@ field, because the token is shown once, beside a sentence telling you to copy it
 now - asking for it to be pasted into a second box is asking somebody to do the
 thing they have just done.
 
+If the web app is the thing that is broken - which on a members-only instance is
+exactly when this app goes amber - the fetcher will issue one from the same
+machine, and pipe it straight to the clipboard:
+
+```bash
+eifo-fetch token create sidecar | pbcopy
+```
+
 **It goes in the Keychain, not in `config.json`.** Everything else this app
 remembers is a preference and a JSON file is right for those. A token is a
 credential that reads a private catalog, and a credential in a plaintext file is

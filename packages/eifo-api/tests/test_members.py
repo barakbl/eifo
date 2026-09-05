@@ -19,9 +19,9 @@ from providers import GOOGLE_EMAIL
 from seed import Seeded
 from sqlalchemy.orm import Session, sessionmaker
 
-from eifo_api.security import API_TOKEN_PREFIX
 from eifo_core.enums import AuthProvider, MemberRole
 from eifo_core.models import ApiToken, Member, User, UserSession
+from eifo_core.tokens import API_TOKEN_PREFIX
 from eifo_core.types import utcnow
 
 

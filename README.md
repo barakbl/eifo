@@ -132,13 +132,13 @@ everyone with no sign-in at all.
 
 <br /><br />
 
-<img src="docs/screenshots/suggest.jpg" width="45%" alt="The search box open, suggesting five titles and a person, each with its poster and year" />
+<img src="docs/screenshots/suggest.jpg" width="45%" alt="The search box with 'godfather' typed, suggesting The Godfather first and its two sequels after it, each with its poster, year and score" />
 
-<sub><b>Search as you type, across both languages - and the people who made them, who are otherwise reachable only through a title they worked on.</b></sub>
+<sub><b>Search as you type, across both languages - and the people who made them, who are otherwise reachable only through a title they worked on. What you meant comes first: an exact match, then its sequels, then everything else that merely contains the words.</b></sub>
 
 <br /><br />
 
-<img src="docs/screenshots/title.jpg" width="90%" alt="A title page: ratings from IMDb, Rotten Tomatoes and TMDB side by side, a star rating, watched and want-to-watch buttons, and where to watch it" />
+<img src="docs/screenshots/title.jpg" width="90%" alt="A title page: a weighted score, ratings from IMDb, TMDB and Rotten Tomatoes as one chip each, a star rating, watched and want-to-watch buttons, and where to watch it" />
 
 <sub><b>Every title: its ratings side by side, a private note, and where to watch it in Israel.</b></sub>
 
@@ -147,6 +147,18 @@ everyone with no sign-in at all.
 <img src="docs/screenshots/manage.jpg" width="90%" alt="The Manage tab: completeness percentages across the catalog, and a table of every source with its coverage, last sync and on-off switch" />
 
 <sub><b>The operator's tab, for anyone running their own: how complete the catalog is, and one row per service - coverage, last sync, and the switch that turns it on.</b></sub>
+
+<br /><br />
+
+<img src="docs/screenshots/members.jpg" width="90%" alt="The Members panel: an invite box with a role, and one row per address - the one from the configuration file marked as such and with no buttons, the others with promote and remove" />
+
+<sub><b>Who can sign in, on a private instance. An address named in the configuration file is always an administrator and cannot be changed from here - everyone else is invited, promoted and removed from this panel.</b></sub>
+
+<br /><br />
+
+<img src="docs/screenshots/members-only.jpg" width="70%" alt="A signed-out visitor to a members-only instance: the catalog replaced by 'This catalog is for members' and a sign-in button" />
+
+<sub><b>With <code>EIFO_MEMBERS_ONLY</code> set, a signed-out visitor gets this instead of the catalog - and every endpoint and every poster behind it answers 401, not just the page.</b></sub>
 
 <br /><br />
 
@@ -657,6 +669,39 @@ promote anybody on the member list from the Manage tab, without editing a file o
 Every endpoint behind the tab answers 404 rather than 403 to everybody else: a signed-in
 stranger is not owed the knowledge that it is there.
 
+Four panels, the first three on one screen:
+
+| Panel | Answers |
+|---|---|
+| **Overview** | Is the catalog alright. The three figures that are really shares - with a score, with a poster, review queue cleared - lead with the percentage, green above 95, amber above 75, red below, with the count they were taken from underneath. Everything is stated so that more is better, which is what lets one colour scale read the same across all of them. |
+| **Sources** | Is *this* source alright - a row each, with the share of its titles that carry a poster, a score, an enrichment attempt and a cleared queue, when it last synced, and a switch. |
+| **What the score is made of** | Which rater actually decided the scores. The configured weights alone do not answer that: a rater weighted heaviest that has reached a tenth of the catalog is not the one deciding it. So the share is the weight that really went in - each rater's weight counted once per scored title it has managed to rate, halved for a thinly voted rating and dropped for one below its vote floor, exactly as the sum itself treats them - beside its weight and how much of the catalog it reaches. A rater on 0% is the most useful row on the table: an enricher is off, blocked, or quietly failing. |
+| **Runs** | What happened last night - every fetcher run with what it counted, and the tail of what it said while it ran. |
+
+**The run log is the part worth knowing about.** Runs were always recorded - when they
+started, how they ended, what they counted - but the *reason* a night went wrong lived only
+on the stderr of a process nobody was watching. Now `eifo-fetch` keeps the tail of what each
+run said and stores it on the row, which is usually the whole answer to "why did mako return
+nothing this time".
+
+**The source switch is an override, not a copy of your config file.** Left alone it means
+"whatever `[sources]` says", so switching one source off does not quietly freeze the other
+twelve at whatever the file happened to say that day. Nothing needs restarting.
+
+**Switching one on also fetches it.** Permission and intent are the same gesture here:
+nobody turns a service on to look at an empty row until the small hours. The API cannot
+call the fetcher - the database is all the two share - so the ask is recorded on the source
+and the daemon picks it up within half a minute, syncing that source alone. The row says
+"sync queued" until it has. Switching off withdraws a pending ask. Without the daemon
+running the ask simply keeps until the next sync by any route, including a hand-run one.
+
+**The review queue** is where listings the matcher could not place get ruled on. A parked
+listing is not in the catalog at all - no title, nothing to search for - so a queue that
+grows is content going missing. The tab puts the source's offer beside the title it might
+be, with three answers of one tap each and `1`/`2`/`3` plus `j`/`k` for working through a
+backlog at speed. A ruling takes effect immediately. The same three rulings are available
+from the CLI (`eifo-fetch review`), which is still the right tool over SSH.
+
 ### Who can sign in
 
 By default anybody with a Google account can, and they get a viewer's account and nothing
@@ -697,38 +742,22 @@ exactly the permissions of the account that made it, needs no CSRF header (nothi
 a browser attach somebody else's `Authorization`), and cannot mint another token: one leaked
 token should not become permanent access that revoking the original does not touch.
 
-Four panels, the first three on one screen:
+**When Settings cannot be reached**, the fetcher issues one from the machine that holds the
+database:
 
-| Panel | Answers |
-|---|---|
-| **Overview** | Is the catalog alright. The three figures that are really shares - with a score, with a poster, review queue cleared - lead with the percentage, green above 95, amber above 75, red below, with the count they were taken from underneath. Everything is stated so that more is better, which is what lets one colour scale read the same across all of them. |
-| **Sources** | Is *this* source alright - a row each, with the share of its titles that carry a poster, a score, an enrichment attempt and a cleared queue, when it last synced, and a switch. |
-| **What the score is made of** | Which rater actually decided the scores. The configured weights alone do not answer that: a rater weighted heaviest that has reached a tenth of the catalog is not the one deciding it. So the share is the weight that really went in - each rater's weight counted once per scored title it has managed to rate, halved for a thinly voted rating and dropped for one below its vote floor, exactly as the sum itself treats them - beside its weight and how much of the catalog it reaches. A rater on 0% is the most useful row on the table: an enricher is off, blocked, or quietly failing. |
-| **Runs** | What happened last night - every fetcher run with what it counted, and the tail of what it said while it ran. |
+```bash
+eifo-fetch token create sidecar                 # prints the token, once, on its own line
+eifo-fetch token list                           # the tokens that exist, never their values
+eifo-fetch token revoke 5bc2                    # by the hint shown in the list
+```
 
-**The run log is the part worth knowing about.** Runs were always recorded - when they
-started, how they ended, what they counted - but the *reason* a night went wrong lived only
-on the stderr of a process nobody was watching. Now `eifo-fetch` keeps the tail of what each
-run said and stores it on the row, which is usually the whole answer to "why did mako return
-nothing this time".
-
-**The source switch is an override, not a copy of your config file.** Left alone it means
-"whatever `[sources]` says", so switching one source off does not quietly freeze the other
-twelve at whatever the file happened to say that day. Nothing needs restarting.
-
-**Switching one on also fetches it.** Permission and intent are the same gesture here:
-nobody turns a service on to look at an empty row until the small hours. The API cannot
-call the fetcher - the database is all the two share - so the ask is recorded on the source
-and the daemon picks it up within half a minute, syncing that source alone. The row says
-"sync queued" until it has. Switching off withdraws a pending ask. Without the daemon
-running the ask simply keeps until the next sync by any route, including a hand-run one.
-
-**The review queue** is where listings the matcher could not place get ruled on. A parked
-listing is not in the catalog at all - no title, nothing to search for - so a queue that
-grows is content going missing. The tab puts the source's offer beside the title it might
-be, with three answers of one tap each and `1`/`2`/`3` plus `j`/`k` for working through a
-backlog at speed. A ruling takes effect immediately. The same three rulings are available
-from the CLI (`eifo-fetch review`), which is still the right tool over SSH.
+That route exists because the ordinary one has a hole in it: on a members-only instance
+whose sign-in is broken - a bad `public_origin`, an OAuth client that has expired, an
+allowlist that nobody on it can still reach - the only way to get a token is behind the
+thing that is broken. Anyone who can run this already has the database file, so it grants
+nothing they did not have; what it adds is a way back in that does not require the web app
+to be working. `create` prints the raw token alone on stdout so it can be piped, and refuses
+to invent an account: with more than one, name whose it is with `--email`.
 
 ## How it fits together
 

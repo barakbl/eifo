@@ -18,13 +18,12 @@ from fastapi import Response
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from eifo_core.settings import Settings
+from eifo_core.tokens import looks_like_api_token
 
 SESSION_COOKIE = "eifo_session"
 #: Carries the OAuth ``state`` and PKCE verifier across the provider round trip.
 OAUTH_COOKIE = "eifo_oauth"
 CSRF_HEADER = "X-CSRF-Token"
-#: How an API token announces itself. Anything without it is not one of ours.
-API_TOKEN_PREFIX = "eifo_pat_"
 
 SESSION_TTL = dt.timedelta(days=30)
 #: A session row is only rewritten once this much time has passed since its last
@@ -66,23 +65,6 @@ def new_session_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-def hash_token(token: str) -> str:
-    """The stored form of a session or API token."""
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def new_api_token() -> str:
-    """A personal API token, prefixed so it is recognisable on sight.
-
-    The prefix is not decoration. A token pasted into a script, a log or an
-    issue is a credential somebody has to be able to identify as one - both to
-    know to revoke it and, for the scanners that read public repositories, to
-    know what they have found. It also lets the API tell a token that is not
-    ours from one that is merely wrong.
-    """
-    return f"{API_TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
-
-
 def bearer_token(header: str | None) -> str | None:
     """The token out of an ``Authorization`` header, if there is one of ours.
 
@@ -98,7 +80,7 @@ def bearer_token(header: str | None) -> str | None:
     if scheme.lower() != "bearer":
         return None
     token = value.strip()
-    return token if token.startswith(API_TOKEN_PREFIX) else None
+    return token if looks_like_api_token(token) else None
 
 
 def csrf_token_for(token_hash: str, secret: str) -> str:

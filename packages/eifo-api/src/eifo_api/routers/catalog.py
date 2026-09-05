@@ -40,7 +40,7 @@ from eifo_api.schemas import (
     TitleDetail,
     TitleSuggestion,
 )
-from eifo_api.search import apply_text_search, name_match, relevance_of
+from eifo_api.search import apply_relevance, apply_text_search, name_match
 from eifo_core.enums import FetchPhase, FetchStatus, TitleKind
 from eifo_core.fts import PEOPLE, TITLES
 from eifo_core.models import (
@@ -89,7 +89,8 @@ class SortOrder(StrEnum):
 #: scored or dated, A to Z for a name - and leaving ``order`` unset keeps every
 #: URL written before it existed answering exactly as it did.
 NATURAL_ORDER = {
-    # Ascending, because bm25 counts down: the better match is more negative.
+    # Ascending, because the match ladder counts down: rung zero is the exact
+    # title (eifo_api.search).
     Sort.RELEVANCE: SortOrder.ASC,
     Sort.SCORE: SortOrder.DESC,
     Sort.SCORE_ISRAELI: SortOrder.DESC,
@@ -272,10 +273,10 @@ def list_sources(session: SessionDep) -> list[SourceOut]:
 SUGGEST_TITLES = 7
 SUGGEST_PEOPLE = 3
 
-#: How many ranked rowids to read before narrowing to the filtered catalog, as
-#: a multiple of the number wanted, and the ceiling on that. Enough that a
-#: filter as narrow as one service still fills the list, small enough that the
-#: read stays a dropdown's worth of work.
+#: How many ranked ids to read before narrowing to the filtered catalog, as a
+#: multiple of the number wanted, and the ceiling on that. Enough that a filter
+#: as narrow as one service still fills the list, small enough that the read
+#: stays a dropdown's worth of work.
 SUGGEST_OVERREAD = 40
 SUGGEST_MAX_SCANNED = 400
 
@@ -346,17 +347,18 @@ def _suggest_titles(
         return []
 
     # Ranked wider than asked for, then narrowed to what the grid would show.
-    # The other way round - filter first, rank second - would mean handing the
-    # whole filtered catalog to the FTS query, and the ranking is the reason
-    # this is a useful list at all. The over-read is bounded: a dropdown asks
-    # for seven, so this reads a few hundred rowids and keeps the first seven
-    # that survive.
+    # Both halves are bounded, and the bound earns its keep: joining the whole
+    # filtered catalog into the ranking, so that one statement could do all of
+    # it, made a two-letter query take a third of a second - which is not a
+    # speed anybody types at.
+    matching = text(f"SELECT rowid FROM {TITLES.name} WHERE {TITLES.name} MATCH :fts").bindparams(
+        fts=match
+    )
     depth = limit if within is None else min(limit * SUGGEST_OVERREAD, SUGGEST_MAX_SCANNED)
-    ranked = text(
-        f"SELECT rowid FROM {TITLES.name} WHERE {TITLES.name} MATCH :fts "
-        f"ORDER BY bm25({TITLES.name}, 10.0, 10.0, 1.0, 1.0) LIMIT :limit"
-    ).bindparams(fts=match, limit=depth)
-    ids = [row[0] for row in session.execute(ranked).all()]
+    ordered = apply_relevance(select(Title.id).where(Title.id.in_(matching)), query)
+    if ordered is None:
+        return []
+    ids = list(session.scalars(ordered.limit(depth)).all())
 
     if within is not None and ids:
         allowed = set(session.scalars(within.where(Title.id.in_(ids))).all())
@@ -605,12 +607,18 @@ def _apply_sort(
     # all orderable and share no useful static type.
     column: Any
     if sort is Sort.RELEVANCE:
-        ranked = relevance_of(query) if query else None
+        # Relevance orders by several things at once - how well the name
+        # matches, then how many people have heard of it - so it builds the
+        # whole ordering rather than handing back one column to sort on.
+        # Whether the caller wants the natural direction, not which way the
+        # columns point: relevance is several columns pointing different ways.
+        best_first = (order or NATURAL_ORDER[sort]) is NATURAL_ORDER[sort]
+        ranked = apply_relevance(statement, query, best_first=best_first) if query else None
         if ranked is None:
             # Nothing to rank against; the ordinary default is the honest answer.
             return _apply_sort(statement, Sort.SCORE, order)
-        column = ranked
-    elif sort is Sort.SCORE or sort is Sort.SCORE_ISRAELI:
+        return ranked
+    if sort is Sort.SCORE or sort is Sort.SCORE_ISRAELI:
         column = AggregateScore.score if sort is Sort.SCORE else AggregateScore.score_israeli
         statement = statement.outerjoin(AggregateScore, AggregateScore.title_id == Title.id)
     elif sort is Sort.YEAR:

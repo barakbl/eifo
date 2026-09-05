@@ -63,9 +63,15 @@ people actually trust, and puts a search box in front of it.
   twelve thousand people. Israeli titles get a separate Israeli score, because local
   critics and global audiences rarely rate the same film the same way.
 - **Bilingual search that actually works.** Hebrew and English over one FTS5 index, with
-  prefix matching as you type. "פאודה" and "Fauda" find the same series. The suggestions
-  come from the same set as the results, filters and all - a dropdown that offers titles
-  the grid then says do not exist is worse than no dropdown.
+  prefix matching as you type. "פאודה" and "Fauda" find the same series, and "סנדק" finds
+  "הסנדק" - Hebrew glues its definite article to the front of the word, and nobody thinks
+  of it as part of the name. What comes first is decided by how well the *name* matches,
+  in rungs you can predict: the exact title, then the titles that begin with what you
+  typed, then the ones where it is a word further along, and only then the ones that
+  merely start with the same letters. Popularity orders each rung and never jumps
+  between them, so typing a title in full puts it first however obscure it is. The
+  suggestions come from the same set as the results, filters and all - a dropdown that
+  offers titles the grid then says do not exist is worse than no dropdown.
 - **Who made it, and what else they made.** Every title page carries a metadata panel:
   director, cinematographer and cast, alongside language, country and running time. Every
   name links to that person's page, which lists everything the catalog credits them with,

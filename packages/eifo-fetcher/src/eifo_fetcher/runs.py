@@ -25,11 +25,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from eifo_core.enums import FetchPhase, FetchStatus
-from eifo_core.ingest import ABANDONED_AFTER
+from eifo_core.ingest import ABANDONED_AFTER, REMOTE_PHASES
 from eifo_core.models import FetchRun
 from eifo_core.types import utcnow
 
@@ -244,8 +244,13 @@ def close_abandoned_runs(session: Session) -> int:
     running any ``eifo-fetch`` command on the server while a remote fetcher was
     working.
 
-    So age decides instead, on the same threshold the API sweeps by. A run open
-    for a day is not a run still going, whoever started it.
+    So age decides for those, on the same threshold the API sweeps by: a run
+    open for a day is not a run still going, whoever started it.
+
+    Only for those. Every other phase still opens the database directly, so it
+    can only be running on the machine holding the lock, and waiting a day to
+    say a sync died would be a worse answer than the one this gave before - a
+    dead source would sit there reading "running" until tomorrow.
 
     Returns:
         How many were marked, which is normally zero.
@@ -254,7 +259,10 @@ def close_abandoned_runs(session: Session) -> int:
         session.scalars(
             select(FetchRun).where(
                 FetchRun.status == FetchStatus.RUNNING,
-                FetchRun.started_at < utcnow() - ABANDONED_AFTER,
+                or_(
+                    FetchRun.phase.not_in(REMOTE_PHASES),
+                    FetchRun.started_at < utcnow() - ABANDONED_AFTER,
+                ),
             )
         ).all()
     )

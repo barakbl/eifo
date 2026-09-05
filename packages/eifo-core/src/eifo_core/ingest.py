@@ -25,6 +25,8 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from eifo_core.enums import FetchPhase
+
 #: Bumped when a change would make an older fetcher's archive wrong rather than
 #: merely incomplete. The server refuses what it does not recognise instead of
 #: guessing, because guessing at an unknown layout is how a poster ends up
@@ -58,6 +60,13 @@ BACKDROP_VARIANTS = (Variant("w1280", 1280),)
 
 POSTER_VARIANT_NAMES = frozenset(variant.name for variant in POSTER_VARIANTS)
 
+#: The phases a fetcher somewhere else could be running.
+#:
+#: Only these have to be swept by the clock. Every other phase still opens the
+#: database directly, so it can only be running on the machine that holds the
+#: lock - and the lock still proves what it always did.
+REMOTE_PHASES = frozenset({FetchPhase.IMAGES})
+
 #: How long a run may sit RUNNING before it is taken to be gone.
 #:
 #: Shared, because both services now sweep and they must agree. It used to be
@@ -68,7 +77,9 @@ POSTER_VARIANT_NAMES = frozenset(variant.name for variant in POSTER_VARIANTS)
 #: "still running" stopped implying "dead" and time had to take over.
 #:
 #: Generously long, because it is standing in for knowledge neither side has. A
-#: first pass over a large catalog's artwork is hours; a day is not.
+#: first pass over a large catalog's artwork is hours; a day is not. Long enough
+#: to be a poor answer for a phase that does not need it, which is why it is
+#: not applied to those.
 ABANDONED_AFTER = dt.timedelta(hours=24)
 
 #: Characters of the content digest that appear in a stored filename.

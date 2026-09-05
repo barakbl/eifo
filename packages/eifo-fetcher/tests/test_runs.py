@@ -80,11 +80,11 @@ class TestClosingARun:
 
 
 class TestRunsLeftBehind:
-    def test_a_run_still_open_from_a_dead_process_is_marked_crashed(self, session: Session) -> None:
-        """Old enough that nothing could still be working on it."""
-        run = open_run(session, phase=FetchPhase.SYNC, source_key="freetv")
-        run.started_at = utcnow() - ABANDONED_AFTER - dt.timedelta(minutes=1)
-        session.commit()
+    def test_a_sync_still_open_from_a_dead_process_is_marked_at_once(
+        self, session: Session
+    ) -> None:
+        """The lock still proves this one: a sync can only run on this machine."""
+        open_run(session, phase=FetchPhase.SYNC, source_key="freetv")
 
         assert close_abandoned_runs(session) == 1
 
@@ -92,13 +92,13 @@ class TestRunsLeftBehind:
         assert run.status is FetchStatus.CRASHED
         assert run.finished_at is not None
 
-    def test_a_run_young_enough_to_still_be_going_is_left_alone(self, session: Session) -> None:
-        """The lock no longer means nothing else is running.
+    def test_a_recent_artwork_run_is_left_alone(self, session: Session) -> None:
+        """The lock proves nothing about this one.
 
         The artwork phase writes through the API, so a fetcher on somebody
         else's machine can be mid-run against this catalog while this process
         holds a lock that means nothing to it. Sweeping on sight would mark
-        that live run crashed - and running any command on the server would be
+        that live run crashed, and running any command on the server would be
         enough to do it.
         """
         open_run(session, phase=FetchPhase.IMAGES)
@@ -106,10 +106,28 @@ class TestRunsLeftBehind:
         assert close_abandoned_runs(session) == 0
         assert _runs(session)[0].status is FetchStatus.RUNNING
 
-    def test_it_says_why_it_was_marked(self, session: Session) -> None:
-        run = open_run(session, phase=FetchPhase.ENRICH)
+    def test_an_old_artwork_run_is_swept_by_the_clock(self, session: Session) -> None:
+        """Nothing could still be working on it, whoever started it."""
+        run = open_run(session, phase=FetchPhase.IMAGES)
         run.started_at = utcnow() - ABANDONED_AFTER - dt.timedelta(minutes=1)
         session.commit()
+
+        assert close_abandoned_runs(session) == 1
+        assert _runs(session)[0].status is FetchStatus.CRASHED
+
+    def test_the_clock_is_not_imposed_on_phases_that_do_not_need_it(self, session: Session) -> None:
+        """A dead source must not sit there reading "running" until tomorrow.
+
+        That would be a worse answer than the one this gave before the artwork
+        phase moved, and it would be worse for the install that never had a
+        remote fetcher at all.
+        """
+        open_run(session, phase=FetchPhase.ENRICH)
+
+        assert close_abandoned_runs(session) == 1
+
+    def test_it_says_why_it_was_marked(self, session: Session) -> None:
+        open_run(session, phase=FetchPhase.ENRICH)
 
         close_abandoned_runs(session)
 

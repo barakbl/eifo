@@ -11,6 +11,14 @@ name: release-please
 # preserving comments, so a marker there would not survive a local build. Its
 # eifo-tray version line lags one release and any `cargo build` heals it; no CI
 # step passes `--locked` for the sidecar, so nothing breaks in the meantime.
+#
+# **Land pull requests with rebase or squash, never a merge commit.** A merge
+# commit puts two commits on main for one pull request - itself and the commit
+# it brought - and release-please credits the pull request's conventional title
+# to both, so every entry appeared in the changelog twice from v0.4.0 to
+# v0.12.1. GitHub has no merge-commit setting that avoids it: the only message
+# combinations it allows all leave the title on the merge commit as well. The
+# repository has merge commits switched off for that reason.
 
 on:
   push:

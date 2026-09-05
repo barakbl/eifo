@@ -13,15 +13,27 @@ This is the guard for the other direction: somebody writing the string back.
 from __future__ import annotations
 
 import tomllib
+from importlib import metadata
 from pathlib import Path
+
+import pytest
 
 import eifo_api
 
-#: This package's own pyproject, from the installed module's location.
+#: This package's own pyproject - present in a source checkout, which is where
+#: the suite runs, and absent from a real install, where the module lives in
+#: site-packages and there is no project file above it.
 PYPROJECT = Path(eifo_api.__file__).resolve().parents[2] / "pyproject.toml"
 
 
+def test_the_reported_version_is_the_installed_one() -> None:
+    """The check that holds however the package was installed."""
+    assert eifo_api.__version__ == metadata.version("eifo-api")
+
+
+@pytest.mark.skipif(not PYPROJECT.is_file(), reason="installed, not a source checkout")
 def test_the_reported_version_is_the_declared_one() -> None:
+    """And that the install itself is not stale against the project file."""
     declared = tomllib.loads(PYPROJECT.read_text())["project"]["version"]
 
     assert eifo_api.__version__ == declared

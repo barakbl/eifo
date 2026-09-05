@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.1](https://github.com/barakbl/eifo/compare/v0.12.0...v0.12.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* report the version the packages were actually released as ([526b953](https://github.com/barakbl/eifo/commit/526b9536e39a664e333c83a5531d9d09af49838b))
+* report the version the packages were actually released as ([e966754](https://github.com/barakbl/eifo/commit/e966754685195bddba2fde873bdfeba474519dde))
+
 ## [0.12.0](https://github.com/barakbl/eifo/compare/v0.11.0...v0.12.0) (2026-09-05)
 
 

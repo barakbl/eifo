@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.1](https://github.com/barakbl/eifo/compare/v0.11.0...v0.11.1) (2026-09-05)
+
+
+### Performance
+
+* the people dropdown stops reading the people table to rank ([25204c5](https://github.com/barakbl/eifo/commit/25204c56eb82e324898694f701062b853a9164b9))
+* the people dropdown stops reading the people table to rank ([8577b3b](https://github.com/barakbl/eifo/commit/8577b3b693f7dcc862f8faec5fa0d0007bfbe4ce))
+
 ## [0.11.0](https://github.com/barakbl/eifo/compare/v0.10.0...v0.11.0) (2026-09-05)
 
 

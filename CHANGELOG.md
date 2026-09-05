@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/barakbl/eifo/compare/v0.13.0...v0.13.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* the changelog stops listing every release twice ([#105](https://github.com/barakbl/eifo/issues/105)) ([3525573](https://github.com/barakbl/eifo/commit/352557372361c33d24b8dff9c682cc8073b3ac93))
+
 ## [0.13.0](https://github.com/barakbl/eifo/compare/v0.12.1...v0.13.0) (2026-09-05)
 
 

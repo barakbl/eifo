@@ -906,6 +906,29 @@ class TestSuggest:
         assert people[0]["credit_count"] == 2
         assert people[-1]["credit_count"] == 0
 
+    def test_a_suggested_person_is_the_person_that_id_belongs_to(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """The ranking reads ids straight out of the search index.
+
+        It can, because the index is external-content over ``people`` and its
+        rowid is that table's id - and it must, because joining the table back
+        in to re-derive an id it already had was a row read per match, and the
+        whole of a dropdown that took 420ms on an ordinary two-letter query.
+
+        This is what would break silently if that ever stopped being true: the
+        list would still come back, still be ranked, and name the wrong people.
+        """
+        self._people(session_factory, catalog)
+
+        suggested = client.get("/api/v1/suggest", params={"q": "gal"}).json()["people"][0]
+
+        with session_factory() as session:
+            stored = session.get(Person, suggested["id"])
+
+        assert stored is not None
+        assert (stored.name_en, stored.name_he) == (suggested["name_en"], suggested["name_he"])
+
     def test_the_query_comes_back_with_the_answer(
         self, client: TestClient, catalog: Seeded
     ) -> None:

@@ -401,12 +401,19 @@ def _suggest_people(session: Session, query: str, *, limit: int) -> list[PersonS
     # Ranked by how much the catalog credits them, not by bm25 alone: a hundred
     # names belong to more than one person, and the one somebody means is
     # overwhelmingly the one with the work.
+    #
+    # Nothing here touches the `people` table. The index is external-content,
+    # so its rowid *is* people.id, and joining the table to read back the id it
+    # was matched by cost a row read per match - two hundred thousand people,
+    # scattered rowids, thirty-six thousand of them for a query as ordinary as
+    # "s". That one redundant join was the whole of a 420ms dropdown; without
+    # it the same query is 15ms and no longer cares whether the table happens
+    # to be in the page cache. The three winners are read below, by id.
     ranked = text(
-        f"SELECT p.id, COUNT(c.id) AS credits FROM {PEOPLE.name} f "
-        f"JOIN people p ON p.id = f.rowid "
-        "LEFT JOIN credits c ON c.person_id = p.id "
+        f"SELECT f.rowid AS id, COUNT(c.id) AS credits FROM {PEOPLE.name} f "
+        "LEFT JOIN credits c ON c.person_id = f.rowid "
         f"WHERE {PEOPLE.name} MATCH :fts "
-        "GROUP BY p.id ORDER BY credits DESC, p.id LIMIT :limit"
+        "GROUP BY f.rowid ORDER BY credits DESC, f.rowid LIMIT :limit"
     ).bindparams(fts=match, limit=limit)
     rows = session.execute(ranked).all()
     if not rows:

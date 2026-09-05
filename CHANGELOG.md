@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.13.0](https://github.com/barakbl/eifo/compare/v0.12.1...v0.13.0) (2026-09-05)
+
+
+### Features
+
+* issue API tokens from a terminal, and screenshots that show what shipped ([26f2591](https://github.com/barakbl/eifo/commit/26f259149e9243f708d0cc15127c9ea297b7f2dc))
+* issue API tokens from a terminal, and screenshots that show what shipped ([febddd1](https://github.com/barakbl/eifo/commit/febddd12cdcf64078885a03ebdde34838a4f4b90))
+
+
+### Bug Fixes
+
+* the sidecar can read a members-only catalog, and stops calling 401 a dead server ([3204344](https://github.com/barakbl/eifo/commit/32043449a0ecd3df6a36702a47707bd830a8e217))
+* the sidecar says why "Forget API token" is greyed out ([f20b046](https://github.com/barakbl/eifo/commit/f20b0462ec5984c97b137829802d81672f6ffa5f))
+
 ## [0.12.1](https://github.com/barakbl/eifo/compare/v0.12.0...v0.12.1) (2026-09-05)
 
 

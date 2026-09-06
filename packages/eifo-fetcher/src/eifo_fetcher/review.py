@@ -25,12 +25,12 @@ from sqlalchemy.orm import Session
 
 from eifo_core import reviews as core_reviews
 from eifo_core.enums import OfferType, TitleKind
-from eifo_core.models import MatchReview, Title
-from eifo_fetcher.match import (
+from eifo_core.match import (
     AMBIGUOUS_THRESHOLD,
     similarity,
     title_kind_from,
 )
+from eifo_core.models import MatchReview, Title
 from eifo_fetcher.sources.base import RawItem
 
 logger = logging.getLogger("eifo.fetch.review")

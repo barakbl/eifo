@@ -23,6 +23,7 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from eifo_core.match import REVIEW_YEAR_TOLERANCE, YEAR_TOLERANCE, normalise, years_match
 from eifo_core.models import (
     AggregateScore,
     Availability,
@@ -35,7 +36,6 @@ from eifo_core.models import (
     TmdbAlias,
     UserItem,
 )
-from eifo_fetcher.match import REVIEW_YEAR_TOLERANCE, YEAR_TOLERANCE, normalise, years_match
 
 logger = logging.getLogger("eifo.fetch.dedupe")
 

@@ -20,17 +20,33 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from rapidfuzz import fuzz
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from eifo_core.enums import MatchDecision, TitleKind
+from eifo_core.items import RawItem, TmdbTitle, plausible_year
 from eifo_core.models import Availability, MatchReview, Source, Title, TmdbAlias
 from eifo_core.naming import is_hebrew, latin_script, split_by_script
-from eifo_fetcher.sources.base import RawItem, plausible_year
-from eifo_fetcher.tmdb import TmdbClient, TmdbTitle
+
+
+class TmdbSearch(Protocol):
+    """Something that can ask TMDB what it knows about a name.
+
+    A protocol rather than the client itself, because core does not make
+    network calls and must not learn how to. Two things satisfy it and they sit
+    on opposite sides of the wire: the fetcher passes its real HTTP client when
+    it matches locally, and the API passes a resolver backed by the hits the
+    fetcher already looked up - which is what keeps the search where the
+    network is while the deciding stays where the catalog is.
+    """
+
+    def search(
+        self, kind: TitleKind, query: str, *, year: int | None = None
+    ) -> Sequence[TmdbTitle]: ...
+
 
 logger = logging.getLogger("eifo.fetch.match")
 
@@ -291,7 +307,7 @@ class TitleMatcher:
         self,
         session: Session,
         *,
-        tmdb: TmdbClient | None = None,
+        tmdb: TmdbSearch | None = None,
         stats: MatchStats | None = None,
     ) -> None:
         self._session = session

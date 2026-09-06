@@ -11,6 +11,10 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from eifo_core.enriching import (
+    mislabelled_names,
+    titles_due,
+)
 from eifo_core.enums import (
     EnrichOutcome,
     FetchPhase,
@@ -36,9 +40,7 @@ from eifo_fetcher.enrich import (
     COMMIT_EVERY,
     apply_rate_limits,
     enrich_titles,
-    mislabelled_names,
     recompute_all_aggregates,
-    titles_due,
 )
 from eifo_fetcher.enrichers import discover_enrichers
 from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView

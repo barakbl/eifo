@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from eifo_core.enums import CreditRole, TitleKind
 from eifo_core.models import Credit, Person, Title
-from eifo_fetcher.people import apply_credits, get_or_create_person
+from eifo_core.people import apply_credits, get_or_create_person
 
 
 @pytest.fixture

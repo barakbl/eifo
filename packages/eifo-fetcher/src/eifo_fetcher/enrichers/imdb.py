@@ -24,11 +24,11 @@ from sqlalchemy.orm import Session
 
 from eifo_core.enums import RatingProvider
 from eifo_core.models import ExternalRating, Title
+from eifo_core.scores import normalise
 from eifo_core.types import utcnow
 from eifo_fetcher.enrichers.base import ICONS_DIR, ProviderInfo
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.progress import ProgressTicker
-from eifo_fetcher.scores import normalise
 
 #: Dataset rows between progress lines. The file has over a million of them
 #: and they cost nothing each, so the sync loops' hundred would be noise.

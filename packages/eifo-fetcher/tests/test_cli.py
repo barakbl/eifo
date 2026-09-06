@@ -76,6 +76,7 @@ def configured_api(monkeypatch: pytest.MonkeyPatch, respx_mock: Any) -> Any:
     command does not work.
     """
     monkeypatch.setenv("EIFO_API_TOKEN", "eifo_pat_test")
+    monkeypatch.setenv("EIFO_API_BASE_URL", "http://127.0.0.1:3436")
     get_settings.cache_clear()
     base = "http://127.0.0.1:3436/api/v1/ingest"
     respx_mock.get(url__startswith=f"{base}/posters/pending").mock(
@@ -301,7 +302,9 @@ class TestRescore:
 
 
 class TestCommandsRequireAMigratedDatabase:
-    @pytest.mark.parametrize("command", [["sync"], ["images"], ["sources", "list"]])
+    # `images` is not here any more, and that is the point of the artwork
+    # change: it opens no database, so an unmigrated one is not its problem.
+    @pytest.mark.parametrize("command", [["sync"], ["sources", "list"]])
     def test_unmigrated_database_exits_fatally(self, db_path: Path, command: list[str]) -> None:
         assert main(command) == EXIT_FATAL
 

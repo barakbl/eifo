@@ -9,9 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from eifo_core.enums import OfferType, SourceKind, TitleKind
-from eifo_core.models import Availability, MatchReview, Source, Title, TmdbAlias
-from eifo_core.types import utcnow
-from eifo_fetcher.match import (
+from eifo_core.match import (
     REVIEW_YEAR_TOLERANCE,
     MatchMethod,
     TitleMatcher,
@@ -22,6 +20,8 @@ from eifo_fetcher.match import (
     similarity,
     years_match,
 )
+from eifo_core.models import Availability, MatchReview, Source, Title, TmdbAlias
+from eifo_core.types import utcnow
 from eifo_fetcher.sources.base import RawItem
 from eifo_fetcher.tmdb import TmdbTitle
 

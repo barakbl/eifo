@@ -16,6 +16,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from eifo_core.catalog import (
+    clear_backfill_requests,
+    deactivate_missing_sources,
+    register_declared_sources,
+)
+from eifo_core.enriching import mislabelled_names
 from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.models import Title
 from eifo_core.settings import Settings
@@ -24,7 +30,6 @@ from eifo_fetcher import attempts
 from eifo_fetcher.enrich import (
     EnrichResultTally,
     enrich_titles,
-    mislabelled_names,
     recompute_all_aggregates,
 )
 from eifo_fetcher.enrichers import discover_enrichers
@@ -38,13 +43,7 @@ from eifo_fetcher.enrichers.seret_index import (
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.images import ImageFetcher, ImageResult
 from eifo_fetcher.ingest import IngestClient, IngestError
-from eifo_fetcher.pipeline import (
-    SyncResult,
-    clear_backfill_requests,
-    deactivate_missing_sources,
-    register_declared_sources,
-    sync_source,
-)
+from eifo_fetcher.pipeline import SyncResult, sync_source
 from eifo_fetcher.prefetch import FetchUnit, Prefetcher
 from eifo_fetcher.providers import declared_providers, register_declared_providers
 from eifo_fetcher.registry import (

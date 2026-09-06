@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_core import __version__ as core_version
 from eifo_core import migrate
+from eifo_core.catalog import register_declared_sources
 from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
 from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.fts import ensure_search_triggers
@@ -47,7 +48,6 @@ from eifo_fetcher.enrichers.seret_index import SERET_KEY, index_status
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.ingest import IngestClient, IngestError
 from eifo_fetcher.lock import AlreadyRunningError, single_flight
-from eifo_fetcher.pipeline import register_declared_sources
 from eifo_fetcher.providers import refresh_declared_providers
 from eifo_fetcher.registry import (
     declared_sources,

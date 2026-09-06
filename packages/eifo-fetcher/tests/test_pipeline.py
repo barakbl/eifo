@@ -10,17 +10,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from eifo_core.catalog import MISS_LIMIT, deactivate_missing_sources, register_declared_sources
 from eifo_core.enums import FetchStatus, OfferType, SourceKind, TitleKind
 from eifo_core.models import Availability, FetchRun, Source, Title
 from eifo_core.settings import Settings
 from eifo_core.types import utcnow
-from eifo_fetcher.pipeline import (
-    COMMIT_EVERY,
-    MISS_LIMIT,
-    deactivate_missing_sources,
-    register_declared_sources,
-    sync_source,
-)
+from eifo_fetcher.pipeline import COMMIT_EVERY, sync_source
 from eifo_fetcher.sources.base import (
     FetchContext,
     RawItem,

@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from eifo_core.enums import RatingProvider, TitleKind
+from eifo_core.match import similarity, years_match
 from eifo_fetcher.enrichers.base import (
     ICONS_DIR,
     Enricher,
@@ -56,7 +57,6 @@ from eifo_fetcher.enrichers.base import (
     TitleView,
 )
 from eifo_fetcher.http import USER_AGENT
-from eifo_fetcher.match import similarity, years_match
 from eifo_fetcher.robots import RobotsPolicy
 from eifo_fetcher.sources.base import FetchContext
 

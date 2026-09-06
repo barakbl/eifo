@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from eifo_core.catalog import expire_reviews
 from eifo_core.enums import (
     FetchPhase,
     FetchStatus,
@@ -22,11 +23,10 @@ from eifo_core.enums import (
     SourceKind,
     TitleKind,
 )
+from eifo_core.match import MatchMethod, TitleMatcher
 from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
 from eifo_core.types import utcnow
 from eifo_fetcher import review
-from eifo_fetcher.match import MatchMethod, TitleMatcher
-from eifo_fetcher.pipeline import expire_reviews
 from eifo_fetcher.sources.base import RawItem
 
 

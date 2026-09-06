@@ -21,6 +21,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from eifo_core.catalog import requested_backfills
 from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
 from eifo_core.enums import FetchPhase
 from eifo_core.fts import ensure_search_triggers
@@ -30,7 +31,6 @@ from eifo_fetcher.heartbeat import ping
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.ingest import IngestClient
 from eifo_fetcher.lock import AlreadyRunningError, single_flight
-from eifo_fetcher.pipeline import requested_backfills
 from eifo_fetcher.runner import enrich_all, fetch_images, sync_all
 from eifo_fetcher.runs import close_abandoned_runs
 

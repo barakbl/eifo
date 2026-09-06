@@ -41,6 +41,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from eifo_core.enums import EnrichOutcome, TitleKind
+from eifo_core.match import normalise, years_match
 from eifo_core.models import EnrichAttempt, SeretTitle, Title
 from eifo_core.types import utcnow
 from eifo_fetcher.enrich import view_of
@@ -58,7 +59,6 @@ from eifo_fetcher.enrichers.seret import (
     parse_title_node,
 )
 from eifo_fetcher.http import USER_AGENT
-from eifo_fetcher.match import normalise, years_match
 from eifo_fetcher.progress import ProgressTicker
 from eifo_fetcher.robots import RobotsPolicy
 from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError

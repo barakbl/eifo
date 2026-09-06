@@ -28,6 +28,26 @@ from eifo_fetcher.runs import FETCHER_LOGGER
 from eifo_fetcher.sources.base import FetchContext
 
 
+@pytest.fixture(autouse=True)
+def never_a_real_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make sure no test can reach a real API.
+
+    Settings read ``.env``, so a developer with a token in theirs and a server
+    on :3436 had their suite quietly talking to a live catalog - which is how
+    "an unmigrated database exits fatally" passed on CI and failed on the one
+    machine that had both. With no token configured, anything that tries to
+    reach the API stops before it opens a socket.
+
+    Autouse, because the guarantee is about the suite rather than about the
+    tests that happen to remember it.
+    """
+    # The file, not just the environment: pydantic-settings reads `.env`
+    # whatever os.environ says, so deleting the variable is not enough.
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    monkeypatch.delenv("EIFO_API_TOKEN", raising=False)
+    monkeypatch.delenv("EIFO_API_BASE_URL", raising=False)
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return Settings(

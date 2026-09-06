@@ -248,6 +248,14 @@ class Settings(BaseSettings):
 
     db_url: str = "sqlite:///data/eifo.db"
     images_dir: Path = Path("data/images")
+    #: Where both programs also write their output, as a rotating file each.
+    #:
+    #: Unset means the console only, which is right for a terminal and wrong
+    #: for everything else: the menu-bar companion starts both the API and the
+    #: fetcher itself and has no console to show, so without this the record of
+    #: a nightly run is whatever row it managed to write - which excludes every
+    #: failure that stopped it writing one.
+    log_dir: Path | None = None
     #: Where the static web client lives; found automatically when unset.
     web_dir: Path | None = None
     public_origin: str = "http://localhost:3436"

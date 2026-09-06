@@ -140,6 +140,29 @@ impl Config {
         self.app_dir.join("data/.eifo-fetch.lock")
     }
 
+    /// Where both programs write their logs, matching `log_dir` in the config
+    /// file this checkout ships.
+    ///
+    /// Not read from that file: this app would then need a TOML parser and a
+    /// second definition of a setting that already has one. The default is the
+    /// one the shipped configuration sets, and a person who moves it can still
+    /// reach their logs the way they moved them to.
+    pub fn log_dir(&self) -> PathBuf {
+        self.app_dir.join("data/logs")
+    }
+
+    /// The console output of a process this app started.
+    ///
+    /// Beside the programs' own log files rather than inside them: these hold
+    /// what escaped Python's logging - a traceback from a process that died
+    /// before it configured anything, uvicorn's startup banner, an import
+    /// error - which is exactly the output that goes missing when a supervisor
+    /// sends it to /dev/null, and exactly what is wanted when a process will
+    /// not start.
+    pub fn console_log(&self, program: &str) -> PathBuf {
+        self.log_dir().join(format!("{program}.console.log"))
+    }
+
     /// Host and port parsed out of `base_url`, for the server's own arguments.
     pub fn host_port(&self) -> (String, u16) {
         let rest = self

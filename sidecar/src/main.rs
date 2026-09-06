@@ -173,6 +173,11 @@ fn main() {
                     "{}/#/manage",
                     config.base_url.trim_end_matches('/')
                 ));
+            } else if id == items.open_logs.id() {
+                // Both programs' logs and both consoles are in one directory,
+                // so the Finder is a better answer than picking one of the four
+                // files and guessing which the person came here to read.
+                platform::reveal(&config.log_dir());
             } else if id == items.about.id() {
                 platform::show_about(mtm);
             } else if id == items.login_item.id() {

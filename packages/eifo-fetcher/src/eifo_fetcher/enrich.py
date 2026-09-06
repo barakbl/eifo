@@ -222,6 +222,12 @@ def _due(api: IngestClient, wanted: int, *, force: bool) -> list[TitleView]:
     larger than the far end will answer is a configuration that is quietly not
     doing what it says.
     """
+    if wanted <= 0:
+        # A batch of nothing is a real thing to ask for - `--limit 0` is how a
+        # run exercises everything around the loop without touching a title -
+        # and the queue refuses a limit below one, so asking would be a wasted
+        # round trip that fails.
+        return []
     if wanted > wire.MAX_DUE_PAGE:
         logger.warning(
             "the configured batch of %d is more than the catalog will hand over at once; "

@@ -20,7 +20,7 @@ from live import LiveApi
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from eifo_core.enums import RatingProvider
+from eifo_core.enums import FetchPhase, RatingProvider
 from eifo_core.models import RatingProviderInfo
 from eifo_core.settings import Settings
 from eifo_fetcher.enrichers.base import ProviderInfo
@@ -35,7 +35,7 @@ from eifo_fetcher.providers import (
     provider_to_wire,
     refresh_declared_providers,
 )
-from eifo_fetcher.runner import enrich_all
+from eifo_fetcher.runner import enrich_all, phase_client
 
 
 @pytest.fixture
@@ -166,14 +166,19 @@ def test_an_enrich_writes_what_the_installed_plugins_declare(
 ) -> None:
     """The wiring, end to end, on an empty catalog.
 
-    Registration hangs off the enrich rather than off a command of its own, so
-    that a deployment which upgrades and then runs its usual nightly comes up
-    with logos and names without anybody being told to run anything. This is
-    the test that would notice the call being dropped: everything downstream
+    Registration hangs off opening a phase rather than off a command of its own,
+    so that a deployment which upgrades and then runs its usual nightly comes up
+    with logos and names without anybody being told to run anything. This is the
+    test that would notice the call being dropped: everything downstream
     degrades quietly to provider keys, which looks like a data problem rather
     than a missing line.
+
+    Through ``phase_client`` because that is where it happens now. It used to be
+    inside ``enrich_all`` as well, which meant every enrich declared the same
+    seven providers twice - visible the moment there was a log of every call.
     """
-    enrich_all(settings, http=http, api=live_api.api, limit=0, skip_imdb=True)
+    with phase_client(settings, FetchPhase.ENRICH, api=live_api.api):
+        enrich_all(settings, http=http, api=live_api.api, limit=0, skip_imdb=True)
 
     with session_factory() as session:
         rows = {row.provider: row for row in session.scalars(select(RatingProviderInfo)).all()}

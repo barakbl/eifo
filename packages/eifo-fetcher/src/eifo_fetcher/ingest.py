@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,31 @@ from eifo_core.seret import SeretEntry, SeretLookup
 from eifo_core.settings import Settings
 
 logger = logging.getLogger("eifo.fetch.ingest")
+
+
+def _readable(path: str, params: Any) -> str:
+    """The path with its query, for a log line somebody has to scan quickly.
+
+    The parameters are what tell two otherwise identical calls apart - which
+    page of the Seret index, how far through the artwork queue - so a line
+    without them says a request happened and nothing about which.
+    """
+    if not isinstance(params, dict) or not params:
+        return path
+    query = "&".join(f"{key}={value}" for key, value in params.items())
+    return f"{path}?{query}"
+
+
+def _elapsed(began: float) -> str:
+    """How long it took, at a precision worth reading.
+
+    Milliseconds below a second, because most of these are a few tens of them
+    and "0.0s" says nothing; seconds above, because an upload of a hundred
+    posters is measured in them and three decimal places would be noise.
+    """
+    seconds = time.monotonic() - began
+    return f"{seconds * 1000:.0f}ms" if seconds < 1 else f"{seconds:.1f}s"
+
 
 #: How long to wait on an upload. Generous next to the rest of the fetcher's
 #: requests, because this one carries a batch of images and the far end decodes
@@ -209,12 +235,47 @@ class IngestClient:
         return self._request(method, path, **kwargs).json()
 
     def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """Make one call, and say so - the asking and the answer, on one line.
+
+        At INFO, and every call, because this is now the only thing the fetcher
+        does: a phase that has gone quiet is either waiting on somebody else's
+        website or waiting on the catalog, and until this line existed there was
+        no way to tell those apart from the outside. The elapsed time is what
+        makes it worth reading - a chunk taking four seconds and a chunk taking
+        four minutes are different problems on different machines.
+
+        The token is a header and never printed. The query string is, because
+        this endpoint's parameters are limits and cursors; nothing secret is
+        ever passed to it, unlike the TMDB client whose whole logger is
+        quietened for exactly that reason.
+        """
         headers = {"Authorization": f"Bearer {self._token}", **kwargs.pop("headers", {})}
+        target = f"{self._base}{path}"
+        began = time.monotonic()
+
         try:
-            response = self._http.request(method, f"{self._base}{path}", headers=headers, **kwargs)
+            response = self._http.request(method, target, headers=headers, **kwargs)
         except httpx.HTTPError as exc:
+            # Logged here as well as raised, because the raise is caught in
+            # several places and turned into a tally or a warning - and a run
+            # that could not reach the catalog should say which call it was on.
+            logger.info(
+                "%s %s -> could not be reached after %s (%s)",
+                method,
+                _readable(path, kwargs.get("params")),
+                _elapsed(began),
+                exc,
+            )
             raise IngestError(f"{self._base} could not be reached: {exc}") from exc
 
+        logger.info(
+            "%s %s -> %d %s in %s",
+            method,
+            _readable(path, kwargs.get("params")),
+            response.status_code,
+            response.reason_phrase or "",
+            _elapsed(began),
+        )
         if response.is_success:
             return response
         raise IngestError(self._refusal(response, path))

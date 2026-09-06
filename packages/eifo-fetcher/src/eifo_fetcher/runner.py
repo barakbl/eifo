@@ -31,8 +31,6 @@ from eifo_fetcher.ingest import IngestClient, IngestError
 from eifo_fetcher.pipeline import SyncResult, sync_source
 from eifo_fetcher.prefetch import FetchUnit, Prefetcher
 from eifo_fetcher.providers import (
-    declared_providers,
-    provider_to_wire,
     refresh_declared_providers,
 )
 from eifo_fetcher.registry import (
@@ -291,12 +289,12 @@ def enrich_all(
     available = discover_enrichers(settings, seret_lookup=lookup)
     enrichers = [e for e in available if e.key not in skipped]
 
-    # From everything installed, not from tonight's selection: a provider
-    # skipped for this run still has scores in the catalog, and they still have
-    # to be credited on the page.
-    api.declare_providers(
-        [provider_to_wire(info) for info in declared_providers([*available, ImdbDatasetLoader])]
-    )
+    # What credits each score is declared by phase_client, on the way in to any
+    # phase - not here. It used to be here, on the reasoning that the enrich is
+    # what produces ratings; that reasoning stopped holding when the table began
+    # to be read by a title page rendered between runs rather than during one.
+    # Declaring in both places is one redundant request per enrich, which is
+    # exactly the sort of thing a log of every call makes obvious.
 
     unknown = sorted(skipped - {e.key for e in available} - {IMDB_RUN_KEY, SERET_INDEX_RUN_KEY})
     if unknown:

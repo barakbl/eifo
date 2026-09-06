@@ -416,6 +416,42 @@ the next run simply picks up where this one stopped. The same is true of a poste
 server refuses: it is reported per title with the reason, the other ninety-nine in the
 batch are stored, and that one is offered again next time.
 
+### Watching one work
+
+Both programs log every step at INFO, and the fetcher logs every call it makes
+to the API and the answer it got:
+
+```
+22:27:24 INFO eifo.fetch.ingest POST /api/v1/ingest/enrich/runs -> 201 Created in 3ms
+22:27:24 INFO eifo.fetch.ingest GET  /api/v1/ingest/enrich/due?limit=3 -> 200 OK in 92ms
+22:27:25 INFO eifo.fetch.ingest POST /api/v1/ingest/enrich/runs/354/findings -> 200 OK in 66ms
+22:27:25 INFO eifo.fetch.runner enrich: 3 titles, 3 ratings, 3 aggregates
+```
+
+That line is worth its noise now that the fetcher does nothing else: a phase
+that has gone quiet is either waiting on somebody else's website or waiting on
+the catalog, and the elapsed time is what tells those apart. The token is a
+header and never printed.
+
+**Set `log_dir` and both programs also write to a file**, one each, rotating at
+5MB and keeping five:
+
+```toml
+log_dir = "data/logs"          # config/eifo.toml
+```
+
+```bash
+tail -f data/logs/eifo-fetch.log     # what the fetcher is doing
+tail -f data/logs/eifo-api.log       # every request and the status it got
+```
+
+A console is only useful to somebody watching one, and the two situations that
+most need a record have nobody watching: a nightly run at three in the morning,
+and a process the menu-bar companion started. The companion writes its children's
+console output beside those - `eifo-api.console.log`, `eifo-fetch.console.log` -
+which is where a traceback from a process that died before it configured logging
+ends up, and it has a **Show logs** item that opens the folder.
+
 **A run that could not reach the server still leaves a trace.** The record of a run lives
 in the catalog, and the catalog is reached over HTTP - so the one failure that cannot
 record itself is the failure to reach it. That would leave a broken night looking exactly

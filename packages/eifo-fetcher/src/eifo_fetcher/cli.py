@@ -19,7 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_core import __version__ as core_version
-from eifo_core import migrate
+from eifo_core import logs, migrate
 from eifo_core.catalog import register_declared_sources
 from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
 from eifo_core.enums import FetchPhase, FetchStatus
@@ -292,15 +292,29 @@ def _use_utf8_for_output() -> None:
             reconfigure(encoding="utf-8")
 
 
+#: What this program's log file is called when ``log_dir`` is configured.
+PROGRAM = "eifo-fetch"
+
+
 def _configure_logging(verbose: bool) -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s %(message)s",
-    )
-    # httpx logs whole request URLs, and TMDB takes its key as a query
-    # parameter - so at INFO the key would be written to every log file and
-    # into anything those files get pasted into.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    """The console, before configuration has been read.
+
+    Before, because failing to read configuration is itself worth logging - and
+    it is the failure a fresh install hits first. Where the output also goes is
+    a question for :func:`_also_log_to_file`, once there is a config to ask.
+    """
+    logs.configure_console(logging.DEBUG if verbose else logging.INFO)
+
+
+def _also_log_to_file(settings: Settings, verbose: bool) -> None:
+    """Write the same lines to ``[log_dir]``, if one is configured.
+
+    Not only for a server. The menu-bar companion starts this program itself
+    and has no console to show, so without a file the record of a nightly run
+    is whatever row it managed to write - which by definition excludes every
+    failure that stopped it writing one.
+    """
+    logs.add_file(settings.log_dir, PROGRAM, logging.DEBUG if verbose else logging.INFO)
 
 
 # -- commands -------------------------------------------------------------
@@ -981,6 +995,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         settings = get_settings()
+        _also_log_to_file(settings, args.verbose)
         return _COMMANDS[args.command](args, settings)
     except MissingSettingsError as exc:
         logger.error("%s", exc)

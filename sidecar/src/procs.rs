@@ -128,6 +128,11 @@ impl Server {
         }
         let (host, port) = config.host_port();
 
+        // To a file rather than to /dev/null. A server this app started has no
+        // console, so anything it prints - a port already in use, a traceback
+        // from a failed import, uvicorn's own access log - used to be thrown
+        // away at the one moment somebody wanted to read it.
+        let (out, err) = appending_to(&config.console_log("eifo-api"));
         let child = Command::new(&uvicorn)
             .arg("eifo_api.main:app")
             .args(["--host", &host])
@@ -135,8 +140,8 @@ impl Server {
             .current_dir(&config.app_dir)
             // No --reload: a watcher forks on every file change, which turns
             // one owned process back into a tree this app cannot stop cleanly.
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(out)
+            .stderr(err)
             .spawn()
             .map_err(|err| format!("could not start the server: {err}"))?;
 
@@ -171,6 +176,28 @@ impl Server {
         let _ = child.wait();
         self.child = None;
         SERVER_PID.store(0, Ordering::SeqCst);
+    }
+}
+
+/// Where a child's console output should go, appending to `path`.
+///
+/// Appending, not truncating: a server restarted three times in a minute
+/// because it will not come up is exactly the case this is for, and each
+/// attempt overwriting the last would leave only the quietest one.
+///
+/// Falls back to discarding it when the file cannot be opened. This app's job
+/// is to keep the catalog running; refusing to start a server because a log
+/// file could not be created would be the tail wagging the dog.
+fn appending_to(path: &Path) -> (Stdio, Stdio) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match File::options().create(true).append(true).open(path) {
+        Ok(file) => match file.try_clone() {
+            Ok(second) => (Stdio::from(file), Stdio::from(second)),
+            Err(_) => (Stdio::null(), Stdio::null()),
+        },
+        Err(_) => (Stdio::null(), Stdio::null()),
     }
 }
 
@@ -326,11 +353,16 @@ pub fn start_phase(config: &Config, phase: Phase) -> Result<Fetch, String> {
         return Err(format!("{} does not exist", fetcher.display()));
     }
 
+    // Same reasoning as the server's: a run this app started writes to nobody's
+    // terminal. The fetcher keeps its own structured log beside this one; what
+    // lands here is whatever escaped it, which is what a run that died on the
+    // way in leaves behind.
+    let (out, err) = appending_to(&config.console_log("eifo-fetch"));
     let child = Command::new(&fetcher)
         .args(phase.arguments())
         .current_dir(&config.app_dir)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(out)
+        .stderr(err)
         .spawn()
         .map_err(|err| format!("could not run {}: {err}", phase.label()))?;
 

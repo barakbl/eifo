@@ -59,6 +59,7 @@ pub struct Items {
     pub paste_token: MenuItem,
     pub forget_token: MenuItem,
     pub choose_folder: MenuItem,
+    pub open_logs: MenuItem,
     pub login_item: CheckMenuItem,
     pub about: MenuItem,
     pub quit: MenuItem,
@@ -95,6 +96,7 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
 
     let open_app = MenuItem::new("Open Eifo", true, None);
     let open_manage = MenuItem::new("Open Manage", true, None);
+    let open_logs = MenuItem::new("Show logs", true, None);
     let update = MenuItem::new("Check for updates", true, None);
     let token_state = MenuItem::new("API token: none", false, None);
     let paste_token = MenuItem::new("Paste API token from clipboard", true, None);
@@ -131,6 +133,7 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         &separator(),
         &open_app,
         &open_manage,
+        &open_logs,
         &separator(),
         &update,
         &separator(),
@@ -168,6 +171,7 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         next_run,
         open_app,
         open_manage,
+        open_logs,
         update,
         token_state,
         paste_token,

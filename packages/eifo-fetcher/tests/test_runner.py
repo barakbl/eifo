@@ -9,21 +9,28 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import pytest
+from live import LiveApi
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from eifo_core.db import create_engine_from_settings
 from eifo_core.enums import FetchPhase, FetchStatus, SourceKind, TitleKind
-from eifo_core.models import Base, FetchRun, Source, Title
+from eifo_core.models import FetchRun, Source, Title
 from eifo_core.settings import Settings, SourceConfig
 from eifo_core.types import utcnow
 from eifo_fetcher.daemon import _parse_time, run_backfills, run_daemon, run_nightly, run_once
 from eifo_fetcher.enrich import EnrichResultTally
 from eifo_fetcher.enrichers.seret_index import IndexResult
 from eifo_fetcher.http import HttpClient
+from eifo_fetcher.ingest import IngestClient
 from eifo_fetcher.lock import single_flight
 from eifo_fetcher.runner import enrich_all, sync_all
 from eifo_fetcher.sources.base import FetchContext, RawItem, SourceInfo, SourcePlugin
+
+
+@pytest.fixture
+def session_factory(live_api: LiveApi) -> sessionmaker[Session]:
+    """The catalog every phase writes to, which is the only one there is now."""
+    return live_api.session_factory
 
 
 def info(key: str) -> SourceInfo:
@@ -134,12 +141,16 @@ class TestReadingSeveralAtOnce:
     """
 
     def test_it_finds_exactly_what_the_serial_run_finds(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
         serial = sync_all(
-            session_factory,
             reading(settings, at_once=1),
             http=http,
+            api=api,
             plugins=[TwoSourcePlugin()],
         )
         assert [(r.source_key, r.status, r.items_seen) for r in serial.results] == [
@@ -148,12 +159,16 @@ class TestReadingSeveralAtOnce:
         ]
 
     def test_the_parallel_run_agrees_with_it(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
         report = sync_all(
-            session_factory,
             reading(settings, at_once=4),
             http=http,
+            api=api,
             plugins=[TwoSourcePlugin(), OneSourcePlugin("gamma")],
         )
 
@@ -164,35 +179,47 @@ class TestReadingSeveralAtOnce:
         ]
 
     def test_two_plugins_really_do_read_at_once(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
         """A barrier neither plugin can pass alone, so a serial run cannot pass it."""
         met = threading.Barrier(2)
         plugins = [MeetingPlugin("alpha", met), MeetingPlugin("beta", met)]
 
-        report = sync_all(session_factory, reading(settings, at_once=2), http=http, plugins=plugins)
+        report = sync_all(reading(settings, at_once=2), http=http, api=api, plugins=plugins)
 
         assert report.failed == []
         assert report.items_seen == 2
 
     def test_one_plugin_still_reads_its_own_sources_in_turn(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
         """Two services on one upstream API and one rate limit; asked for in turn."""
         plugin = OverlapWatchingPlugin()
 
-        sync_all(session_factory, reading(settings, at_once=4), http=http, plugins=[plugin])
+        sync_all(reading(settings, at_once=4), http=http, api=api, plugins=[plugin])
 
         assert not plugin.overlapped.is_set()
 
     def test_a_failing_source_still_fails_only_itself(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
         """The fetch now raises on another thread; it must still land on its row."""
         report = sync_all(
-            session_factory,
             reading(settings, at_once=4),
             http=http,
+            api=api,
             plugins=[TwoSourcePlugin(failing="alpha")],
         )
 
@@ -203,6 +230,7 @@ class TestReadingSeveralAtOnce:
 
     def test_what_a_plugin_said_while_reading_is_on_its_own_row(
         self,
+        api: IngestClient,
         session_factory: sessionmaker[Session],
         settings: Settings,
         http: HttpClient,
@@ -210,9 +238,9 @@ class TestReadingSeveralAtOnce:
     ) -> None:
         """Read in the background, long before anything opened a row for it."""
         sync_all(
-            session_factory,
             reading(settings, at_once=2),
             http=http,
+            api=api,
             plugins=[TalkativePlugin("alpha"), TalkativePlugin("beta")],
         )
 
@@ -230,21 +258,29 @@ class TestReadingSeveralAtOnce:
 
 class TestSyncAll:
     def test_syncs_every_enabled_source(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
-        report = sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+        report = sync_all(settings, http=http, api=api, plugins=[TwoSourcePlugin()])
 
         assert len(report.results) == 2
         assert report.items_seen == 2
         assert report.failed == []
 
     def test_one_failing_source_does_not_stop_the_others(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
         report = sync_all(
-            session_factory,
             settings,
             http=http,
+            api=api,
             plugins=[TwoSourcePlugin(failing="alpha")],
         )
 
@@ -253,46 +289,55 @@ class TestSyncAll:
         assert statuses["beta"] is FetchStatus.OK
 
     def test_skips_a_disabled_source(
-        self, session_factory: sessionmaker[Session], tmp_path: object, http: HttpClient
+        self, api: IngestClient, session_factory: sessionmaker[Session], http: HttpClient
     ) -> None:
+        # Its own settings, because what is under test is the configuration
+        # switch. The catalog is still the one the client is pointed at.
         settings = Settings(
             _env_file=None,
-            db_url="sqlite:///:memory:",
             sources={"alpha": SourceConfig(enabled=False)},
         )
 
-        report = sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+        report = sync_all(settings, http=http, api=api, plugins=[TwoSourcePlugin()])
 
         assert [result.source_key for result in report.results] == ["beta"]
 
     def test_only_syncs_the_requested_source(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
-        report = sync_all(
-            session_factory, settings, http=http, only=["beta"], plugins=[TwoSourcePlugin()]
-        )
+        report = sync_all(settings, http=http, api=api, only=["beta"], plugins=[TwoSourcePlugin()])
 
         assert [result.source_key for result in report.results] == ["beta"]
 
     def test_an_unknown_requested_source_is_ignored(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
-        report = sync_all(
-            session_factory, settings, http=http, only=["nope"], plugins=[TwoSourcePlugin()]
-        )
+        report = sync_all(settings, http=http, api=api, only=["nope"], plugins=[TwoSourcePlugin()])
 
         assert report.results == []
 
     def test_a_full_run_retires_sources_no_longer_declared(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
-        sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+        sync_all(settings, http=http, api=api, plugins=[TwoSourcePlugin()])
 
         class OnlyAlpha(TwoSourcePlugin):
             def sources(self) -> list[SourceInfo]:
                 return [info("alpha")]
 
-        report = sync_all(session_factory, settings, http=http, plugins=[OnlyAlpha()])
+        report = sync_all(settings, http=http, api=api, plugins=[OnlyAlpha()])
 
         assert report.retired_sources == ["beta"]
         with session_factory() as session:
@@ -300,7 +345,11 @@ class TestSyncAll:
             assert beta is not None and beta.active is False
 
     def test_switching_a_source_off_does_not_retire_it(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
         """Off and gone are different claims about a source.
 
@@ -308,14 +357,14 @@ class TestSyncAll:
         successful sync clears that - so a source switched off used to come back
         wearing a label that outlived being switched on again.
         """
-        sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+        sync_all(settings, http=http, api=api, plugins=[TwoSourcePlugin()])
 
         off = Settings(
             _env_file=None,
             db_url="sqlite:///:memory:",
             sources={"beta": SourceConfig(enabled=False)},
         )
-        report = sync_all(session_factory, off, http=http, plugins=[TwoSourcePlugin()])
+        report = sync_all(off, http=http, api=api, plugins=[TwoSourcePlugin()])
 
         assert [result.source_key for result in report.results] == ["alpha"]
         assert report.retired_sources == []
@@ -324,22 +373,30 @@ class TestSyncAll:
             assert beta is not None and beta.active is True
 
     def test_an_operator_switching_one_off_does_not_retire_it_either(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
         """The same, from the Manage tab rather than the config file."""
 
     def test_a_sync_answers_an_operators_ask(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
         """Cleared by having tried, so the daemon does not sit on it forever."""
-        sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+        sync_all(settings, http=http, api=api, plugins=[TwoSourcePlugin()])
         with session_factory() as session:
             source = session.scalar(select(Source).where(Source.key == "beta"))
             assert source is not None
             source.enabled = False
             session.commit()
 
-        report = sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+        report = sync_all(settings, http=http, api=api, plugins=[TwoSourcePlugin()])
 
         assert report.retired_sources == []
         with session_factory() as session:
@@ -348,19 +405,23 @@ class TestSyncAll:
             source.backfill_requested_at = utcnow()
             session.commit()
 
-        sync_all(session_factory, settings, http=http, only=["beta"], plugins=[TwoSourcePlugin()])
+        sync_all(settings, http=http, api=api, only=["beta"], plugins=[TwoSourcePlugin()])
 
         with session_factory() as session:
             beta = session.scalar(select(Source).where(Source.key == "beta"))
             assert beta is not None and beta.backfill_requested_at is None
 
     def test_a_failed_sync_still_answers_it(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
         """The run is in the Runs tab saying what went wrong. Leaving the ask
         standing would put the daemon back on a broken source every half
         minute; the operator can ask again by flipping the switch."""
-        sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+        sync_all(settings, http=http, api=api, plugins=[TwoSourcePlugin()])
         with session_factory() as session:
             source = session.scalar(select(Source).where(Source.key == "alpha"))
             assert source is not None
@@ -368,9 +429,9 @@ class TestSyncAll:
             session.commit()
 
         report = sync_all(
-            session_factory,
             settings,
             http=http,
+            api=api,
             only=["alpha"],
             plugins=[TwoSourcePlugin(failing="alpha")],
         )
@@ -381,10 +442,14 @@ class TestSyncAll:
             assert alpha is not None and alpha.backfill_requested_at is None
 
     def test_a_source_nobody_asked_about_keeps_its_ask(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
         """A targeted run answers only the ask it was pointed at."""
-        sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+        sync_all(settings, http=http, api=api, plugins=[TwoSourcePlugin()])
         with session_factory() as session:
             for key in ("alpha", "beta"):
                 source = session.scalar(select(Source).where(Source.key == key))
@@ -392,21 +457,23 @@ class TestSyncAll:
                 source.backfill_requested_at = utcnow()
             session.commit()
 
-        sync_all(session_factory, settings, http=http, only=["alpha"], plugins=[TwoSourcePlugin()])
+        sync_all(settings, http=http, api=api, only=["alpha"], plugins=[TwoSourcePlugin()])
 
         with session_factory() as session:
             beta = session.scalar(select(Source).where(Source.key == "beta"))
             assert beta is not None and beta.backfill_requested_at is not None
 
     def test_a_targeted_run_never_retires_anything(
-        self, session_factory: sessionmaker[Session], settings: Settings, http: HttpClient
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
         """Syncing one source says nothing about the ones left untouched."""
-        sync_all(session_factory, settings, http=http, plugins=[TwoSourcePlugin()])
+        sync_all(settings, http=http, api=api, plugins=[TwoSourcePlugin()])
 
-        report = sync_all(
-            session_factory, settings, http=http, only=["alpha"], plugins=[TwoSourcePlugin()]
-        )
+        report = sync_all(settings, http=http, api=api, only=["alpha"], plugins=[TwoSourcePlugin()])
 
         assert report.retired_sources == []
         with session_factory() as session:
@@ -429,17 +496,14 @@ class TestScheduleParsing:
 
 
 @pytest.fixture
-def phases(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+def phases(api_everywhere: LiveApi, monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Record which phases ran, without any of them doing anything.
 
-    The schema is real: a phase opens the database before it does any work of
-    its own, to reattach search triggers and close out runs left behind by a
-    fetcher that died.
+    The API is real: a phase opens a client before it does any work of its own,
+    posts whatever attempt the last run could not report, and says what the
+    installed plugins declare. A double at that end would let a change to any of
+    those pass unnoticed here.
     """
-    engine = create_engine_from_settings(settings)
-    Base.metadata.create_all(engine)
-    engine.dispose()
-
     ran: list[str] = []
 
     def record(name: str) -> Callable[..., None]:
@@ -496,9 +560,8 @@ class TestTheNightlyChain:
 class TestBackfillOnRequest:
     """Switching a source on in the Manage tab should not mean waiting for 03:00."""
 
-    def _ask_for(self, settings: Settings, key: str) -> None:
-        engine = create_engine_from_settings(settings)
-        with sessionmaker(engine)() as session:
+    def _ask_for(self, session_factory: sessionmaker[Session], key: str) -> None:
+        with session_factory() as session:
             session.add(
                 Source(
                     key=key,
@@ -509,7 +572,6 @@ class TestBackfillOnRequest:
                 )
             )
             session.commit()
-        engine.dispose()
 
     def test_nothing_pending_runs_nothing(self, settings: Settings, phases: list[str]) -> None:
         """The common case, thirty seconds apart forever: it must cost nothing."""
@@ -517,28 +579,41 @@ class TestBackfillOnRequest:
 
         assert phases == []
 
-    def test_a_requested_source_is_synced(self, settings: Settings, phases: list[str]) -> None:
-        self._ask_for(settings, "beta")
+    def test_a_requested_source_is_synced(
+        self,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        phases: list[str],
+    ) -> None:
+        self._ask_for(session_factory, "beta")
 
         assert run_backfills(settings) is True
 
         assert phases == ["sync_all"]
 
-    def test_it_syncs_only(self, settings: Settings, phases: list[str]) -> None:
+    def test_it_syncs_only(
+        self,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        phases: list[str],
+    ) -> None:
         """Enrichment and artwork cost far more than the titles and are the
         nightly chain's business; what was asked for is the service showing up."""
-        self._ask_for(settings, "beta")
+        self._ask_for(session_factory, "beta")
 
         run_backfills(settings)
 
         assert "enrich_all" not in phases and "fetch_images" not in phases
 
     def test_it_stands_down_while_a_nightly_run_holds_the_lock(
-        self, settings: Settings, phases: list[str]
+        self,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        phases: list[str],
     ) -> None:
         """The ask keeps. A backfill beside a full sync is two fetchers at one
         database, which is the thing the lock exists to prevent."""
-        self._ask_for(settings, "beta")
+        self._ask_for(session_factory, "beta")
 
         with single_flight(settings):
             assert run_backfills(settings) is True
@@ -546,9 +621,13 @@ class TestBackfillOnRequest:
         assert phases == []
 
     def test_a_failure_does_not_take_the_daemon_down(
-        self, settings: Settings, phases: list[str], monkeypatch: pytest.MonkeyPatch
+        self,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        phases: list[str],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        self._ask_for(settings, "beta")
+        self._ask_for(session_factory, "beta")
 
         def explode(*_args: object, **_kwargs: object) -> None:
             raise RuntimeError("the source is down")
@@ -677,7 +756,7 @@ class TestTheSeretIndexInsideEnrich:
 
     def _crawls(
         self,
-        session_factory: sessionmaker[Session],
+        api: IngestClient,
         settings: Settings,
         http: HttpClient,
         monkeypatch: pytest.MonkeyPatch,
@@ -689,7 +768,7 @@ class TestTheSeretIndexInsideEnrich:
             "eifo_fetcher.runner.index_seret",
             lambda *_args, **_kwargs: called.append(True) or IndexResult(),
         )
-        enrich_all(session_factory, settings, http=http, limit=0, skip_imdb=True, **kwargs)
+        enrich_all(settings, http=http, api=api, limit=0, skip_imdb=True, **kwargs)
         return bool(called)
 
     def _a_title(self, session_factory: sessionmaker[Session]) -> None:
@@ -698,44 +777,70 @@ class TestTheSeretIndexInsideEnrich:
             session.commit()
 
     def test_a_nightly_enrich_crawls_a_batch(
-        self, session_factory, settings: Settings, http: HttpClient, monkeypatch
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         self._a_title(session_factory)
 
-        assert self._crawls(session_factory, settings, http, monkeypatch)
+        assert self._crawls(api, settings, http, monkeypatch)
 
     def test_it_can_be_skipped_by_name_like_the_imdb_pass(
-        self, session_factory, settings: Settings, http: HttpClient, monkeypatch
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         self._a_title(session_factory)
 
-        assert not self._crawls(session_factory, settings, http, monkeypatch, skip=["seret-index"])
+        assert not self._crawls(api, settings, http, monkeypatch, skip=["seret-index"])
 
     def test_skipping_the_enricher_skips_the_crawl_that_feeds_it(
-        self, session_factory, settings: Settings, http: HttpClient, monkeypatch
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Indexing pages nothing will read is somebody's bandwidth for nothing."""
         self._a_title(session_factory)
 
-        assert not self._crawls(session_factory, settings, http, monkeypatch, skip=["seret"])
+        assert not self._crawls(api, settings, http, monkeypatch, skip=["seret"])
 
     def test_an_empty_catalog_is_not_crawled_for(
-        self, session_factory, settings: Settings, http: HttpClient, monkeypatch
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The same guard the IMDb pass makes when no title carries an imdb_id.
 
         A fresh install must not spend 8,900 requests on somebody's site to
         enrich a catalog that does not exist yet.
         """
-        assert not self._crawls(session_factory, settings, http, monkeypatch)
+        assert not self._crawls(api, settings, http, monkeypatch)
 
     def test_skipping_it_by_name_is_not_reported_as_a_typo(
-        self, session_factory, settings: Settings, http: HttpClient, monkeypatch, caplog
+        self,
+        api: IngestClient,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: Any,
     ) -> None:
         self._a_title(session_factory)
 
         with caplog.at_level(logging.WARNING, logger="eifo.fetch.runner"):
-            self._crawls(session_factory, settings, http, monkeypatch, skip=["seret-index"])
+            self._crawls(api, settings, http, monkeypatch, skip=["seret-index"])
 
         assert "nothing to skip" not in caplog.text
 
@@ -752,62 +857,60 @@ class TestSkippingAnEnricherForOneRun:
 
     def _run(
         self,
-        session_factory: sessionmaker[Session],
+        api: IngestClient,
         settings: Settings,
         http: HttpClient,
         **kwargs: Any,
     ) -> EnrichResultTally:
         """A run with nothing due, so only the choice of enrichers is exercised."""
-        return enrich_all(session_factory, settings, http=http, limit=0, **kwargs)
+        return enrich_all(settings, http=http, api=api, limit=0, **kwargs)
 
     def test_by_default_every_configured_enricher_runs(
-        self, session_factory, settings: Settings, http: HttpClient, caplog
+        self, api: IngestClient, settings: Settings, http: HttpClient, caplog: Any
     ) -> None:
         with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
-            self._run(session_factory, settings, http, skip_imdb=True)
+            self._run(api, settings, http, skip_imdb=True)
 
         assert "enriching with: tmdb, seret, rt" in caplog.text
 
     def test_one_can_be_left_out(
-        self, session_factory, settings: Settings, http: HttpClient, caplog
+        self, api: IngestClient, settings: Settings, http: HttpClient, caplog: Any
     ) -> None:
         with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
-            self._run(session_factory, settings, http, skip_imdb=True, skip=["rt"])
+            self._run(api, settings, http, skip_imdb=True, skip=["rt"])
 
         assert "enriching with: tmdb, seret" in caplog.text
         assert "rt" not in caplog.text.split("enriching with:")[1].split("\n")[0]
 
     def test_the_case_it_is_typed_in_does_not_matter(
-        self, session_factory, settings: Settings, http: HttpClient, caplog
+        self, api: IngestClient, settings: Settings, http: HttpClient, caplog: Any
     ) -> None:
         with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
-            self._run(
-                session_factory, settings, http, skip_imdb=True, skip=["RT", " tmdb ", "Seret"]
-            )
+            self._run(api, settings, http, skip_imdb=True, skip=["RT", " tmdb ", "Seret"])
 
         assert "enriching with: nothing" in caplog.text
 
     def test_skipping_imdb_by_name_works_like_the_flag(
-        self, session_factory, settings: Settings, http: HttpClient
+        self, api: IngestClient, settings: Settings, http: HttpClient
     ) -> None:
         """So there is one obvious lever rather than two half-overlapping ones."""
-        tally = self._run(session_factory, settings, http, skip=["imdb"])
+        tally = self._run(api, settings, http, skip=["imdb"])
 
         assert "imdb" not in tally.by_enricher
 
     def test_a_name_that_matches_nothing_is_said_out_loud(
-        self, session_factory, settings: Settings, http: HttpClient, caplog
+        self, api: IngestClient, settings: Settings, http: HttpClient, caplog: Any
     ) -> None:
         """A typo that silently skips nothing looks like the flag not working."""
         with caplog.at_level(logging.WARNING, logger="eifo.fetch.runner"):
-            self._run(session_factory, settings, http, skip_imdb=True, skip=["rotten"])
+            self._run(api, settings, http, skip_imdb=True, skip=["rotten"])
 
         assert "nothing to skip called: rotten" in caplog.text
 
     def test_skipping_nothing_is_the_same_as_not_asking(
-        self, session_factory, settings: Settings, http: HttpClient, caplog
+        self, api: IngestClient, settings: Settings, http: HttpClient, caplog: Any
     ) -> None:
         with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
-            self._run(session_factory, settings, http, skip_imdb=True, skip=[])
+            self._run(api, settings, http, skip_imdb=True, skip=[])
 
         assert "enriching with: tmdb, seret, rt" in caplog.text

@@ -11,16 +11,23 @@ import logging
 from collections.abc import Iterable, Mapping
 from importlib.metadata import entry_points
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from eifo_core.models import Source
+from eifo_core.catalog import source_overrides
 from eifo_core.settings import Settings
 from eifo_fetcher.sources.base import SourceInfo, SourcePlugin
 
 ENTRY_POINT_GROUP = "eifo.sources"
 
 logger = logging.getLogger("eifo.fetch.registry")
+
+# Re-exported: it reads the catalog, so it moved to core with the rest of the
+# reading, but callers here reach for it beside the plugin discovery it serves.
+__all__ = [
+    "declared_sources",
+    "discover_plugins",
+    "enabled_sources",
+    "plugins_for",
+    "source_overrides",
+]
 
 
 def _builtin_plugins() -> list[SourcePlugin]:
@@ -85,18 +92,6 @@ def declared_sources(plugins: Iterable[SourcePlugin]) -> dict[str, SourceInfo]:
             declared[info.key] = info
             owners[info.key] = name
     return declared
-
-
-def source_overrides(session: Session) -> dict[str, bool]:
-    """Operator switches set from the Manage tab, by source key.
-
-    Only the rows that carry one: a NULL ``sources.enabled`` is not an answer,
-    it is the absence of one, and means the configuration file still decides.
-    """
-    rows = session.execute(
-        select(Source.key, Source.enabled).where(Source.enabled.is_not(None))
-    ).all()
-    return {key: bool(enabled) for key, enabled in rows}
 
 
 def enabled_sources(

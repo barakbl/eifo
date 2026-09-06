@@ -1,9 +1,15 @@
-"""The Seret page index: the sitemap crawl, and the lookup built from it.
+"""The Seret page index: the sitemap crawl that fills it.
 
 The crawl is the only part of this provider that talks to seret.co.il and it
 asks for thousands of pages, so most of what is asserted here is restraint:
 that it goes slowly, stops where it was told to, does not ask twice for what it
 already has, and gives up when the site stops answering.
+
+It writes through the API like everything else, so the far end below is the
+real application over a real catalog. Reading the index - what a title
+resolves to, which parked titles a new page wakes - is tested in eifo-core,
+because that is where it happens: this side sends what it read and is told
+what that made of it.
 """
 
 from __future__ import annotations
@@ -15,12 +21,13 @@ from typing import Any
 import httpx
 import pytest
 import respx
+from live import LiveApi
 from recorded import FIXTURES
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
-from eifo_core.enums import EnrichOutcome, TitleKind
-from eifo_core.models import EnrichAttempt, SeretTitle, Title
+from eifo_core.enums import EnrichOutcome, FetchPhase, FetchStatus, TitleKind
+from eifo_core.models import EnrichAttempt, FetchRun, SeretTitle, Title
 from eifo_core.settings import Settings
 from eifo_core.types import utcnow
 from eifo_fetcher.enrichers.base import TitleView
@@ -29,13 +36,11 @@ from eifo_fetcher.enrichers.seret_index import (
     SITEMAP_INDEX_URL,
     SeretIndexer,
     SeretIndexError,
-    SeretLookup,
     child_sitemaps,
-    index_status,
-    wake_titles_newly_covered,
 )
 from eifo_fetcher.http import HttpClient, RateLimiter
-from eifo_fetcher.runner import index_seret
+from eifo_fetcher.ingest import IngestClient
+from eifo_fetcher.runner import SERET_INDEX_RUN_KEY, index_seret
 from eifo_fetcher.sources.base import FetchContext
 
 ROBOTS_URL = f"{BASE_URL}/robots.txt"
@@ -83,6 +88,12 @@ def mock_site(*, pages: bool = True) -> None:
         respx.get(SERIES_268).mock(
             return_value=httpx.Response(200, content=fixture_bytes("series.html"))
         )
+
+
+@pytest.fixture
+def session_factory(live_api: LiveApi) -> sessionmaker[Session]:
+    """The catalog the crawl sends its pages to."""
+    return live_api.session_factory
 
 
 def indexer_ctx(http: HttpClient, **seret: Any) -> FetchContext:
@@ -143,12 +154,12 @@ class TestSitemapDiscovery:
 
     @respx.mock
     def test_follows_every_child_and_drops_repeats(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, session: Session, http: HttpClient
     ) -> None:
         """The real sitemap lists some pages twice."""
         mock_site()
 
-        result = SeretIndexer(indexer_ctx(http)).run(session)
+        result = SeretIndexer(indexer_ctx(http)).run(api)
 
         assert result.pages_listed == 3
         assert set(rows(session)) == {
@@ -159,23 +170,23 @@ class TestSitemapDiscovery:
 
     @respx.mock
     def test_a_sitemap_naming_no_titles_is_a_failure(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, session: Session, http: HttpClient
     ) -> None:
         """Better to fail than to quietly conclude Seret has no films."""
         respx.get(ROBOTS_URL).mock(return_value=httpx.Response(200, text=ROBOTS_TXT))
         respx.get(SITEMAP_INDEX_URL).mock(return_value=httpx.Response(200, text="<urlset/>"))
 
         with pytest.raises(SeretIndexError):
-            SeretIndexer(indexer_ctx(http)).run(session)
+            SeretIndexer(indexer_ctx(http)).run(api)
 
     @respx.mock
     def test_a_broken_child_does_not_lose_the_rest(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, session: Session, http: HttpClient
     ) -> None:
         mock_site()
         respx.get(CHILD_NEWS).mock(return_value=httpx.Response(500))
 
-        result = SeretIndexer(indexer_ctx(http)).run(session)
+        result = SeretIndexer(indexer_ctx(http)).run(api)
 
         assert result.pages_listed == 3
         assert result.error_count == 1
@@ -184,11 +195,11 @@ class TestSitemapDiscovery:
 class TestWhatItStores:
     @respx.mock
     def test_keeps_both_audience_figures_and_the_critic_score(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, session: Session, http: HttpClient
     ) -> None:
         mock_site()
 
-        SeretIndexer(indexer_ctx(http)).run(session)
+        SeretIndexer(indexer_ctx(http)).run(api)
 
         row = rows(session)[(TitleKind.MOVIE, 4242)]
         assert row.viewers_score == 9.1
@@ -196,10 +207,12 @@ class TestWhatItStores:
         assert row.critics_score == 6.8
 
     @respx.mock
-    def test_keeps_what_identity_is_settled_from(self, session: Session, http: HttpClient) -> None:
+    def test_keeps_what_identity_is_settled_from(
+        self, api: IngestClient, session: Session, http: HttpClient
+    ) -> None:
         mock_site()
 
-        SeretIndexer(indexer_ctx(http)).run(session)
+        SeretIndexer(indexer_ctx(http)).run(api)
 
         row = rows(session)[(TitleKind.MOVIE, 4242)]
         assert row.name_he == "פוקסטרוט"
@@ -210,11 +223,11 @@ class TestWhatItStores:
 
     @respx.mock
     def test_stores_a_series_under_its_own_numbering(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, session: Session, http: HttpClient
     ) -> None:
         mock_site()
 
-        SeretIndexer(indexer_ctx(http)).run(session)
+        SeretIndexer(indexer_ctx(http)).run(api)
 
         row = rows(session)[(TitleKind.SERIES, 268)]
         assert row.name_he == "פאודה"
@@ -223,12 +236,12 @@ class TestWhatItStores:
 
     @respx.mock
     def test_an_unrated_film_is_indexed_without_inventing_a_zero(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, session: Session, http: HttpClient
     ) -> None:
         """It is still worth having: it resolves, it just has nothing to say yet."""
         mock_site()
 
-        SeretIndexer(indexer_ctx(http)).run(session)
+        SeretIndexer(indexer_ctx(http)).run(api)
 
         row = rows(session)[(TitleKind.MOVIE, 8620)]
         assert row.name_he == "הרשי"
@@ -238,42 +251,42 @@ class TestWhatItStores:
 
     @respx.mock
     def test_a_page_with_no_title_is_recorded_rather_than_retried_forever(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, session: Session, http: HttpClient
     ) -> None:
         mock_site()
         respx.get(MOVIE_8620).mock(return_value=httpx.Response(200, content=b"<html></html>"))
 
-        first = SeretIndexer(indexer_ctx(http)).run(session)
+        first = SeretIndexer(indexer_ctx(http)).run(api)
         assert first.unreadable == 1
         assert rows(session)[(TitleKind.MOVIE, 8620)].unreadable is True
 
-        second = SeretIndexer(indexer_ctx(http)).run(session)
+        second = SeretIndexer(indexer_ctx(http)).run(api)
         assert second.fetched == 0
         assert second.skipped_fresh == 3
 
 
 class TestBeingGentle:
     @respx.mock
-    def test_asks_at_the_configured_rate(self, session: Session) -> None:
+    def test_asks_at_the_configured_rate(self, api: IngestClient) -> None:
         """Half a request a second by default: one page every two seconds."""
         limiter = RateLimiter(default_rps=0)
         with HttpClient(rate_limiter=limiter, sleep=lambda _s: None) as http:
             mock_site()
-            SeretIndexer(indexer_ctx(http)).run(session)
+            SeretIndexer(indexer_ctx(http)).run(api)
 
         assert spacing_of(limiter, HOST) == pytest.approx(2.0)
 
     @respx.mock
-    def test_the_rate_can_be_overridden_for_one_run(self, session: Session) -> None:
+    def test_the_rate_can_be_overridden_for_one_run(self, api: IngestClient) -> None:
         limiter = RateLimiter(default_rps=0)
         with HttpClient(rate_limiter=limiter, sleep=lambda _s: None) as http:
             mock_site()
-            SeretIndexer(indexer_ctx(http), rate_limit_rps=4.0).run(session)
+            SeretIndexer(indexer_ctx(http), rate_limit_rps=4.0).run(api)
 
         assert spacing_of(limiter, HOST) == pytest.approx(0.25)
 
     @respx.mock
-    def test_the_rate_comes_from_the_shared_enricher_section(self, session: Session) -> None:
+    def test_the_rate_comes_from_the_shared_enricher_section(self, api: IngestClient) -> None:
         """The same place rt's pace is set, not a section of Seret's own."""
         limiter = RateLimiter(default_rps=0)
         with HttpClient(rate_limiter=limiter, sleep=lambda _s: None) as http:
@@ -283,69 +296,75 @@ class TestBeingGentle:
                 http=http,
                 settings=Settings(_env_file=None, enrich={"rate_limits": {"seret": 0.2}}),
             )
-            SeretIndexer(ctx).run(session)
+            SeretIndexer(ctx).run(api)
 
         assert spacing_of(limiter, HOST) == pytest.approx(5.0)
 
     @respx.mock
     def test_stops_after_the_batch_and_says_what_is_left(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, session: Session, http: HttpClient
     ) -> None:
         mock_site()
 
-        result = SeretIndexer(indexer_ctx(http, batch_size=1)).run(session)
+        result = SeretIndexer(indexer_ctx(http, batch_size=1)).run(api)
 
         assert result.fetched == 1
         assert result.remaining == 2
 
     @respx.mock
-    def test_reads_the_newest_ids_first(self, session: Session, http: HttpClient) -> None:
+    def test_reads_the_newest_ids_first(
+        self, api: IngestClient, session: Session, http: HttpClient
+    ) -> None:
         """A half-built index should already cover the films people look for."""
         mock_site()
 
-        SeretIndexer(indexer_ctx(http, batch_size=1)).run(session)
+        SeretIndexer(indexer_ctx(http, batch_size=1)).run(api)
 
         assert set(rows(session)) == {(TitleKind.MOVIE, 8620)}
 
     @respx.mock
     def test_a_second_run_asks_for_nothing_it_already_has(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, session: Session, http: HttpClient
     ) -> None:
         mock_site()
-        SeretIndexer(indexer_ctx(http)).run(session)
+        SeretIndexer(indexer_ctx(http)).run(api)
 
-        result = SeretIndexer(indexer_ctx(http)).run(session)
+        result = SeretIndexer(indexer_ctx(http)).run(api)
 
         assert result.fetched == 0
         assert result.skipped_fresh == 3
 
     @respx.mock
-    def test_a_stale_row_is_read_again(self, session: Session, http: HttpClient) -> None:
+    def test_a_stale_row_is_read_again(
+        self, api: IngestClient, session: Session, http: HttpClient
+    ) -> None:
         mock_site()
-        SeretIndexer(indexer_ctx(http)).run(session)
+        SeretIndexer(indexer_ctx(http)).run(api)
         for row in session.scalars(select(SeretTitle)).all():
             row.indexed_at = utcnow() - dt.timedelta(days=200)
         session.commit()
 
-        result = SeretIndexer(indexer_ctx(http, refresh_days=120)).run(session)
+        result = SeretIndexer(indexer_ctx(http, refresh_days=120)).run(api)
 
         assert result.fetched == 3
         assert result.updated == 3
         assert result.created == 0
 
     @respx.mock
-    def test_force_reads_everything_however_fresh(self, session: Session, http: HttpClient) -> None:
+    def test_force_reads_everything_however_fresh(
+        self, api: IngestClient, session: Session, http: HttpClient
+    ) -> None:
         mock_site()
-        SeretIndexer(indexer_ctx(http)).run(session)
+        SeretIndexer(indexer_ctx(http)).run(api)
 
-        result = SeretIndexer(indexer_ctx(http)).run(session, force=True)
+        result = SeretIndexer(indexer_ctx(http)).run(api, force=True)
 
         assert result.fetched == 3
         assert result.skipped_fresh == 0
 
     @respx.mock
     def test_gives_up_when_the_site_stops_answering(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, session: Session, http: HttpClient
     ) -> None:
         """Rather than spending the whole batch learning the same thing."""
         respx.get(ROBOTS_URL).mock(return_value=httpx.Response(200, text=ROBOTS_TXT))
@@ -361,7 +380,7 @@ class TestBeingGentle:
         respx.get(CHILD_NEWS).mock(return_value=httpx.Response(200, text="<urlset/>"))
         respx.get(url__startswith=MOVIE_URL).mock(return_value=httpx.Response(503))
 
-        result = SeretIndexer(indexer_ctx(http)).run(session)
+        result = SeretIndexer(indexer_ctx(http)).run(api)
 
         assert result.fetched < 199
         assert result.aborted is not None
@@ -372,14 +391,14 @@ class TestBeingGentle:
 
     @respx.mock
     def test_never_fetches_a_page_robots_disallows(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, session: Session, http: HttpClient
     ) -> None:
         mock_site()
         respx.get(ROBOTS_URL).mock(
             return_value=httpx.Response(200, text="User-agent: *\nDisallow: /series/\n")
         )
 
-        result = SeretIndexer(indexer_ctx(http)).run(session)
+        result = SeretIndexer(indexer_ctx(http)).run(api)
 
         assert (TitleKind.SERIES, 268) not in rows(session)
         # Not owed to a later run either: robots will still forbid it tomorrow.
@@ -387,209 +406,222 @@ class TestBeingGentle:
         assert result.remaining == 0
 
 
-class TestLookup:
-    def test_an_imdb_id_settles_it(self) -> None:
-        lookup = SeretLookup([entry(name_he="שם אחר", name_en=None, imdb_id="tt6896536")])
+class TestWhatTheCatalogMakesOfIt:
+    """The crawl sends pages and is told what they changed.
 
-        found = lookup.find(view(imdb_id="tt6896536", name_he="פוקסטרוט"))
-
-        assert found is not None
-        assert found.seret_id == 4242
-
-    def test_falls_back_to_the_name(self) -> None:
-        found = SeretLookup([entry()]).find(view())
-
-        assert found is not None
-        assert found.seret_id == 4242
-
-    def test_matches_the_english_name_too(self) -> None:
-        found = SeretLookup([entry()]).find(view(name_he=None))
-
-        assert found is not None
-
-    def test_allows_for_a_late_israeli_release(self) -> None:
-        assert SeretLookup([entry(year=2019)]).find(view(year=2017)) is not None
-
-    def test_rejects_a_year_further_off_than_that(self) -> None:
-        assert SeretLookup([entry(year=2022)]).find(view(year=2017)) is None
-
-    def test_will_not_guess_between_two_pages_of_the_same_name(self) -> None:
-        """Attaching a score to the wrong film is worse than attaching none."""
-        lookup = SeretLookup([entry(seret_id=1), entry(seret_id=2)])
-
-        assert lookup.find(view()) is None
-
-    def test_a_series_does_not_answer_for_a_film(self) -> None:
-        lookup = SeretLookup([entry(kind=TitleKind.SERIES, seret_id=268)])
-
-        assert lookup.find(view(kind=TitleKind.MOVIE)) is None
-
-    def test_an_unknown_title_is_simply_absent(self) -> None:
-        assert SeretLookup([entry()]).find(view(name_he="טהרן", name_en="Tehran")) is None
-
-    def test_counts_what_it_holds(self) -> None:
-        assert len(SeretLookup([entry(), entry(seret_id=9)])) == 2
-        assert not SeretLookup([])
-
-    @respx.mock
-    def test_loads_from_the_index_the_crawl_wrote(self, session: Session, http: HttpClient) -> None:
-        mock_site()
-        SeretIndexer(indexer_ctx(http)).run(session)
-
-        lookup = SeretLookup.load(session)
-
-        found = lookup.find(view())
-        assert found is not None
-        assert (found.viewers_score, found.viewers_votes, found.critics_score) == (9.1, 42, 6.8)
-
-    @respx.mock
-    def test_leaves_out_rows_that_carried_no_title(
-        self, session: Session, http: HttpClient
-    ) -> None:
-        mock_site()
-        respx.get(MOVIE_8620).mock(return_value=httpx.Response(200, content=b"<html></html>"))
-        SeretIndexer(indexer_ctx(http)).run(session)
-
-        assert len(SeretLookup.load(session)) == 2
-
-
-class TestWakingParkedTitles:
-    """A backoff should not outlive the reason for it.
-
-    A title nobody could rate waits a month, then two, then four. That is right
-    when no provider carries it and wrong when its Seret page simply had not
-    been read yet - which, while the index is filling in, is most of them. Left
-    alone, a score would sit in ``seret_index`` for weeks with the one thing
-    that reads it declining to look.
+    It cannot work any of this out itself: whether a page is new, and whether it
+    can score something it could not score before, are both questions about the
+    row being overwritten - and only the catalog has ever seen that row.
     """
-
-    def _parked(
-        self,
-        session: Session,
-        *,
-        name_he: str = "פוקסטרוט",
-        name_en: str | None = "Foxtrot",
-        year: int | None = 2017,
-        imdb_id: str | None = None,
-        outcome: EnrichOutcome = EnrichOutcome.NO_MATCH,
-        days: int = 30,
-    ) -> Title:
-        title = Title(
-            type=TitleKind.MOVIE, name_he=name_he, name_en=name_en, year=year, imdb_id=imdb_id
-        )
-        session.add(title)
-        session.flush()
-        session.add(
-            EnrichAttempt(
-                title_id=title.id,
-                outcome=outcome,
-                fruitless=3,
-                due_at=utcnow() + dt.timedelta(days=days),
-            )
-        )
-        session.commit()
-        return title
-
-    def test_a_title_the_new_pages_cover_becomes_due_now(self, session: Session) -> None:
-        title = self._parked(session)
-
-        woken = wake_titles_newly_covered(session, [entry()])
-        session.commit()
-
-        assert woken == 1
-        assert title.enrich_attempt is not None
-        assert title.enrich_attempt.due_at <= utcnow()
-
-    def test_a_title_they_do_not_cover_stays_parked(self, session: Session) -> None:
-        title = self._parked(session, name_he="טהרן", name_en="Tehran", year=2020)
-        was_due = title.enrich_attempt.due_at
-
-        assert wake_titles_newly_covered(session, [entry()]) == 0
-        assert title.enrich_attempt.due_at == was_due
-
-    def test_it_does_not_touch_the_fruitless_count(self, session: Session) -> None:
-        """That is the enrich pass's to write, and it resets on a success."""
-        title = self._parked(session)
-
-        wake_titles_newly_covered(session, [entry()])
-
-        assert title.enrich_attempt.fruitless == 3
-        assert title.enrich_attempt.outcome is EnrichOutcome.NO_MATCH
-
-    def test_a_title_that_was_scored_is_left_alone(self, session: Session) -> None:
-        """It is on the ordinary refresh schedule and will pick Seret up anyway."""
-        title = self._parked(session, outcome=EnrichOutcome.OK, days=14)
-
-        assert wake_titles_newly_covered(session, [entry()]) == 0
-        assert title.enrich_attempt.due_at > utcnow()
-
-    def test_a_crawl_that_learned_nothing_does_nothing(self, session: Session) -> None:
-        self._parked(session)
-
-        assert wake_titles_newly_covered(session, []) == 0
 
     @respx.mock
     def test_only_pages_that_can_actually_score_are_counted(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, http: HttpClient
     ) -> None:
         """An unreleased film is indexed but has no score to wake anybody for."""
         mock_site()
 
-        result = SeretIndexer(indexer_ctx(http)).run(session)
+        result = SeretIndexer(indexer_ctx(http)).run(api)
 
         # movie.html and series.html carry scores; unrated.html does not.
         assert result.created == 3
-        assert {e.seret_id for e in result.newly_scorable} == {4242, 268}
+        assert result.newly_scorable == 2
 
     @respx.mock
-    def test_a_film_that_has_since_been_rated_wakes_its_title(
-        self, session: Session, http: HttpClient
+    def test_a_page_read_again_is_not_newly_anything(
+        self, api: IngestClient, http: HttpClient
+    ) -> None:
+        """Re-reading last month's page must not wake a title all over again."""
+        mock_site()
+        SeretIndexer(indexer_ctx(http)).run(api)
+
+        result = SeretIndexer(indexer_ctx(http)).run(api, force=True)
+
+        assert result.updated == 3
+        assert result.newly_scorable == 0
+
+    @respx.mock
+    def test_a_film_that_has_since_been_rated_is_newly_scorable(
+        self, api: IngestClient, http: HttpClient
     ) -> None:
         """Seret scores appear after release, and the title is parked by then."""
         mock_site()
-        SeretIndexer(indexer_ctx(http)).run(session)
-        title = self._parked(session, name_he="הרשי", name_en="Hershey", year=2026)
+        SeretIndexer(indexer_ctx(http)).run(api)
 
         # The same page, now carrying the ratings it did not have last time.
         respx.get(MOVIE_8620).mock(
             return_value=httpx.Response(200, content=fixture_bytes("movie.html"))
         )
-        result = SeretIndexer(indexer_ctx(http)).run(session, force=True)
+        result = SeretIndexer(indexer_ctx(http)).run(api, force=True)
 
-        assert any(e.seret_id == 8620 for e in result.newly_scorable)
-        assert title.enrich_attempt is not None
+        assert result.newly_scorable == 1
+
+    @respx.mock
+    def test_a_batch_that_will_not_send_does_not_lose_the_rest_of_the_crawl(
+        self, live_api: LiveApi, http: HttpClient
+    ) -> None:
+        """Six hundred patiently-read pages must not go for one failed request.
+
+        The pages are still in the sitemap, so the next run is owed them again -
+        which is a far cheaper answer than throwing away everything read so far.
+        """
+        mock_site()
+        calls = {"n": 0}
+
+        def failing(pages: list[Any]) -> Any:
+            calls["n"] += 1
+            raise RuntimeError("the connection dropped")
+
+        live_api.api.store_seret_pages = failing  # type: ignore[method-assign]
+
+        result = SeretIndexer(indexer_ctx(http)).run(live_api.api)
+
+        assert calls["n"] == 1
+        assert result.fetched == 3
+        assert result.created == 0
+        assert any("could not store" in error for error in result.errors)
+
+
+class TestReadingBackWhatItWrote:
+    @respx.mock
+    def test_the_lookup_is_built_from_what_the_crawl_stored(
+        self, api: IngestClient, http: HttpClient
+    ) -> None:
+        """The whole point of the crawl, asserted across the wire."""
+        mock_site()
+        SeretIndexer(indexer_ctx(http)).run(api)
+
+        found = api.seret_lookup().find(view())
+
+        assert found is not None
+        assert (found.viewers_score, found.viewers_votes, found.critics_score) == (9.1, 42, 6.8)
+
+    @respx.mock
+    def test_rows_that_carried_no_title_are_left_out_of_it(
+        self, api: IngestClient, http: HttpClient
+    ) -> None:
+        mock_site()
+        respx.get(MOVIE_8620).mock(return_value=httpx.Response(200, content=b"<html></html>"))
+        SeretIndexer(indexer_ctx(http)).run(api)
+
+        assert len(api.seret_lookup()) == 2
+
+    @respx.mock
+    def test_but_the_crawl_still_sees_them(self, api: IngestClient, http: HttpClient) -> None:
+        """Or it would pay for that id again on every single run."""
+        mock_site()
+        respx.get(MOVIE_8620).mock(return_value=httpx.Response(200, content=b"<html></html>"))
+        SeretIndexer(indexer_ctx(http)).run(api)
+
+        assert len(api.seret_index(include_unreadable=True)) == 3
+
+    @respx.mock
+    def test_the_index_is_paged_by_the_whole_key(self, api: IngestClient, http: HttpClient) -> None:
+        """Films and series are numbered apart, so an id alone does not order it.
+
+        A page boundary landing between a film and a series that share an id
+        would drop whichever came second - silently, and only for the ids that
+        happen to fall there.
+        """
+        mock_site()
+        SeretIndexer(indexer_ctx(http)).run(api)
+
+        stored = api.seret_index(include_unreadable=True)
+
+        keys = [(page.entry.kind, page.entry.seret_id) for page in stored]
+        assert len(keys) == len(set(keys)) == 3
+
+    @respx.mock
+    def test_when_a_page_was_last_read_survives_the_wire(
+        self, api: IngestClient, http: HttpClient
+    ) -> None:
+        """The crawl decides staleness by it and cannot work it out from here."""
+        mock_site()
+        SeretIndexer(indexer_ctx(http)).run(api)
+
+        stored = api.seret_index(include_unreadable=True)
+
+        assert all(page.indexed_at is not None for page in stored)
+
+
+class TestWakingParkedTitles:
+    """End to end: the crawl wakes them without anybody remembering --force.
+
+    Which titles get woken is tested in eifo-core, where the deciding happens.
+    This is the wiring: a crawl inside a nightly enrich has to move the due
+    dates on its own, or a score sits in the index for weeks with the one thing
+    that reads it declining to look.
+    """
 
     @respx.mock
     def test_the_crawl_wakes_them_without_being_asked(
-        self, session_factory, settings: Settings, http: HttpClient
+        self,
+        live_api: LiveApi,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
     ) -> None:
-        """End to end: index_seret does it, so nobody has to remember --force."""
         mock_site()
         with session_factory() as setup:
-            self._parked(setup)
+            title = Title(type=TitleKind.MOVIE, name_he="פוקסטרוט", name_en="Foxtrot", year=2017)
+            setup.add(title)
+            setup.flush()
+            setup.add(
+                EnrichAttempt(
+                    title_id=title.id,
+                    outcome=EnrichOutcome.NO_MATCH,
+                    fruitless=3,
+                    due_at=utcnow() + dt.timedelta(days=30),
+                )
+            )
+            setup.commit()
 
-        result = index_seret(session_factory, settings, http=http)
+        result = index_seret(settings, http=http, api=live_api.api)
 
         assert result.woken == 1
         with session_factory() as check:
             attempt = check.scalars(select(EnrichAttempt)).one()
             assert attempt.due_at <= utcnow()
 
-
-class TestStatus:
     @respx.mock
-    def test_counts_what_the_index_holds(self, session: Session, http: HttpClient) -> None:
+    def test_the_crawl_leaves_a_run_row_behind(
+        self,
+        live_api: LiveApi,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
+    ) -> None:
+        """A long job that can fail on its own needs somewhere to say that it did."""
         mock_site()
-        SeretIndexer(indexer_ctx(http)).run(session)
 
-        counts = index_status(session)
+        index_seret(settings, http=http, api=live_api.api)
 
-        assert counts["pages"] == 3
-        assert counts["movies"] == 2
-        assert counts["series"] == 1
-        assert counts["with_viewer_score"] == 2
-        assert counts["with_critic_score"] == 2
-        assert counts["with_imdb_id"] == 2
+        with session_factory() as check:
+            run = check.scalars(
+                select(FetchRun).where(FetchRun.source_key == SERET_INDEX_RUN_KEY)
+            ).one()
+        assert run.phase is FetchPhase.ENRICH
+        assert run.status is FetchStatus.OK
+        assert run.stats["created"] == 3
 
-    def test_an_empty_index_counts_nothing(self, session: Session) -> None:
-        assert index_status(session)["pages"] == 0
+    @respx.mock
+    def test_a_crawl_that_could_not_read_the_sitemap_says_so_on_its_row(
+        self,
+        live_api: LiveApi,
+        session_factory: sessionmaker[Session],
+        settings: Settings,
+        http: HttpClient,
+    ) -> None:
+        """Reported, not raised: Seret being down must not cost the whole enrich."""
+        respx.get(ROBOTS_URL).mock(return_value=httpx.Response(200, text=ROBOTS_TXT))
+        respx.get(SITEMAP_INDEX_URL).mock(return_value=httpx.Response(500))
+
+        result = index_seret(settings, http=http, api=live_api.api)
+
+        assert result.error_count == 1
+        with session_factory() as check:
+            run = check.scalars(
+                select(FetchRun).where(FetchRun.source_key == SERET_INDEX_RUN_KEY)
+            ).one()
+        assert run.status is FetchStatus.FAILED
+        assert any("fatal" in entry for entry in run.stats["errors"])

@@ -42,12 +42,19 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from eifo_core.enums import RatingProvider, TitleKind
 from eifo_core.match import similarity, years_match
+from eifo_core.seret import (
+    SERET_BASE_URL,
+    SERET_ENDPOINTS,
+    SERET_HOST,
+    SERET_YEAR_TOLERANCE,
+    SeretEntry,
+    page_url,
+)
 from eifo_fetcher.enrichers.base import (
     ICONS_DIR,
     Enricher,
@@ -65,10 +72,14 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
 
 logger = logging.getLogger("eifo.fetch.enrich.seret")
 
-HOST = "www.seret.co.il"
-BASE_URL = f"https://{HOST}"
-MOVIE_URL = f"{BASE_URL}/movies/s_movies.asp"
-SERIES_URL = f"{BASE_URL}/series/s_series.asp"
+# One definition, in core: a stored entry has to be able to say where its score
+# can be read, so the addresses had to be reachable from both sides. Re-exported
+# under the names this module has always used, because everything about this
+# provider that is not an address is still here.
+HOST = SERET_HOST
+BASE_URL = SERET_BASE_URL
+MOVIE_URL = SERET_ENDPOINTS[TitleKind.MOVIE][0]
+SERIES_URL = SERET_ENDPOINTS[TitleKind.SERIES][0]
 #: The site's own autocomplete, and the only search endpoint that answers.
 AUTOCOMPLETE_URL = f"{BASE_URL}/searchAUAjax.asp"
 
@@ -88,14 +99,6 @@ MATCH_THRESHOLD = 85.0
 #: Pages fetched per live lookup; the autocomplete returns loose matches.
 MAX_CANDIDATES = 3
 
-#: How far Seret's year may sit from the catalog's and still be one title.
-#:
-#: Wider than :data:`eifo_fetcher.match.YEAR_TOLERANCE` on purpose, and in one
-#: direction for a reason: ``datePublished`` here is the *Israeli release date*,
-#: not the production year, so it trails what every other source reports. "The
-#: Big Short" is 2015 upstream and 2016-01-28 on Seret; a festival film can
-#: reach Israeli screens two years after it was made.
-SERET_YEAR_TOLERANCE = 2
 
 #: JSON-LD types Seret uses for a title page.
 _TITLE_TYPES = frozenset({"Movie", "TVSeries"})
@@ -117,43 +120,6 @@ _TITLE_LINK = re.compile(
     r"s_(?P<endpoint>movies|series)\.asp\?(?:mid|sid)=(?P<id>\d+)",
     re.IGNORECASE,
 )
-
-#: Which endpoint and id parameter each kind is served from.
-_ENDPOINTS: dict[TitleKind, tuple[str, str]] = {
-    TitleKind.MOVIE: (MOVIE_URL, "MID"),
-    TitleKind.SERIES: (SERIES_URL, "SID"),
-}
-
-
-@dataclass(frozen=True, slots=True)
-class SeretEntry:
-    """One Seret page, reduced to what identity and scoring need.
-
-    The same shape whether it came from the stored index or from a page just
-    fetched, so the enricher does not care which it is holding.
-    """
-
-    kind: TitleKind
-    seret_id: int
-    name_he: str | None = None
-    name_en: str | None = None
-    year: int | None = None
-    imdb_id: str | None = None
-    #: The audience score on Seret's own 0-10 scale, and its vote count.
-    viewers_score: float | None = None
-    viewers_votes: int | None = None
-    #: "Seret Score", the site's composite editorial figure, also 0-10.
-    critics_score: float | None = None
-    url: str | None = None
-
-    @property
-    def page_url(self) -> str:
-        """Where to send a reader. A score is never shown without one."""
-        return self.url or page_url(self.kind, self.seret_id)
-
-    def names(self) -> list[str]:
-        """Every name this page gives the title, Hebrew first."""
-        return [name for name in (self.name_he, self.name_en) if name]
 
 
 class SeretEnricher(Enricher):
@@ -335,12 +301,6 @@ def entry_from(kind: TitleKind, seret_id: int, node: dict[str, Any]) -> SeretEnt
         critics_score=critic_score(node),
         url=_declared_url(node) or page_url(kind, seret_id),
     )
-
-
-def page_url(kind: TitleKind, seret_id: int) -> str:
-    """The canonical address of a title page in the right numbering."""
-    url, param = _ENDPOINTS[kind]
-    return f"{url}?{param}={seret_id}"
 
 
 def autocomplete_url(query: str) -> str | None:

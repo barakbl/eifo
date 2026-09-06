@@ -7,12 +7,14 @@ import io
 import logging
 import sys
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 from alembic.script import ScriptDirectory
+from live import LiveApi, serving
 from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -86,7 +88,34 @@ def configured_api(monkeypatch: pytest.MonkeyPatch, respx_mock: Any) -> Any:
     respx_mock.patch(url__startswith=f"{base}/runs/").mock(
         return_value=httpx.Response(200, json={"id": 1})
     )
+    # Every phase declares what credits a score on its way in, artwork included:
+    # the table is read when a title page is rendered, which happens between
+    # runs rather than during one.
+    respx_mock.post(f"{base}/enrich/providers").mock(
+        return_value=httpx.Response(200, json={"changed": []})
+    )
     return respx_mock
+
+
+@pytest.fixture
+def served(migrated: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[LiveApi]:
+    """The application, over the database the command is pointed at.
+
+    Every writing command builds a client for itself now, so a test that drives
+    one has to put something at the other end - and the honest something is the
+    application. Lent through ``api_client`` rather than by pointing the command
+    at a socket: what is under test here is the command's own behaviour and its
+    exit code, and a real port would add a listener to every one of these.
+    """
+    with serving(Settings(_env_file=None, db_url=f"sqlite:///{migrated}")) as running:
+
+        @contextmanager
+        def lend(_settings: Settings, *, http: object = None) -> Iterator[Any]:
+            yield running.api
+
+        for module in ("eifo_fetcher.runner", "eifo_fetcher.daemon", "eifo_fetcher.cli"):
+            monkeypatch.setattr(f"{module}.api_client", lend, raising=False)
+        yield running
 
 
 @pytest.fixture
@@ -134,13 +163,17 @@ class TestDatabaseCommands:
 
 
 class TestCommandsRewireSearchBeforeWriting:
-    def test_a_command_restores_triggers_a_rebuild_removed(self, migrated: Path) -> None:
-        """A process that writes titles must not write into a dead index.
+    def test_a_command_restores_triggers_a_rebuild_removed(
+        self, migrated: Path, served: LiveApi
+    ) -> None:
+        """Whatever writes titles must not write into a dead index.
 
-        ``sync`` rather than ``images``: artwork no longer writes anything here
-        at all, it posts to the API, and the API repairs the triggers at its own
-        startup. The guarantee did not go away - it moved to whoever is doing
-        the writing, which is the point of the change.
+        A rebuild of ``titles`` drops the triggers silently, and every title
+        written afterwards is invisible to search with no sign anything is
+        wrong. The fetcher used to make this true because the fetcher did the
+        writing; it does not any more, so the check went where the writing went.
+        The guarantee is unchanged, which is the point - and it is checked here,
+        from the command, because that is where it would be noticed missing.
         """
         engine = create_engine(f"sqlite:///{migrated}")
         try:
@@ -242,7 +275,7 @@ class TestRescore:
             session.commit()
 
     def test_it_builds_the_aggregate_from_stored_ratings(
-        self, factory: sessionmaker[Session]
+        self, factory: sessionmaker[Session], served: LiveApi
     ) -> None:
         self._rated(factory)
 
@@ -253,7 +286,7 @@ class TestRescore:
         # (62*2.0 + 71*3.0) / 5.0 = 67.4 -> 67, the 91 nowhere in it.
         assert aggregate.score == 67
 
-    def test_it_shows_its_working(self, factory: sessionmaker[Session]) -> None:
+    def test_it_shows_its_working(self, factory: sessionmaker[Session], served: LiveApi) -> None:
         self._rated(factory)
 
         main(["rescore"])
@@ -264,14 +297,21 @@ class TestRescore:
         assert aggregate.components["seret_viewers"]["weight"] == 0.0
 
     def test_a_weight_change_reaches_titles_already_scored(
-        self, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+        self,
+        factory: sessionmaker[Session],
+        served: LiveApi,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The whole point: no enrich run, no network, no attempt recorded."""
         self._rated(factory)
         main(["rescore"])
 
-        monkeypatch.setenv("EIFO_SCORES__WEIGHTS__SERET_CRITICS", "6.0")
-        get_settings.cache_clear()
+        # On the catalog's settings, not the fetcher's. Weights are a property
+        # of the catalog - they decide what its stored scores mean - and the
+        # arithmetic happens where the ratings are. A fetcher able to change
+        # them by setting an environment variable would let two machines
+        # disagree about what a title's score is.
+        served.app.state.settings.scores.weights.seret_critics = 6.0
         assert main(["rescore"]) == EXIT_OK
 
         with factory() as session:
@@ -288,11 +328,16 @@ class TestRescore:
         with factory() as session:
             assert session.scalars(select(EnrichAttempt)).all() == []
 
-    def test_an_unscored_catalog_is_not_an_error(self, factory: sessionmaker[Session]) -> None:
+    def test_an_unscored_catalog_is_not_an_error(
+        self, factory: sessionmaker[Session], served: LiveApi
+    ) -> None:
         assert main(["rescore"]) == EXIT_OK
 
     def test_it_says_how_many_it_did(
-        self, factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+        self,
+        factory: sessionmaker[Session],
+        served: LiveApi,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         self._rated(factory)
 
@@ -462,7 +507,7 @@ class TestReview:
 
 class TestSyncCommand:
     def test_no_enabled_sources_still_succeeds(
-        self, migrated: Path, monkeypatch: pytest.MonkeyPatch
+        self, migrated: Path, served: LiveApi, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An unknown --source is a warning, not a crash."""
         assert main(["sync", "--source", "not_a_real_source"]) == EXIT_OK

@@ -226,6 +226,18 @@ def register_declared_sources(
     return written
 
 
+def source_overrides(session: Session) -> dict[str, bool]:
+    """Operator switches set from the Manage tab, by source key.
+
+    Only the rows that carry one: a NULL ``sources.enabled`` is not an answer,
+    it is the absence of one, and means the configuration file still decides.
+    """
+    rows = session.execute(
+        select(Source.key, Source.enabled).where(Source.enabled.is_not(None))
+    ).all()
+    return {key: bool(enabled) for key, enabled in rows}
+
+
 def requested_backfills(session: Session) -> list[str]:
     """Source keys an operator has asked to have pulled in full, oldest first."""
     return list(

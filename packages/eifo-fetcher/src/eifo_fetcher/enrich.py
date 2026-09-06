@@ -1,8 +1,15 @@
-"""The enrichment pipeline: refresh policy, persistence, aggregation.
+"""Asking the enrichers, and reporting what they said.
 
-Enrichers report what they found; everything that touches the database happens
-here, for the same reason source plugins never write: it keeps each provider
-small enough to test from a recorded fixture.
+Enrichers report what they found and never write, for the same reason source
+plugins never write: it keeps each provider small enough to test from a
+recorded fixture. What a finding *means* - which score may overwrite which,
+whether a name is in the wrong script, when the title next falls due - is a
+question about the catalog, so it is answered where the catalog is.
+
+What is left here is the loop: ask the API what is due, put each title through
+every enricher, and send the answers back in batches. That is the part that
+needs the network and the plugins, and it is the part that can run on a machine
+the catalog is not on.
 """
 
 from __future__ import annotations
@@ -12,69 +19,27 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from eifo_core.enriching import (
-    _describe,
-    apply_patch,
-    outcome_of,
-    recompute,
-    record_attempt,
-    store_ratings,
-    titles_due,
-    view_of,
-)
-from eifo_core.enums import FetchPhase, FetchStatus
-from eifo_core.models import (
-    ExternalRating,
-    Title,
-)
+from eifo_core import ingest as wire
+from eifo_core.enums import FetchStatus
 from eifo_core.settings import Settings
 from eifo_core.types import utcnow
-from eifo_fetcher.enrichers.base import Enricher, TitleView
+from eifo_fetcher.enrichers.base import Enricher, EnrichResult, TitleView
+from eifo_fetcher.ingest import IngestClient, IngestError
 from eifo_fetcher.progress import ProgressTicker, position, remaining
 from eifo_fetcher.progress import tally as tally_of
-from eifo_fetcher.runs import capture_log, close_run, open_run
+from eifo_fetcher.runs import capture_log
 from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError
 
 logger = logging.getLogger("eifo.fetch.enrich")
 
-#: Titles enriched between commits.
-#:
-#: SQLite allows one writer at a time, and every title here means network calls.
-#: One transaction for the batch held the write lock for the whole run - up to
-#: twenty-nine minutes, against a thirty-second busy timeout - so anything else
-#: touching the database during a nightly enrich waited half a minute and then
-#: failed. Committing as we go bounds that, and bounds what a crash loses.
-COMMIT_EVERY = 25
+#: Refusals kept for the run row. The same reasoning as FetchContext's cap: if
+#: the parse has gone wrong every title fails the same way, and the first
+#: handful says so as well as a thousand would.
+MAX_REPORTED_REFUSALS = 20
 
-#: Aggregates recomputed between commits. Cheaper per row than enrichment -
-#: no network - so a larger batch still keeps each lock short.
-AGGREGATE_COMMIT_EVERY = 200
-
-#: Patchable fields the schema keeps unique, so a second writer collides.
-_UNIQUE_FIELDS = frozenset({"tmdb_id", "imdb_id"})
-
-#: Metadata fields an enricher may fill. Anything else in a patch is ignored,
-#: so a provider cannot quietly write to columns it has no business setting.
-PATCHABLE_FIELDS = frozenset(
-    {
-        "tmdb_id",
-        "imdb_id",
-        "name_he",
-        "name_en",
-        "overview_he",
-        "overview_en",
-        "year",
-        "runtime_minutes",
-        "seasons",
-        "status",
-        "poster_source_url",
-        "original_language",
-        "origin_countries",
-    }
-)
+# What may be written and how often anything is committed moved to
+# eifo_core.enriching with the writing itself. Nothing here writes: this side
+# asks what is due, asks the enrichers, and reports what they said.
 
 
 @dataclass(slots=True)
@@ -82,6 +47,14 @@ class EnrichResultTally:
     """What one enrichment run did."""
 
     titles_seen: int = 0
+    #: Ratings the enrichers turned up, counted the moment they were returned.
+    #:
+    #: Separate from ``ratings_written``, which is what the catalog says it
+    #: stored and only arrives when a batch is reported. The progress line needs
+    #: this one: with a batch of twenty-five, a run reporting only what had
+    #: landed said "nothing yet" for the whole first chunk - and "a third of the
+    #: way through and nothing found" is precisely the signal it exists to give.
+    ratings_found: int = 0
     ratings_written: int = 0
     metadata_updated: int = 0
     aggregates_computed: int = 0
@@ -91,6 +64,7 @@ class EnrichResultTally:
     def as_stats(self) -> dict[str, Any]:
         return {
             "titles_seen": self.titles_seen,
+            "ratings_found": self.ratings_found,
             "ratings_written": self.ratings_written,
             "metadata_updated": self.metadata_updated,
             "aggregates_computed": self.aggregates_computed,
@@ -123,36 +97,42 @@ def apply_rate_limits(
 
 
 def enrich_titles(
-    session: Session,
+    api: IngestClient,
     enrichers: list[Enricher],
     ctx: FetchContext,
     settings: Settings,
     *,
     force: bool = False,
     limit: int | None = None,
-    titles: list[Title] | None = None,
+    titles: list[TitleView] | None = None,
+    chunk_size: int = wire.ENRICH_CHUNK_SIZE,
 ) -> EnrichResultTally:
-    """Run every enricher over the titles that are due, then recompute scores.
+    """Look up whatever is due and report what the enrichers found.
+
+    Opens no database. Which titles are due is a property of the catalog - the
+    schedule, the backoff, what was attempted when - so it is asked for rather
+    than worked out here, and the findings go back the same way.
 
     Args:
-        titles: enrich exactly these, instead of whatever is due. For repairs
-            that know which titles they are about, and for the tests.
+        titles: enrich exactly these instead of whatever is due. For repairs
+            that already know which titles they are about, and for tests.
     """
     started_at = utcnow()
     tally = EnrichResultTally()
     status = FetchStatus.OK
-    run = open_run(session, phase=FetchPhase.ENRICH, started_at=started_at)
     fatal: str | None = None
+    run_id = api.begin_enrich(started_at=started_at)
 
     apply_rate_limits(enrichers, ctx, settings)
+    #: What the catalog would not take. Kept apart from ``ctx.errors``, which
+    #: is what went wrong on this side, because the two are gathered at
+    #: different moments and the run row wants both.
+    refused: list[str] = []
 
     with capture_log() as captured:
         try:
-            due = (
-                titles
-                if titles is not None
-                else titles_due(session, settings, force=force, limit=limit)
-            )
+            wanted = limit if limit is not None else settings.enrich.batch_size
+            due = titles if titles is not None else _due(api, wanted, force=force)
             # Said before the first title, because it is the number that decides
             # whether to wait for this or go to bed: a run with nine titles due
             # and a run with five thousand look identical until it is over.
@@ -160,138 +140,185 @@ def enrich_titles(
             ticker = ProgressTicker()
             began = time.monotonic()
 
-            for index, title in enumerate(due, 1):
+            batch: list[dict[str, Any]] = []
+            for index, view in enumerate(due, 1):
                 tally.titles_seen += 1
-                view = view_of(title)
                 # Every title by name, for anybody who wants to watch it work or
                 # to find which one a provider choked on. At DEBUG because a
                 # batch of five thousand would otherwise bury the progress lines
                 # and spend the run row's whole log budget on a list of titles.
-                logger.debug("enriching %s", _describe(title))
-                written = 0
-                errored = False
-                for enricher in enrichers:
-                    found = _run_one(session, enricher, title, view, ctx, tally)
-                    if found is None:
-                        errored = True
-                    else:
-                        written += found
-                if recompute(session, title, settings):
-                    tally.aggregates_computed += 1
-                # Before the flush, so a title that yielded nothing still says so:
-                # the queue has to learn from the attempts that found nothing, or
-                # it spends every run on the same titles.
-                record_attempt(
-                    session,
-                    title,
-                    settings,
-                    outcome=outcome_of(title, written=written, errored=errored),
-                )
-                session.flush()
-                if index % COMMIT_EVERY == 0:
-                    session.commit()
+                logger.debug("enriching %s", view.describe())
+                found = _findings_for(enrichers, view, ctx, tally)
+                if found["findings"]:
+                    # Per title, at DEBUG, because "which one did this provider
+                    # choke on" is answerable only from a line naming the title.
+                    # What was *stored* is the catalog's answer and arrives per
+                    # batch; this is what was offered.
+                    logger.debug(
+                        "%s: %d finding(s) offered", view.describe(), len(found["findings"])
+                    )
+                batch.append(found)
 
-                logger.debug("%s: %d rating(s) written", _describe(title), written)
+                if len(batch) >= chunk_size:
+                    _report_batch(api, run_id, batch, tally, refused)
+                    batch = []
                 if ticker.due(index):
                     logger.info("%s", _progress(tally, index, len(due), began))
+
+            if batch:
+                _report_batch(api, run_id, batch, tally, refused)
         except TooManyErrorsError as exc:
             logger.error("%s", exc)
             status = FetchStatus.FAILED
             fatal = f"{type(exc).__name__}: {exc}"
-            session.rollback()
         except Exception as exc:
             logger.exception("enrichment failed")
             status = FetchStatus.FAILED
             fatal = f"{type(exc).__name__}: {exc}"
-            # Without this the session is left needing one, and recording the
-            # failure would itself raise - losing the row that explains the run.
-            session.rollback()
 
-        tally.errors = list(ctx.errors)
+        # The provider failures this side saw, then the refusals the catalog
+        # sent back, then whatever ended the run. Assembled rather than assigned:
+        # this used to be `tally.errors = list(ctx.errors)`, which ran after the
+        # batches had already filed their rejections into the same list and
+        # threw every one of them away - so a score refused for being outside
+        # its provider's scale, which is always a parser bug, reached the run
+        # row as silence.
+        tally.errors = [*ctx.errors, *refused]
         if fatal is not None:
             tally.errors.append(f"fatal: {fatal}")
 
-    close_run(session, run, status=status, stats=tally.as_stats(), log=captured.text())
+    try:
+        outcome = api.finish_enrich(
+            run_id,
+            status=status,
+            errors=tally.errors,
+            # What this side knows and the catalog cannot: which provider
+            # produced how many of the ratings. The catalog sees findings, not
+            # who was asked, so without this the run row could say a thousand
+            # ratings were written and nothing about where they came from.
+            stats={"by_enricher": tally.by_enricher, "ratings_found": tally.ratings_found},
+            log=captured.text(),
+        )
+    except IngestError as exc:
+        logger.warning("could not finish the enrich run: %s", exc)
+        return tally
+
+    tally.ratings_written = int(outcome.get("ratings_written", tally.ratings_written))
+    tally.metadata_updated = int(outcome.get("metadata_updated", tally.metadata_updated))
+    tally.aggregates_computed = int(outcome.get("aggregates_computed", tally.aggregates_computed))
     return tally
 
 
-def _run_one(
-    session: Session,
-    enricher: Enricher,
-    title: Title,
+def _due(api: IngestClient, wanted: int, *, force: bool) -> list[TitleView]:
+    """The queue, in one ask, because it cannot honestly be asked for twice.
+
+    A title is due until something reports on it, so the queue does not move
+    while it is being read: a second ask hands back the same head. Treating it
+    as pageable meant a nightly run with the default batch of five hundred
+    enriched the first hundred titles five times and left the other four
+    hundred exactly where they were.
+
+    So one request, and a cap that is said out loud when it bites - a batch
+    larger than the far end will answer is a configuration that is quietly not
+    doing what it says.
+    """
+    if wanted > wire.MAX_DUE_PAGE:
+        logger.warning(
+            "the configured batch of %d is more than the catalog will hand over at once; "
+            "enriching %d this run and the rest on the next",
+            wanted,
+            wire.MAX_DUE_PAGE,
+        )
+    return api.titles_due(limit=min(wanted, wire.MAX_DUE_PAGE), force=force)
+
+
+def _findings_for(
+    enrichers: list[Enricher],
     view: TitleView,
     ctx: FetchContext,
     tally: EnrichResultTally,
-) -> int | None:
-    """Apply one enricher to one title, tolerating provider failures.
+) -> dict[str, Any]:
+    """Ask every enricher about one title, and shape the answer for the wire."""
+    findings: list[dict[str, Any]] = []
+    errored = False
+
+    for enricher in enrichers:
+        found = _run_one(enricher, view, ctx, tally)
+        if found is None:
+            errored = True
+        elif not found.is_empty:
+            findings.append({"source": enricher.key, "result": wire.finding_to_wire(found)})
+
+    return {"title_id": view.id, "findings": findings, "errored": errored}
+
+
+def _report_batch(
+    api: IngestClient,
+    run_id: int,
+    batch: list[dict[str, Any]],
+    tally: EnrichResultTally,
+    refused: list[str],
+) -> None:
+    """Send one batch of findings, and keep what the far side would not take.
+
+    A refusal is nearly always a parser that has gone wrong - a percentage read
+    as a score out of ten - and it is invisible from here unless it is carried
+    back and written down. The index is the title's place in this batch, so it
+    is resolved to the title before it is recorded: "#3" means nothing by the
+    time anybody reads the row.
+    """
+    answer = api.report(run_id, batch)
+    tally.ratings_written += int(answer.get("ratings_written", 0))
+
+    for rejection in answer.get("rejected") or []:
+        index = rejection.get("index")
+        known = isinstance(index, int) and 0 <= index < len(batch)
+        title_id = batch[index]["title_id"] if known else "?"
+        message = f"title {title_id}: {rejection.get('reason')}"
+        logger.warning("%s", message)
+        # Capped for the same reason FetchContext caps its own: a systematically
+        # broken parser fails on every title, and these go into a JSON column on
+        # a row that is never deleted.
+        if len(refused) < MAX_REPORTED_REFUSALS:
+            refused.append(message)
+
+
+def _run_one(
+    enricher: Enricher,
+    view: TitleView,
+    ctx: FetchContext,
+    tally: EnrichResultTally,
+) -> EnrichResult | None:
+    """Ask one enricher about one title, tolerating provider failures.
 
     Returns:
-        How many ratings it wrote, or None if the provider itself failed - a
-        distinction the caller needs, because "nobody rates this title" and
-        "this provider is down" deserve different waits before trying again.
+        What it found, or None if the provider itself failed - a distinction
+        the caller needs, because "nobody rates this title" and "this provider
+        is down" deserve different waits before trying again.
+
+    It no longer writes anything: what a finding means for the catalog is
+    decided where the catalog is. Counting still happens here, because the
+    per-enricher tally is about this run rather than about the rows.
     """
     try:
         result = enricher.enrich(view, ctx)
     except TooManyErrorsError:
         raise
     except Exception as exc:
-        ctx.record_error(f"{enricher.key} failed for title {title.id}", exc=exc)
+        ctx.record_error(f"{enricher.key} failed for title {view.id}", exc=exc)
         return None
 
     if result is None or result.is_empty:
         # A provider having nothing on a title is ordinary, not a failure.
-        return 0
+        return EnrichResult()
 
     ctx.record_success()
-    written = store_ratings(
-        session,
-        title,
-        result.ratings,
-        lambda message, exc: ctx.record_error(message, exc=exc),
-    )
-    tally.ratings_written += written
-    tally.by_enricher[enricher.key] = tally.by_enricher.get(enricher.key, 0) + written
-
-    if apply_patch(session, title, result, source=enricher.key):
+    found = len(result.ratings)
+    tally.ratings_found += found
+    tally.by_enricher[enricher.key] = tally.by_enricher.get(enricher.key, 0) + found
+    if result.metadata_patch:
         tally.metadata_updated += 1
-    return written
-
-
-def recompute_all_aggregates(session: Session, settings: Settings) -> int:
-    """Rescore every title that has ratings.
-
-    Needed after the IMDb bulk pass, which writes ratings without going through
-    the per-title path that would otherwise rescore as it goes.
-    """
-    tally = EnrichResultTally()
-    rated_ids = [
-        title_id
-        for (title_id,) in session.execute(select(ExternalRating.title_id).distinct()).all()
-    ]
-    # Cheap per row and there are tens of thousands of them, so this is minutes
-    # of a phase that has already run for an hour - and the last minutes of a
-    # long run are exactly when somebody is wondering whether to kill it.
-    logger.info("rescoring %d rated title(s)", len(rated_ids))
-    ticker = ProgressTicker()
-    began = time.monotonic()
-
-    for index, title_id in enumerate(rated_ids, 1):
-        title = session.get(Title, title_id)
-        if title is not None and recompute(session, title, settings):
-            tally.aggregates_computed += 1
-        # Thousands of titles in one transaction is the same write-lock problem
-        # as the enrich loop, just after the IMDb pass rather than during it.
-        if index % AGGREGATE_COMMIT_EVERY == 0:
-            session.commit()
-        if ticker.due(index):
-            logger.info(
-                "rescoring: %s%s",
-                position(index, len(rated_ids)),
-                _tail(remaining(index, len(rated_ids), time.monotonic() - began)),
-            )
-
-    session.commit()
-    return tally.aggregates_computed
+    return result
 
 
 def _progress(tally: EnrichResultTally, done: int, total: int, began: float) -> str:
@@ -305,7 +332,7 @@ def _progress(tally: EnrichResultTally, done: int, total: int, began: float) -> 
         position(done, total),
         _tail(remaining(done, total, time.monotonic() - began)),
         tally_of(
-            ratings=tally.ratings_written,
+            ratings=tally.ratings_found,
             metadata_updated=tally.metadata_updated,
             errors=len(tally.errors),
         ),

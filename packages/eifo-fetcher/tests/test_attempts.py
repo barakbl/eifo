@@ -22,7 +22,7 @@ from eifo_core.types import utcnow
 from eifo_fetcher import attempts
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.ingest import IngestClient, IngestError
-from eifo_fetcher.runner import fetch_images
+from eifo_fetcher.runner import fetch_images, phase_client
 
 
 class TestTheNoteItself:
@@ -132,28 +132,44 @@ class TestTheContextManager:
 
 
 class TestReportingItLate:
+    """Posted by whatever opens a phase, rather than by the artwork phase.
+
+    It used to live inside ``fetch_images``, which was the only phase that had
+    an API client to post it with. All three do now, and a note left by a failed
+    sync would have waited for the next artwork run to carry it - which on an
+    install that never fetches artwork is for ever.
+    """
+
     def test_the_next_run_posts_the_attempt_that_could_not_report_itself(
-        self, settings: Settings, http: HttpClient, ingest_api: Any
+        self, settings: Settings, ingest_api: Any
     ) -> None:
         when = utcnow() - dt.timedelta(hours=8)
         attempts.failed(settings, FetchPhase.IMAGES, when, "connection refused")
 
-        with ingest_api.client() as api:
-            fetch_images(settings, http=http, api=api)
+        with ingest_api.client() as client, phase_client(settings, FetchPhase.SYNC, api=client):
+            pass
 
-        # Two runs opened: the one being reported late, then this one.
-        assert len(ingest_api.opened) == 2
+        assert len(ingest_api.opened) == 1
         assert ingest_api.opened[0]["started_at"].startswith(when.isoformat()[:16])
         assert ingest_api.closed[0]["status"] == FetchStatus.CRASHED.value
         assert "connection refused" in ingest_api.closed[0]["stats"]["errors"][0]
 
-    def test_and_then_forgets_it(
-        self, settings: Settings, http: HttpClient, ingest_api: Any
+    def test_any_phase_carries_it_not_only_the_one_that_left_it(
+        self, settings: Settings, ingest_api: Any
     ) -> None:
+        """A note from a failed sync must not wait on an artwork run to post it."""
+        attempts.failed(settings, FetchPhase.SYNC, utcnow(), "connection refused")
+
+        with ingest_api.client() as client, phase_client(settings, FetchPhase.IMAGES, api=client):
+            pass
+
+        assert ingest_api.opened[0]["phase"] == FetchPhase.SYNC.value
+
+    def test_and_then_forgets_it(self, settings: Settings, ingest_api: Any) -> None:
         attempts.failed(settings, FetchPhase.IMAGES, utcnow(), "connection refused")
 
-        with ingest_api.client() as api:
-            fetch_images(settings, http=http, api=api)
+        with ingest_api.client() as client, phase_client(settings, FetchPhase.IMAGES, api=client):
+            pass
 
         assert attempts.pending(settings) is None, "reported once, not every run after"
 
@@ -179,7 +195,7 @@ class TestReportingItLate:
             "eifo_pat_x",
             http=httpx.Client(transport=httpx.MockTransport(refuse)),
         )
-        with pytest.raises(IngestError), api:
+        with pytest.raises(IngestError), api, phase_client(settings, FetchPhase.IMAGES, api=api):
             fetch_images(settings, http=http, api=api)
 
         assert attempts.pending(settings) is not None

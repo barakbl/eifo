@@ -43,6 +43,18 @@ class TitleView:
     def display_name(self) -> str:
         return self.name_he or self.name_en or f"title#{self.id}"
 
+    def describe(self) -> str:
+        """A title as a person would recognise it, with the id to look it up by.
+
+        The same sentence :func:`eifo_core.enriching._describe` builds from the
+        row, so a title logged by the fetcher and the same title logged by the
+        catalog read as one thing rather than two. English first here, unlike
+        ``display_name``: this is for somebody reading a log, and the log is in
+        English.
+        """
+        name = self.name_en or self.name_he or "untitled"
+        return f"{name!r} (id {self.id})"
+
     def names(self) -> list[str]:
         """Every name this title is known by, Hebrew first."""
         return [name for name in (self.name_he, self.name_en) if name]

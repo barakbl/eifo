@@ -32,6 +32,21 @@ from eifo_core.models import Availability, MatchReview, Source, Title, TmdbAlias
 from eifo_core.naming import is_hebrew, latin_script, split_by_script
 
 
+class TmdbUnavailableError(Exception):
+    """A resolver that cannot answer this one without help.
+
+    Not a failure. It is how the API side says "the sender has not looked this
+    listing up yet": there is no TMDB key here, and searching from here would
+    put the network on the machine least able to afford it. The caller catches
+    it, asks the fetcher to resolve that listing, and offers it again.
+
+    It has to be its own type because the search below swallows exceptions - a
+    ratings site being down should cost one lookup, not a run - and a deferral
+    caught by that would be logged as a failure and quietly turned into a
+    guess.
+    """
+
+
 class TmdbSearch(Protocol):
     """Something that can ask TMDB what it knows about a name.
 
@@ -566,6 +581,10 @@ class TitleMatcher:
             for year in _search_years(item.year):
                 try:
                     candidates = self._tmdb.search(item.kind, query, year=year)
+                except TmdbUnavailableError:
+                    # Not a failure: the resolver is saying it has not been
+                    # given this one yet. Let the caller hear it.
+                    raise
                 except Exception:
                     logger.exception("TMDB search failed for %r", query)
                     return None

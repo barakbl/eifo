@@ -15,7 +15,17 @@ from eifo_api.deps import require_membership
 from eifo_api.errors import install_error_handlers
 from eifo_api.logging_privacy import install_log_filters
 from eifo_api.oauth import configured_providers, redirect_uri
-from eifo_api.routers import admin, auth, catalog, ingest, me, meta, reviews
+from eifo_api.routers import (
+    admin,
+    auth,
+    catalog,
+    enriching,
+    ingest,
+    me,
+    meta,
+    reviews,
+    syncing,
+)
 from eifo_api.static import mount_client, mount_images
 from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
 from eifo_core.fts import ensure_search_triggers, missing_triggers
@@ -114,6 +124,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # members-only instance answered 401 where it otherwise answers 404, which
     # tells a stranger the surface is there.
     app.include_router(ingest.router, prefix=API_PREFIX)
+    app.include_router(syncing.router, prefix=API_PREFIX)
+    app.include_router(enriching.router, prefix=API_PREFIX)
     app.include_router(reviews.router, prefix=API_PREFIX, dependencies=gated)
 
     mount_images(app, Path(settings.images_dir))

@@ -357,34 +357,58 @@ sync creates, and artwork needs the URLs enrichment fills in. The start time com
 `[schedule]` in `config/eifo.toml`. They can still be run one at a time
 (`eifo-fetch sync`, `enrich`, `images`) when you want just one of them.
 
-**The artwork phase needs an API token**, because it no longer writes posters itself - it
-posts them to `/api/v1/ingest`. On a single-box install that is the API on this machine and
-the only thing to set is the token:
+**Every phase writes through the API.** None of them opens the catalog: they ask what needs
+doing, send back what they did, and never touch the database or the images directory. On a
+single-box install there is nothing to configure for this - the fetcher talks to the API on
+this machine, and where it needs a credential it mints one for the run and revokes it at the
+end, so no secret has to exist. That is deliberate: the obvious place to keep a long-lived
+administrator token is a config file, and one sitting beside the database would be a
+strictly worse arrangement than the direct access it replaced.
+
+It can only do that where it can open the catalog, which is exactly the single-box case. A
+fetcher anywhere else needs a token issued on purpose:
 
 ```bash
-eifo-fetch token create fetcher          # prints it once
+eifo-fetch token create fetcher          # prints it once, on the machine with the database
 export EIFO_API_TOKEN=eifo_pat_…
 ```
 
-Without one, `eifo-fetch images` says so and stops rather than failing later with a 401
-from a URL you never typed. The token must belong to an administrator; anyone else gets a
-404, which is what this API says instead of "you are not allowed".
+Without one, and with no catalog to mint against, the command says so and stops rather than
+failing later with a 401 from a URL you never typed. The token must belong to an
+administrator; anyone else gets a 404, which is what this API says instead of "you are not
+allowed".
 
 ### A fetcher somewhere else
 
-The point of the change: the machine that downloads the posters no longer has to be the
-machine that keeps them. Point the fetcher at the server and it fills that catalog instead
-of a local one:
+The point of the change: the machine that reads the catalogs no longer has to be the machine
+that keeps them. Point the fetcher at the server and it fills that catalog instead of a
+local one:
 
 ```bash
 export EIFO_API_BASE_URL=https://eifo.example.com
 export EIFO_API_TOKEN=eifo_pat_…          # issued on the server
-uv run eifo-fetch images
+uv run eifo-fetch all
 ```
 
-It asks the server which titles are missing artwork, downloads and resizes them locally,
-and uploads them a hundred at a time as a `.tar.gz`. Nothing is left behind: the staging
-directory is temporary, because those are not this machine's posters.
+A laptop on a domestic connection can keep a catalog on a server it has no disk access to.
+It reads the services' catalogs, ships the listings, looks up what the server could not
+place, asks what is due for enrichment and reports what the providers said, downloads and
+resizes the artwork and uploads it. What none of that does is open a database.
+
+The division is the same everywhere: **the fetcher reads, the catalog decides.** Which title
+a listing means, whether a score is believable, when a title next falls due and what has
+stopped being offered are all questions about the catalog, and they are answered where the
+catalog is. The fetcher does the part that needs the network, the plugins and somebody's
+connection - and that is the part that can be anywhere.
+
+Two consequences are worth knowing about. TMDB lookups stay on the fetcher, because that is
+where the key and the network are: the server answers a chunk of listings by naming the ones
+it could not place from the catalog alone, and only those are looked up and offered again.
+And the IMDb bulk pass joins its million-row dataset against the ids the server sends, rather
+than sending a million rows to be joined there.
+
+Nothing is left behind on the fetcher: staging directories are temporary, because those are
+not this machine's posters.
 
 Interrupting it costs at most the batch in flight. What is outstanding is derived from the
 catalog - titles with no `poster_path` - and never from anything the fetcher remembers, so
@@ -410,8 +434,8 @@ chance to. Its row is already open on the server, though, and the server closes 
 is old enough to be certainly dead. Between the two, a run that vanishes leaves a trace
 whichever way it went.
 
-Only artwork works this way so far. `sync` and `enrich` still need the database on the
-same machine.
+What still needs the database on the same machine is the operator's own toolkit - `review`,
+`rematch`, `dedupe`, `token` - which is about a catalog somebody is sitting in front of.
 
 <details>
 <summary><b>On macOS, use launchd rather than cron</b></summary>
@@ -697,7 +721,7 @@ and the other stands down, and two schedulers are safe here while none is not.
 A run takes hours, so the menu shows it happening rather than saying "running"
 for two of them: **Progress** lists every service this run has done - with what
 each found - the one it is on now, and the ones still to come, read from the
-`fetch_runs` rows the fetcher writes as it goes. **Sync one service** runs
+`fetch_runs` rows a run leaves behind as it goes. **Sync one service** runs
 `eifo-fetch sync --source KEY` for any single service, each listed with how old
 its catalog is, so a source that has just come back is a click rather than a
 full sweep. When a run ends, whoever started it, a notification says how it went.
@@ -831,13 +855,20 @@ to invent an account: with more than one, name whose it is with `--email`.
 | `packages/eifo-api` | FastAPI REST service; also serves the client and the images |
 | `web/` | Static HTML + JS client, vanilla ES modules |
 
-**Artwork is the exception, and it is the first of several.** Sync and enrichment
-write to SQLite directly, which works exactly as long as the two halves share a disk.
-The artwork phase does not: it asks the API what needs downloading, fetches and resizes
-the posters, and posts them back as a `.tar.gz` - so it can run on a laptop and fill a
-catalog on a server whose filesystem it cannot see. `eifo_core.ingest` holds the shape of
-that exchange, for the same reason the schema lives in core: two definitions of what an
-upload looks like would be two things that must never disagree.
+**Nothing the fetcher does opens the database.** It used to write to SQLite directly, which
+worked exactly as long as the two halves shared a disk. Every phase now asks the API what
+needs doing and posts back what it did - so a fetcher can run on a laptop and fill a catalog
+on a server whose filesystem it cannot see.
+
+The split is not "the fetcher does less". It is that reading and deciding are different jobs
+and belong on different sides. Reading a service's catalog needs plugins, an HTTP client and
+somebody's connection; deciding which title a listing means needs the catalog, and needs all
+of it - the matcher compares an unplaced listing against every title of its kind, which is
+tens of thousands of rows and can never happen over HTTP. So the matching, the availability
+sweep, the enrichment queue and the score arithmetic live in `eifo-core` and run inside the
+API, and `eifo_core.ingest` holds the shape of what passes between the two - for the same
+reason the schema lives in core: two definitions of a listing would be two things that must
+never disagree.
 
 Three deliberate choices, in case you were about to ask:
 

@@ -26,6 +26,13 @@ carry) and the three figures Seret reports - audience score, audience vote
 count, and the composite editorial "Seret Score". Storing the scores here is
 what makes enrichment free: the crawl has the page open anyway, and reading it
 again per title would be the same traffic twice.
+
+Nothing here writes to a database. The crawl reads the stored index over the
+API, sends back what it read in batches, and is told how many rows that made
+and how many parked titles it woke. Which pages are *newly* scorable is
+decided on the far side rather than here, and has to be: the question is what
+the row about to be overwritten already said, and only the store has ever seen
+that row.
 """
 
 from __future__ import annotations
@@ -33,25 +40,18 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import re
-from collections import defaultdict
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from eifo_core.enums import EnrichOutcome, TitleKind
-from eifo_core.match import normalise, years_match
-from eifo_core.models import EnrichAttempt, SeretTitle, Title
+from eifo_core import ingest as wire
+from eifo_core.enums import TitleKind
+from eifo_core.seret import SeretEntry, SeretLookup
 from eifo_core.types import utcnow
-from eifo_fetcher.enrich import view_of
-from eifo_fetcher.enrichers.base import TitleView
 from eifo_fetcher.enrichers.seret import (
     BASE_URL,
     DEFAULT_RATE_LIMIT_RPS,
     HOST,
-    SERET_YEAR_TOLERANCE,
-    SeretEntry,
     decode,
     entry_from,
     page_url,
@@ -59,6 +59,7 @@ from eifo_fetcher.enrichers.seret import (
     parse_title_node,
 )
 from eifo_fetcher.http import USER_AGENT
+from eifo_fetcher.ingest import IngestClient, StoredSeretPage
 from eifo_fetcher.progress import ProgressTicker
 from eifo_fetcher.robots import RobotsPolicy
 from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError
@@ -78,10 +79,10 @@ SITEMAP_INDEX_URL = f"{BASE_URL}/Sitemap.xml"
 PROGRESS_EVERY_PAGES = 100
 PROGRESS_FIRST_PAGES = 10
 
-#: Rows written between commits. SQLite takes one writer at a time and every
-#: row here costs a request, so the transaction is kept short for the same
-#: reason the enrich loop keeps its own short.
-COMMIT_EVERY = 50
+#: Pages sent per request. Every one of them cost a deliberately slow round
+#: trip to somebody else's site, so the batch is small: what a failed send
+#: costs is that much patient crawling done again.
+SEND_EVERY = wire.SERET_WRITE_CHUNK
 
 _LOC = re.compile(r"<loc>\s*(?P<url>[^<\s]+)\s*</loc>", re.IGNORECASE)
 
@@ -104,8 +105,9 @@ class IndexResult:
     unreadable: int = 0
     #: Pages that can score a title now and could not before this run - new
     #: ones, and ones whose film has been released and rated since we last
-    #: looked. What :func:`wake_titles_newly_covered` works from.
-    newly_scorable: list[SeretEntry] = field(default_factory=list)
+    #: looked. Counted by the store, which is the only side that saw what the
+    #: row said before this crawl overwrote it.
+    newly_scorable: int = 0
     #: Rows left alone because they were fetched recently enough.
     skipped_fresh: int = 0
     #: Pages robots.txt forbids, which are never owed to a later run.
@@ -129,7 +131,7 @@ class IndexResult:
             "created": self.created,
             "updated": self.updated,
             "unreadable": self.unreadable,
-            "newly_scorable": len(self.newly_scorable),
+            "newly_scorable": self.newly_scorable,
             "skipped_fresh": self.skipped_fresh,
             "skipped_disallowed": self.skipped_disallowed,
             "remaining": self.remaining,
@@ -163,12 +165,12 @@ class SeretIndexer:
 
     def run(
         self,
-        session: Session,
+        api: IngestClient,
         *,
         limit: int | None = None,
         force: bool = False,
     ) -> IndexResult:
-        """Crawl what is due and write it to ``seret_index``.
+        """Crawl what is due and send it to the catalog.
 
         Args:
             limit: pages this run may fetch, overriding ``[seret] batch_size``.
@@ -186,7 +188,11 @@ class SeretIndexer:
         listed = self._discover(result)
         result.pages_listed = len(listed)
 
-        due = self._due(session, listed, force=force, result=result)
+        # Every row, unreadable ones included. A page that carried no title is
+        # left out of the lookup but not out of this: the whole reason it has a
+        # row is so the crawl does not pay for that id again on every run.
+        stored = api.seret_index(include_unreadable=True)
+        due = self._due(stored, listed, force=force, result=result)
         logger.info(
             "seret: %d pages listed, %d fresh, %d due; reading %d of them this run",
             result.pages_listed,
@@ -195,8 +201,7 @@ class SeretIndexer:
             min(batch, len(due)),
         )
 
-        self._read(session, due[:batch], result)
-        session.commit()
+        self._read(api, due[:batch], result)
 
         # Counted against the whole due list rather than this run's slice, so a
         # crawl that stopped early reports what is genuinely left rather than
@@ -251,7 +256,7 @@ class SeretIndexer:
 
     def _due(
         self,
-        session: Session,
+        stored: Iterable[StoredSeretPage],
         listed: Iterable[tuple[TitleKind, int]],
         *,
         force: bool,
@@ -264,21 +269,25 @@ class SeretIndexer:
         then stale rows, longest-unread first; and pages that turned out to
         carry no title last, since they are the least likely to repay a visit.
         """
-        stored = {
-            (row.kind, row.seret_id): row for row in session.scalars(select(SeretTitle)).all()
-        }
+        rows = {(page.entry.kind, page.entry.seret_id): page for page in stored}
         cutoff = utcnow() - dt.timedelta(days=self._settings.seret.refresh_days)
+        # A row whose read time did not survive the wire is treated as never
+        # read, which puts it in the stale pile rather than losing it: one page
+        # fetched again is a cheaper mistake than a page never revisited.
+        never = dt.datetime.min.replace(tzinfo=dt.UTC)
 
         unseen: list[tuple[TitleKind, int]] = []
         stale: list[tuple[dt.datetime, tuple[TitleKind, int]]] = []
         dead: list[tuple[dt.datetime, tuple[TitleKind, int]]] = []
 
         for page in listed:
-            row = stored.get(page)
+            row = rows.get(page)
             if row is None:
                 unseen.append(page)
-            elif force or row.indexed_at < cutoff:
-                (dead if row.unreadable else stale).append((row.indexed_at, page))
+                continue
+            indexed_at = row.indexed_at or never
+            if force or indexed_at < cutoff:
+                (dead if row.unreadable else stale).append((indexed_at, page))
             else:
                 result.skipped_fresh += 1
 
@@ -289,12 +298,13 @@ class SeretIndexer:
 
     def _read(
         self,
-        session: Session,
+        api: IngestClient,
         due: list[tuple[TitleKind, int]],
         result: IndexResult,
     ) -> None:
-        """Fetch each page and write what it says."""
+        """Fetch each page and send what it says, a batch at a time."""
         ticker = ProgressTicker(every=PROGRESS_EVERY_PAGES, first=PROGRESS_FIRST_PAGES)
+        batch: list[dict[str, Any]] = []
 
         for kind, seret_id in due:
             url = page_url(kind, seret_id)
@@ -322,12 +332,34 @@ class SeretIndexer:
             entry = None if node is None else entry_from(kind, seret_id, node)
             if entry is None:
                 result.unreadable += 1
-            _store(session, kind, seret_id, entry, result)
+            batch.append(page_to_wire(kind, seret_id, entry))
 
-            if result.fetched % COMMIT_EVERY == 0:
-                session.commit()
+            if len(batch) >= SEND_EVERY:
+                self._send(api, batch, result)
+                batch = []
             if ticker.due(result.fetched):
                 logger.info("seret: %d of %d pages read", result.fetched, len(due))
+
+        if batch:
+            self._send(api, batch, result)
+
+    def _send(self, api: IngestClient, batch: list[dict[str, Any]], result: IndexResult) -> None:
+        """Hand one batch over, and count what the store made of it.
+
+        A batch that will not go is recorded and dropped rather than raised.
+        The pages are still listed in the sitemap, so the next run is owed them
+        again - and a crawl that has patiently read six hundred pages should
+        not throw the other five hundred away because one send failed.
+        """
+        try:
+            answer = api.store_seret_pages(batch)
+        except Exception as exc:
+            self._ctx.record_error(f"could not store {len(batch)} crawled page(s)", exc=exc)
+            return
+        result.created += int(answer.get("created", 0))
+        result.updated += int(answer.get("updated", 0))
+        result.newly_scorable += int(answer.get("newly_scorable", 0))
+        result.woken += int(answer.get("woken", 0))
 
     def _get(self, url: str) -> str:
         """A sitemap document. These are UTF-8, unlike the title pages."""
@@ -339,206 +371,38 @@ def child_sitemaps(xml: str) -> list[str]:
     return [url for url in _LOC.findall(xml) if url.lower().endswith(".xml")]
 
 
-def _store(
-    session: Session,
-    kind: TitleKind,
-    seret_id: int,
-    entry: SeretEntry | None,
-    result: IndexResult,
-) -> None:
-    """Write one page's answer, creating the row or refreshing it.
+def page_to_wire(kind: TitleKind, seret_id: int, entry: SeretEntry | None) -> dict[str, Any]:
+    """One page's answer, in the shape the store takes it in.
 
-    A page that carried no title node still gets a row, marked
-    ``unreadable``: without one the crawl would pay for that id again on every
-    single run, and there are enough withdrawn ids for that to matter.
+    A page that carried no title node is still sent, marked ``unreadable``:
+    without a row the crawl would pay for that id again on every single run,
+    and there are enough withdrawn ids for that to matter.
     """
-    row = session.get(SeretTitle, {"kind": kind, "seret_id": seret_id})
-    if row is None:
-        row = SeretTitle(kind=kind, seret_id=seret_id)
-        session.add(row)
-        result.created += 1
-        had_scores = False
-    else:
-        result.updated += 1
-        had_scores = row.viewers_score is not None or row.critics_score is not None
-
-    row.indexed_at = utcnow()
-    row.unreadable = entry is None
     if entry is None:
-        return
-
-    # Worth telling the enrich queue about only if this page can score
-    # something now and could not before: a page we had never read, or one
-    # whose film has been released and rated since we last looked.
-    gains_scores = entry.viewers_score is not None or entry.critics_score is not None
-    if gains_scores and not had_scores:
-        result.newly_scorable.append(entry)
-
-    row.name_he = entry.name_he
-    row.name_en = entry.name_en
-    row.year = entry.year
-    row.imdb_id = entry.imdb_id
-    row.viewers_score = entry.viewers_score
-    row.viewers_votes = entry.viewers_votes
-    row.critics_score = entry.critics_score
-    row.url = entry.page_url
-
-
-def wake_titles_newly_covered(session: Session, entries: list[SeretEntry]) -> int:
-    """Bring parked titles forward when the crawl has just learned about them.
-
-    A title nobody could rate backs off for a month, then two, then four. That
-    is right when the reason is that no provider carries it, and wrong when the
-    reason is that its Seret page had not been read yet - which, while the index
-    is still filling in, is most of them. Left alone, a score would sit in
-    ``seret_index`` for weeks with the one thing that reads it declining to look.
-
-    The crawl knows which pages it has just made scorable, so it can say which
-    of those waits have stopped making sense. Only ``due_at`` moves: the outcome
-    and the fruitless count are the enrich pass's to write, and the next
-    ordinary run resets them when it succeeds. Nothing here is fetched.
-
-    Returns:
-        How many titles were brought forward.
-    """
-    if not entries:
-        return 0
-
-    # Built from this run's pages alone - a few hundred - rather than the whole
-    # index, so what comes back is titles that are newly answerable and not
-    # every parked title Seret happens to carry.
-    lookup = SeretLookup(entries)
-    parked = session.scalars(
-        select(Title)
-        .join(EnrichAttempt, EnrichAttempt.title_id == Title.id)
-        .where(
-            EnrichAttempt.due_at > utcnow(),
-            EnrichAttempt.outcome != EnrichOutcome.OK,
-        )
-    ).all()
-
-    now = utcnow()
-    woken = 0
-    for title in parked:
-        if lookup.find(view_of(title)) is None:
-            continue
-        # The relationship is loaded: these titles were reached through it.
-        attempt = title.enrich_attempt
-        if attempt is not None:
-            attempt.due_at = now
-            woken += 1
-
-    if woken:
-        logger.info("seret: %d parked title(s) are now covered by the index and due again", woken)
-    return woken
-
-
-class SeretLookup:
-    """The stored index, in memory, keyed the two ways a title resolves.
-
-    Loaded once per enrich run rather than queried per title: the index is
-    thousands of rows against a run of a few hundred titles, and each title
-    would otherwise cost a query per name it is known by.
-
-    Resolution is deliberately unwilling to guess. An IMDb id shared by both
-    sides is decisive. Failing that a name must match exactly once, after
-    normalisation and with the years close enough; a name that matches two
-    different Seret pages resolves to neither, because attaching an Israeli
-    score to the wrong film is worse than attaching none.
-    """
-
-    def __init__(self, entries: Iterable[SeretEntry]) -> None:
-        self._by_imdb: dict[str, list[SeretEntry]] = defaultdict(list)
-        self._by_name: dict[tuple[TitleKind, str], list[SeretEntry]] = defaultdict(list)
-        self._count = 0
-
-        for entry in entries:
-            self._count += 1
-            if entry.imdb_id:
-                self._by_imdb[entry.imdb_id].append(entry)
-            for name in entry.names():
-                key = normalise(name)
-                if key:
-                    self._by_name[(entry.kind, key)].append(entry)
-
-    @classmethod
-    def load(cls, session: Session) -> SeretLookup:
-        """Every usable row of ``seret_index``.
-
-        Rows with no name are left out: an id that carried no title node
-        cannot be matched against anything, and keeping it would only make the
-        lookup larger.
-        """
-        return cls(_stored_entries(session))
-
-    def find(self, title: TitleView) -> SeretEntry | None:
-        """The Seret page for this title, or None if it cannot be settled."""
-        found = self._by_imdb_id(title)
-        if found is not None:
-            return found
-        return self._by_title_name(title)
-
-    def _by_imdb_id(self, title: TitleView) -> SeretEntry | None:
-        if not title.imdb_id:
-            return None
-        candidates = self._by_imdb.get(title.imdb_id, [])
-        if len(candidates) == 1:
-            return candidates[0]
-        # Seret occasionally files a work under both numberings - a miniseries
-        # entered as a film as well - and then the kind is the tiebreak.
-        same_kind = [entry for entry in candidates if entry.kind is title.kind]
-        return same_kind[0] if len(same_kind) == 1 else None
-
-    def _by_title_name(self, title: TitleView) -> SeretEntry | None:
-        for name in title.names():
-            key = normalise(name)
-            if not key:
-                continue
-            candidates = [
-                entry
-                for entry in self._by_name.get((title.kind, key), [])
-                if years_match(title.year, entry.year, tolerance=SERET_YEAR_TOLERANCE)
-            ]
-            if len(candidates) == 1:
-                return candidates[0]
-            if len(candidates) > 1:
-                logger.debug(
-                    "seret: %r matches %d pages; declining to guess", name, len(candidates)
-                )
-        return None
-
-    def __len__(self) -> int:
-        return self._count
-
-
-def _stored_entries(session: Session) -> Iterator[SeretEntry]:
-    rows = session.scalars(select(SeretTitle).where(SeretTitle.unreadable.is_(False))).all()
-    for row in rows:
-        if not row.names():
-            continue
-        yield SeretEntry(
-            kind=row.kind,
-            seret_id=row.seret_id,
-            name_he=row.name_he,
-            name_en=row.name_en,
-            year=row.year,
-            imdb_id=row.imdb_id,
-            viewers_score=row.viewers_score,
-            viewers_votes=row.viewers_votes,
-            critics_score=row.critics_score,
-            url=row.url,
-        )
-
-
-def index_status(session: Session) -> dict[str, int]:
-    """A count of what the index currently holds, for ``seret status``."""
-    rows = session.scalars(select(SeretTitle)).all()
+        return {"kind": kind.value, "seret_id": seret_id, "unreadable": True}
     return {
-        "pages": len(rows),
-        "movies": sum(1 for row in rows if row.kind is TitleKind.MOVIE),
-        "series": sum(1 for row in rows if row.kind is TitleKind.SERIES),
-        "with_imdb_id": sum(1 for row in rows if row.imdb_id),
-        "with_viewer_score": sum(1 for row in rows if row.viewers_score is not None),
-        "with_critic_score": sum(1 for row in rows if row.critics_score is not None),
-        "unreadable": sum(1 for row in rows if row.unreadable),
+        "kind": kind.value,
+        "seret_id": seret_id,
+        "unreadable": False,
+        "name_he": entry.name_he,
+        "name_en": entry.name_en,
+        "year": entry.year,
+        "imdb_id": entry.imdb_id,
+        "viewers_score": entry.viewers_score,
+        "viewers_votes": entry.viewers_votes,
+        "critics_score": entry.critics_score,
+        "url": entry.page_url,
     }
+
+
+# Reading the index moved to core: both services need it, and only one of them
+# has the catalog. The crawl above is what stayed, because crawling is fetching.
+__all__ = [
+    "IndexResult",
+    "SeretEntry",
+    "SeretIndexError",
+    "SeretIndexer",
+    "SeretLookup",
+    "child_sitemaps",
+    "page_to_wire",
+]

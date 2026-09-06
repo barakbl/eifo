@@ -50,6 +50,10 @@ logger = logging.getLogger("eifo.enriching")
 #: to do about it.
 RejectionSink = Callable[[str, Exception], None]
 
+#: Aggregates recomputed between commits. Cheaper per row than enrichment - no
+#: network - so a larger batch still keeps each write lock short.
+AGGREGATE_COMMIT_EVERY = 200
+
 #: Patchable fields the schema keeps unique, so a second writer collides.
 _UNIQUE_FIELDS = frozenset({"tmdb_id", "imdb_id"})
 
@@ -430,10 +434,39 @@ def recompute(session: Session, title: Title, settings: Settings) -> bool:
     return True
 
 
+def recompute_all_aggregates(session: Session, settings: Settings) -> int:
+    """Rescore every title that has ratings.
+
+    Needed after the IMDb bulk pass, which writes ratings without going through
+    the per-title path that would otherwise rescore as it goes.
+    """
+    computed = 0
+    rated_ids = [
+        title_id
+        for (title_id,) in session.execute(select(ExternalRating.title_id).distinct()).all()
+    ]
+    # Cheap per row and there are tens of thousands of them, so this is minutes
+    # of a phase that has already run for an hour - and the last minutes of a
+    # long run are exactly when somebody is wondering whether to kill it.
+    logger.info("rescoring %d rated title(s)", len(rated_ids))
+
+    for index, title_id in enumerate(rated_ids, 1):
+        title = session.get(Title, title_id)
+        if title is not None and recompute(session, title, settings):
+            computed += 1
+        # Thousands of titles in one transaction is the same write-lock problem
+        # as the enrich loop, just after the IMDb pass rather than during it.
+        if index % AGGREGATE_COMMIT_EVERY == 0:
+            session.commit()
+            logger.info("rescoring: %d of %d", index, len(rated_ids))
+
+    session.commit()
+    return computed
+
+
 def _describe(title: Title) -> str:
     """A title as a person would recognise it, with the id to look it up by."""
-    name = title.name_en or title.name_he or "untitled"
-    return f"{name!r} (id {title.id})"
+    return view_of(title).describe()
 
 
 def view_of(title: Title) -> TitleView:

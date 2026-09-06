@@ -11,10 +11,12 @@ import json
 import logging
 import tarfile
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
 import pytest
+from live import FETCHER_TOKEN, LiveApi, serving
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -54,9 +56,10 @@ def settings(tmp_path: Path) -> Settings:
         _env_file=None,
         db_url=f"sqlite:///{tmp_path / 'fetcher.db'}",
         images_dir=tmp_path / "images",
-        # The artwork phase writes through the API, so a fetcher without one of
-        # these is not a configured fetcher.
-        api_token="eifo_pat_test",
+        # Every phase writes through the API, so a fetcher without one of these
+        # is not a configured fetcher - unless it can mint one, which is what
+        # eifo_fetcher.credentials is for and what its own tests cover.
+        api_token=FETCHER_TOKEN,
     )
 
 
@@ -103,6 +106,42 @@ def fetcher_logs_at_info() -> Iterator[None]:
 
 
 @pytest.fixture
+def live_api(settings: Settings) -> Iterator[LiveApi]:
+    """A migrated catalog, the application serving it, and a client that may write."""
+    with serving(settings) as running:
+        yield running
+
+
+@pytest.fixture
+def api(live_api: LiveApi) -> IngestClient:
+    """The fetcher's half of the conversation, pointed at the real other half."""
+    return live_api.api
+
+
+@pytest.fixture
+def api_everywhere(live_api: LiveApi, monkeypatch: pytest.MonkeyPatch) -> LiveApi:
+    """Lend the in-process client to code that would open one for itself.
+
+    For the tests that drive a whole command or the daemon: those build their
+    own connection from settings and would reach for a socket. What is under
+    test there is the ordering, the locking and the exit code - not the
+    transport, which the tests that call the client directly already cover.
+
+    Lent rather than replaced, so the block still gets a client that talks to
+    the real application: this changes where the connection comes from and
+    nothing about what is on the other end of it.
+    """
+
+    @contextmanager
+    def lend(_settings: Settings, *, http: object = None) -> Iterator[IngestClient]:
+        yield live_api.api
+
+    for module in ("eifo_fetcher.runner", "eifo_fetcher.daemon", "eifo_fetcher.cli"):
+        monkeypatch.setattr(f"{module}.api_client", lend, raising=False)
+    return live_api
+
+
+@pytest.fixture
 def ingest_api() -> Iterator[FakeIngest]:
     """A stand-in for ``/api/v1/ingest``, for the phase that writes through it.
 
@@ -114,7 +153,13 @@ def ingest_api() -> Iterator[FakeIngest]:
 
 
 class FakeIngest:
-    """Answers the four ingest routes, and remembers what it was told.
+    """Answers the routes a phase touches on the way in, and remembers them.
+
+    A deliberately small double, for the tests that are about the fetcher's own
+    bookkeeping - what it opened, what it closed, what it kept when it could not
+    reach anybody. Anything about what the catalog *makes* of what it is sent
+    goes through ``live_api`` instead, against the real application.
+
 
     Built from :mod:`eifo_core.ingest` rather than from hand-written JSON, so
     the shapes here are the shapes the real endpoint reads. A change to the
@@ -126,6 +171,7 @@ class FakeIngest:
         self.uploads: list[bytes] = []
         self.opened: list[dict[str, object]] = []
         self.closed: list[dict[str, object]] = []
+        self.declared: list[dict[str, object]] = []
 
     def client(self) -> IngestClient:
         return IngestClient(
@@ -136,6 +182,12 @@ class FakeIngest:
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        if path.endswith("/enrich/providers"):
+            # Part of the surface every phase now touches on its way in, so a
+            # double that did not answer it would fail every test that opens a
+            # phase rather than the one testing providers.
+            self.declared.append(json.loads(request.content))
+            return httpx.Response(200, json={"changed": []})
         if path.endswith("/posters/pending"):
             after = int(request.url.params.get("after", 0))
             return httpx.Response(

@@ -12,8 +12,9 @@ import logging
 from typing import Any
 
 import pytest
+from live import LiveApi
 from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.ingest import ABANDONED_AFTER
@@ -80,54 +81,42 @@ class TestClosingARun:
 
 
 class TestRunsLeftBehind:
-    def test_a_sync_still_open_from_a_dead_process_is_marked_at_once(
-        self, session: Session
+    @pytest.mark.parametrize("phase", list(FetchPhase))
+    def test_a_recent_run_of_any_phase_is_left_alone(
+        self, session: Session, phase: FetchPhase
     ) -> None:
-        """The lock still proves this one: a sync can only run on this machine."""
-        open_run(session, phase=FetchPhase.SYNC, source_key="freetv")
+        """The lock proves nothing about any of them any more.
 
-        assert close_abandoned_runs(session) == 1
-
-        run = _runs(session)[0]
-        assert run.status is FetchStatus.CRASHED
-        assert run.finished_at is not None
-
-    def test_a_recent_artwork_run_is_left_alone(self, session: Session) -> None:
-        """The lock proves nothing about this one.
-
-        The artwork phase writes through the API, so a fetcher on somebody
-        else's machine can be mid-run against this catalog while this process
-        holds a lock that means nothing to it. Sweeping on sight would mark
-        that live run crashed, and running any command on the server would be
-        enough to do it.
+        Every phase writes through the API, so a fetcher on somebody else's
+        machine can be mid-run against this catalog while this process holds a
+        lock that means nothing to it. Sweeping on sight would mark that live
+        run crashed, and running any command on the server would be enough to
+        do it - which is exactly what happened to the artwork phase before the
+        rule was widened to cover the other two.
         """
-        open_run(session, phase=FetchPhase.IMAGES)
+        open_run(session, phase=phase, source_key="freetv")
 
         assert close_abandoned_runs(session) == 0
         assert _runs(session)[0].status is FetchStatus.RUNNING
 
-    def test_an_old_artwork_run_is_swept_by_the_clock(self, session: Session) -> None:
+    @pytest.mark.parametrize("phase", list(FetchPhase))
+    def test_an_old_run_of_any_phase_is_swept_by_the_clock(
+        self, session: Session, phase: FetchPhase
+    ) -> None:
         """Nothing could still be working on it, whoever started it."""
-        run = open_run(session, phase=FetchPhase.IMAGES)
+        run = open_run(session, phase=phase)
         run.started_at = utcnow() - ABANDONED_AFTER - dt.timedelta(minutes=1)
         session.commit()
 
+        swept = _runs(session)[0]
         assert close_abandoned_runs(session) == 1
-        assert _runs(session)[0].status is FetchStatus.CRASHED
-
-    def test_the_clock_is_not_imposed_on_phases_that_do_not_need_it(self, session: Session) -> None:
-        """A dead source must not sit there reading "running" until tomorrow.
-
-        That would be a worse answer than the one this gave before the artwork
-        phase moved, and it would be worse for the install that never had a
-        remote fetcher at all.
-        """
-        open_run(session, phase=FetchPhase.ENRICH)
-
-        assert close_abandoned_runs(session) == 1
+        assert swept.status is FetchStatus.CRASHED
+        assert swept.finished_at is not None
 
     def test_it_says_why_it_was_marked(self, session: Session) -> None:
-        open_run(session, phase=FetchPhase.ENRICH)
+        run = open_run(session, phase=FetchPhase.ENRICH)
+        run.started_at = utcnow() - ABANDONED_AFTER - dt.timedelta(minutes=1)
+        session.commit()
 
         close_abandoned_runs(session)
 
@@ -168,16 +157,13 @@ class TestPhasesThatUsedToRecordNothing:
         assert ingest_api.closed[0]["stats"] == {"downloaded": 0, "skipped": 0, "failed": 0}
 
     def test_the_imdb_bulk_pass_records_its_own_run(
-        self,
-        session_factory: sessionmaker[Session],
-        settings: Settings,
-        http: HttpClient,
-        session: Session,
+        self, live_api: LiveApi, settings: Settings, http: HttpClient
     ) -> None:
         """It ran after the enrich row was written, so its tally was never persisted."""
-        enrich_all(session_factory, settings, http=http)
+        enrich_all(settings, http=http, api=live_api.api)
 
-        run = session.scalars(select(FetchRun).where(FetchRun.source_key == IMDB_RUN_KEY)).one()
+        with live_api.session() as session:
+            run = session.scalars(select(FetchRun).where(FetchRun.source_key == IMDB_RUN_KEY)).one()
         assert run.phase is FetchPhase.ENRICH
         assert run.status is FetchStatus.OK
         assert "rows_read" in run.stats

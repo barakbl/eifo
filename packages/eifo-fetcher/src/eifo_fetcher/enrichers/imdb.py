@@ -12,22 +12,18 @@ Eifo is. The UI credits IMDb via ``GET /api/v1/meta``.
 from __future__ import annotations
 
 import csv
-import datetime as dt
 import gzip
 import io
 import logging
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
+from eifo_core import ingest as wire
 from eifo_core.enums import RatingProvider
-from eifo_core.models import ExternalRating, Title
-from eifo_core.scores import normalise
-from eifo_core.types import utcnow
 from eifo_fetcher.enrichers.base import ICONS_DIR, ProviderInfo
 from eifo_fetcher.http import HttpClient
+from eifo_fetcher.ingest import IngestClient
 from eifo_fetcher.progress import ProgressTicker
 
 #: Dataset rows between progress lines. The file has over a million of them
@@ -44,22 +40,37 @@ TITLE_URL_TEMPLATE = "https://www.imdb.com/title/{imdb_id}/"
 #: IMDb marks absent values with this rather than an empty column.
 _NULL = "\\N"
 
+#: Refusals kept for the run row. The same reasoning as FetchContext's cap: if
+#: the parse has gone wrong every row fails the same way, and the first handful
+#: says so as well as a million would.
+MAX_REPORTED_REJECTIONS = 20
+
 
 @dataclass(slots=True)
 class ImdbResult:
-    """Tally for one IMDb dataset pass."""
+    """Tally for one IMDb dataset pass.
+
+    ``written`` where this used to say created and updated. The pass no longer
+    writes the rows itself, and the far side answers how many scores it stored
+    rather than how many of them were new - which is the number that was ever
+    worth reporting, since a dataset refreshed daily is almost entirely updates.
+    """
 
     rows_read: int = 0
     matched: int = 0
-    created: int = 0
-    updated: int = 0
+    written: int = 0
+    #: What the catalog would not take, in its words. A score outside IMDb's
+    #: scale is a parse that has gone wrong, and it is invisible from here
+    #: unless the refusal is carried back.
+    rejected: list[str] = field(default_factory=list)
 
-    def as_stats(self) -> dict[str, int]:
+    def as_stats(self) -> dict[str, Any]:
         return {
             "rows_read": self.rows_read,
             "matched": self.matched,
-            "created": self.created,
-            "updated": self.updated,
+            "written": self.written,
+            "errors": self.rejected,
+            "error_count": len(self.rejected),
         }
 
 
@@ -123,9 +134,23 @@ class ImdbDatasetLoader:
     def __init__(self, http: HttpClient) -> None:
         self._http = http
 
-    def run(self, session: Session, *, url: str = DATASET_URL) -> ImdbResult:
-        """Fetch the dataset and update every title we hold an ``imdb_id`` for."""
-        wanted = _titles_by_imdb_id(session)
+    def run(
+        self,
+        api: IngestClient,
+        *,
+        url: str = DATASET_URL,
+        chunk_size: int = wire.IMDB_WRITE_CHUNK,
+    ) -> ImdbResult:
+        """Fetch the dataset and update every title the catalog holds an id for.
+
+        The join happens here rather than at the catalog, and that is the whole
+        shape of this pass: the dataset is over a million rows and the catalog
+        is tens of thousands of titles, so the small side crosses the wire and
+        the large one stays on the machine that has just downloaded it. Asking
+        the catalog about a million ids would be the same work done the
+        expensive way round.
+        """
+        wanted = api.imdb_wanted()
         result = ImdbResult()
         if not wanted:
             logger.info("no titles carry an imdb_id yet; nothing to join")
@@ -135,20 +160,22 @@ class ImdbDatasetLoader:
         data = self._http.get(url).content
         logger.info("downloaded %.1fMB; joining it against the catalog", len(data) / 1_000_000)
 
-        existing = _ratings_by_title_id(session)
-        now = utcnow()
         # The dataset runs to well over a million rows and none of them are
         # slow, so this reports on a far coarser scale than the loops that make
         # network calls - often enough to prove the pass is moving, rarely
         # enough that it does not drown the run it belongs to.
         ticker = ProgressTicker(every=PROGRESS_EVERY_ROWS, first=PROGRESS_FIRST_ROWS)
+        batch: list[dict[str, Any]] = []
 
         for rating in parse_ratings(data):
             result.rows_read += 1
             title_id = wanted.get(rating.imdb_id)
             if title_id is not None:
                 result.matched += 1
-                _apply(session, existing, title_id, rating, now, result)
+                batch.append(_to_wire(title_id, rating))
+                if len(batch) >= chunk_size:
+                    _send(api, batch, result)
+                    batch = []
 
             # Outside the match, so a stretch of rows this catalog holds nothing
             # for still counts as progress - which is most of the dataset.
@@ -159,66 +186,44 @@ class ImdbDatasetLoader:
                     f"{result.matched:,}",
                 )
 
-        session.commit()
+        if batch:
+            _send(api, batch, result)
+
         logger.info(
-            "imdb: %d rows read, %d matched, %d created, %d updated",
+            "imdb: %d rows read, %d matched, %d written%s",
             result.rows_read,
             result.matched,
-            result.created,
-            result.updated,
+            result.written,
+            f", {len(result.rejected)} refused" if result.rejected else "",
         )
         return result
 
 
-def _apply(
-    session: Session,
-    existing: dict[int, ExternalRating],
-    title_id: int,
-    rating: ImdbRating,
-    now: dt.datetime,
-    result: ImdbResult,
-) -> None:
-    normalized = normalise(RatingProvider.IMDB, rating.average)
-    url = TITLE_URL_TEMPLATE.format(imdb_id=rating.imdb_id)
-
-    stored = existing.get(title_id)
-    if stored is None:
-        session.add(
-            ExternalRating(
-                title_id=title_id,
-                provider=RatingProvider.IMDB,
-                score_raw=rating.average,
-                score_normalized=normalized,
-                vote_count=rating.votes,
-                url=url,
-                fetched_at=now,
-            )
-        )
-        result.created += 1
-        return
-
-    stored.score_raw = rating.average
-    stored.score_normalized = normalized
-    stored.vote_count = rating.votes
-    stored.url = url
-    stored.fetched_at = now
-    result.updated += 1
-
-
-def _titles_by_imdb_id(session: Session) -> dict[str, int]:
+def _to_wire(title_id: int, rating: ImdbRating) -> dict[str, Any]:
+    """One matched row, with the link the score is credited by."""
     return {
-        imdb_id: title_id
-        for title_id, imdb_id in session.execute(
-            select(Title.id, Title.imdb_id).where(Title.imdb_id.is_not(None))
-        ).all()
-        if imdb_id
+        "title_id": title_id,
+        "score_raw": rating.average,
+        "vote_count": rating.votes,
+        "url": TITLE_URL_TEMPLATE.format(imdb_id=rating.imdb_id),
     }
 
 
-def _ratings_by_title_id(session: Session) -> dict[int, ExternalRating]:
-    return {
-        rating.title_id: rating
-        for rating in session.scalars(
-            select(ExternalRating).where(ExternalRating.provider == RatingProvider.IMDB)
-        ).all()
-    }
+def _send(api: IngestClient, batch: list[dict[str, Any]], result: ImdbResult) -> None:
+    """Store one chunk, and keep whatever the catalog would not take.
+
+    Refusals are collected rather than raised. A score the far side rejects is
+    one bad row in a dataset of a million, and the remaining nine hundred
+    thousand are still worth writing - but it has to be *said*, or a parse that
+    has quietly gone wrong looks like a pass that simply matched less tonight.
+    """
+    answer = api.store_imdb_ratings(batch)
+    result.written += int(answer.get("ratings_written", 0))
+    for rejection in answer.get("rejected") or []:
+        message = str(rejection.get("reason") or rejection)
+        logger.warning("imdb: a score was refused: %s", message)
+        # Capped for the same reason FetchContext caps its own: these go into a
+        # run row, and a systematically broken parse would otherwise write a
+        # million of them into one JSON column.
+        if len(result.rejected) < MAX_REPORTED_REJECTIONS:
+            result.rejected.append(message)

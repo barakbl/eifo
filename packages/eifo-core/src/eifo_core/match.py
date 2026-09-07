@@ -385,6 +385,31 @@ class KnownTitles:
                 )
             )
 
+    def refresh(self, title: Title) -> None:
+        """Re-fold a title whose names or year have just changed.
+
+        Names are folded when a title enters the cache, which is right for a
+        catalog nothing is editing - and a sync edits it. ``adopt_tmdb_hit``
+        fills in a name a title was missing, and without this the rest of the
+        chunk would go on comparing against the gap: a later listing that would
+        have matched on the newly filled name would miss it and create a
+        second title for the same work.
+        """
+        cached = self._by_kind.get(title.type)
+        if cached is None:
+            return
+        fresh = _Candidate(
+            title_id=title.id,
+            year=title.year,
+            he=normalise(title.name_he) if title.name_he else None,
+            en=normalise(title.name_en) if title.name_en else None,
+        )
+        for index, candidate in enumerate(cached):
+            if candidate.title_id == title.id:
+                cached[index] = fresh
+                return
+        cached.append(fresh)
+
     def title(self, title_id: int) -> Title | None:
         """The full row for a candidate the comparison settled on."""
         return self._session.get(Title, title_id)
@@ -659,6 +684,8 @@ class TitleMatcher:
 
     def _adopt_tmdb_hit(self, title: Title, hit: TmdbTitle) -> None:
         adopt_tmdb_hit(self._session, title, hit)
+        # It may have just gained the name the next listing will be compared on.
+        self._known.refresh(title)
 
     def _search_tmdb(self, item: RawItem) -> TmdbTitle | None:
         """Best TMDB candidate for an item, or None if none is convincing.
@@ -731,6 +758,14 @@ class TitleMatcher:
         ratio = fuzz.ratio
         best_id: int | None = None
         best_score = 0.0
+        # The acceptable span, worked out once rather than as a subtraction and
+        # an abs() per candidate. That guard runs for every stored title of the
+        # kind, for every listing - 4.9 million calls to abs() for one chunk of
+        # 200, which measured as an eighth of the whole sweep.
+        bounded = year is not None
+        earliest = latest = 0
+        if year is not None:
+            earliest, latest = year - year_tolerance, year + year_tolerance
 
         for candidate in candidates:
             other = candidate.year
@@ -738,7 +773,7 @@ class TitleMatcher:
             # thousands of times per listing and the call was costing more
             # than the comparison it guards. Same rule - a missing year on
             # either side is not evidence of a mismatch.
-            if year is not None and other is not None and abs(year - other) > year_tolerance:
+            if bounded and other is not None and not earliest <= other <= latest:
                 continue
 
             if query_he is not None and candidate.he is not None:

@@ -1046,6 +1046,36 @@ class TestReadingTheCatalogOncePerChunk:
 
         assert folds_of() == 1
 
+    def test_a_name_filled_in_mid_chunk_is_visible_to_the_rest_of_it(
+        self, session: Session
+    ) -> None:
+        """Folding once is only safe if a changed name is re-folded.
+
+        A title held without a Hebrew name gains one the moment a TMDB hit is
+        adopted for it. A cache that kept the gap would go on comparing the
+        rest of the chunk against nothing, and the next listing under that
+        Hebrew name would create a second title for the same work.
+        """
+        stored = Title(type=TitleKind.SERIES, name_en="Fauda", year=2015)
+        session.add(stored)
+        session.flush()
+
+        known = KnownTitles(session)
+        tmdb = FakeTmdb([tmdb_title(tmdb_id=4321, name="פאודה", original_name="Fauda")])
+        # Matches on the English name, and adopting the hit fills in Hebrew.
+        TitleMatcher(session, tmdb=tmdb, known=known).match(
+            item(name="Fauda", name_alt=None, year=2015, source_ref="a")
+        )
+        assert stored.name_he == "פאודה"
+
+        # Now a listing that only has the Hebrew name it just gained.
+        result = TitleMatcher(session, known=known).match(
+            item(name="פאודה", name_alt=None, year=2015, source_ref="b")
+        )
+
+        assert result.method is not MatchMethod.CREATED
+        assert len(session.scalars(select(Title)).all()) == 1
+
     def test_a_kind_is_only_read_when_something_asks_for_it(self, session: Session) -> None:
         """Films are not loaded to match a series."""
         known = KnownTitles(session)

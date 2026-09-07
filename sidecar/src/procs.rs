@@ -340,7 +340,7 @@ impl Fetch {
 /// Start a fetcher phase, refusing if one is already going.
 ///
 /// Returns immediately with a handle to watch; it does not wait for the run.
-pub fn start_phase(config: &Config, phase: Phase) -> Result<Fetch, String> {
+pub fn start_phase(config: &Config, phase: Phase, token: Option<&str>) -> Result<Fetch, String> {
     if let FetcherState::Running { pid } = fetcher_state(config) {
         return Err(match pid {
             Some(pid) => format!("a fetcher is already running (pid {pid})"),
@@ -353,16 +353,45 @@ pub fn start_phase(config: &Config, phase: Phase) -> Result<Fetch, String> {
         return Err(format!("{} does not exist", fetcher.display()));
     }
 
+    // A remote catalog cannot be filled anonymously, and the checkout's own
+    // `.env` is not a fallback worth having here: any token in it was minted
+    // against the database on this disk, so a server elsewhere has never heard
+    // of it. Letting the run start would spend a catalog read on a 401 nobody
+    // would connect to a missing token twenty minutes later.
+    if config.is_remote() && token.is_none() {
+        return Err(format!(
+            "no API token, and {} is not this machine - paste one from the server \
+             (Settings in the web app, or `eifo-fetch token create`)",
+            config.base_url
+        ));
+    }
+
     // Same reasoning as the server's: a run this app started writes to nobody's
     // terminal. The fetcher keeps its own structured log beside this one; what
     // lands here is whatever escaped it, which is what a run that died on the
     // way in leaves behind.
     let (out, err) = appending_to(&config.console_log("eifo-fetch"));
-    let child = Command::new(&fetcher)
+    let mut command = Command::new(&fetcher);
+    command
         .args(phase.arguments())
         .current_dir(&config.app_dir)
         .stdout(out)
-        .stderr(err)
+        .stderr(err);
+
+    // Which catalog this run fills, and what it proves itself with.
+    //
+    // Passed rather than left to the checkout's own `.env`, because the menu is
+    // the thing that knows where this app is pointed - and the two can disagree.
+    // A checkout whose `.env` still names a token minted against the database on
+    // *this* disk would send it to a server that has never heard of it: a 401 a
+    // long way from anything that explains it. The environment wins over `.env`
+    // in the settings chain, so what the menu says is what the run does.
+    command.env("EIFO_API_BASE_URL", config.base_url.trim_end_matches('/'));
+    if let Some(token) = token {
+        command.env("EIFO_API_TOKEN", token);
+    }
+
+    let child = command
         .spawn()
         .map_err(|err| format!("could not run {}: {err}", phase.label()))?;
 
@@ -522,6 +551,90 @@ mod tests {
         unsafe { libc_flock(file.as_raw_fd(), 8) };
     }
 
+    /// A fetcher stub that records the environment it was handed.
+    ///
+    /// The real binary would go and read somebody's catalog; what is under test
+    /// is only which server this run was pointed at, which is settled before it
+    /// does anything at all.
+    fn stub_fetcher(config: &Config, writing_to: &Path) {
+        let bin = config.fetcher();
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\necho \"$EIFO_API_BASE_URL|$EIFO_API_TOKEN\" > \"{}\"\n",
+                writing_to.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn a_run_is_pointed_at_the_server_the_menu_is_watching() {
+        // The whole of "fetch here, fill there": the fetcher reads the services
+        // from this machine and posts what it found to whichever catalog this
+        // app is configured for - not to whatever the checkout's .env happens
+        // to name, which is a different setting that nothing keeps in step.
+        let dir = tempdir().join("pointed");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut config = config_in(&dir);
+        config.base_url = "https://eifo.example.com/".into();
+        let seen = dir.join("seen.txt");
+        stub_fetcher(&config, &seen);
+
+        let mut fetch = start_phase(&config, Phase::Sync, Some("eifo_pat_from_keychain")).unwrap();
+        for _ in 0..50 {
+            if fetch.poll().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let recorded = std::fs::read_to_string(&seen).unwrap_or_default();
+        // The trailing slash is trimmed: the fetcher joins paths onto this and
+        // a doubled slash is a 404 nobody would connect to a stray character.
+        assert_eq!(
+            recorded.trim(),
+            "https://eifo.example.com|eifo_pat_from_keychain"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_remote_catalog_will_not_be_filled_without_a_token() {
+        // The checkout's .env is not a fallback worth having: any token in it
+        // was minted against the database on this disk, so a server elsewhere
+        // has never heard of it. Better to say so than to spend a catalog read
+        // on a 401.
+        let dir = tempdir().join("untokened");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut config = config_in(&dir);
+        config.base_url = "https://eifo.example.com".into();
+        stub_fetcher(&config, &dir.join("unused.txt"));
+
+        let error = start_phase(&config, Phase::Sync, None).err().unwrap();
+
+        assert!(error.contains("no API token"), "{error}");
+        assert!(error.contains("eifo.example.com"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_local_catalog_still_runs_without_one() {
+        // It can mint its own against the database it can see, so demanding a
+        // token here would break the ordinary single-box install.
+        let dir = tempdir().join("local-no-token");
+        let _ = std::fs::remove_dir_all(&dir);
+        let config = config_in(&dir);
+        let seen = dir.join("seen.txt");
+        stub_fetcher(&config, &seen);
+
+        assert!(start_phase(&config, Phase::Sync, None).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_phase_refuses_to_start_beside_a_running_fetcher() {
         let dir = tempdir();
@@ -531,7 +644,7 @@ mod tests {
         use std::os::unix::io::AsRawFd;
         unsafe { libc_flock(file.as_raw_fd(), 2 | 4) };
 
-        let error = start_phase(&config, Phase::Sync).err().unwrap();
+        let error = start_phase(&config, Phase::Sync, None).err().unwrap();
         assert!(error.contains("already running"), "{error}");
 
         unsafe { libc_flock(file.as_raw_fd(), 8) };

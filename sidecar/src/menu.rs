@@ -397,6 +397,17 @@ pub fn token_line(snapshot: &Snapshot) -> String {
 
 /// What the server line says about a process this app may or may not own.
 pub fn server_line(snapshot: &Snapshot) -> String {
+    // A catalog on another machine has no local process to report on, so this
+    // line answers a different question: not "is the thing I started alive" but
+    // "is the thing I am pointed at answering, and which thing is it". The host
+    // is named because a companion that says only "remote" leaves somebody to
+    // go and open the config file to find out remote *where*.
+    if snapshot.server_remote {
+        return match snapshot.status {
+            Status::Down => format!("Web server: {} is not answering", snapshot.server_host),
+            _ => format!("Web server: {} (managed there)", snapshot.server_host),
+        };
+    }
     match (snapshot.server_owned, snapshot.status) {
         (true, Status::Down) => "Web server: started, not answering".into(),
         (true, _) => match snapshot.server_pid {
@@ -445,11 +456,20 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
 
     items.fetch_state.set_text(fetch_line(snapshot));
     items.progress.set_text(progress_label(&snapshot.run));
-    fill(
-        &items.progress,
-        &items.progress_rows,
-        &progress_lines(&snapshot.run),
-    );
+    // A remote catalog keeps its run log where the runs are written, which is
+    // not this disk. Said plainly rather than shown as "Nothing has run yet",
+    // which would be false about a server that has been running nightly for a
+    // month, and rather than shown from the local database, which would be a
+    // stale run wearing tonight's date.
+    let progress = if snapshot.server_remote {
+        vec![format!(
+            "The run log is on {} - open Manage to read it",
+            snapshot.server_host
+        )]
+    } else {
+        progress_lines(&snapshot.run)
+    };
+    fill(&items.progress, &items.progress_rows, &progress);
 
     let busy = snapshot.fetch_running || matches!(snapshot.update, UpdateView::Installing { .. });
     for item in [
@@ -478,12 +498,26 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
         .set_text(format!("Next run: {}", snapshot.next_run));
 
     items.server_state.set_text(server_line(snapshot));
-    items.start_server.set_enabled(!snapshot.server_owned);
-    items.stop_server.set_enabled(snapshot.server_owned);
+    // Nothing below acts on a catalog that is somewhere else. Greyed out rather
+    // than hidden: an item that disappears reads as a bug in the app, where one
+    // that is visibly unavailable reads as a fact about the deployment - and the
+    // line above it says which fact.
+    let manageable = !snapshot.server_remote;
+    items
+        .start_server
+        .set_enabled(manageable && !snapshot.server_owned);
+    items
+        .stop_server
+        .set_enabled(manageable && snapshot.server_owned);
+    items.restart_server.set_enabled(manageable);
+    items.start_on_open.set_enabled(manageable);
+    items.keep_up.set_enabled(manageable);
     items
         .start_on_open
-        .set_checked(snapshot.start_server_on_open);
-    items.keep_up.set_checked(snapshot.keep_server_up);
+        .set_checked(manageable && snapshot.start_server_on_open);
+    items
+        .keep_up
+        .set_checked(manageable && snapshot.keep_server_up);
 
     // A readout above the two actions, like the fetch and server lines above.
     // Without it, "Forget API token" was greyed out and gave no clue why - the
@@ -597,6 +631,8 @@ mod tests {
             run: RunView::default(),
             server_owned: true,
             server_pid: Some(1234),
+            server_remote: false,
+            server_host: "localhost".into(),
             keep_server_up: true,
             start_server_on_open: true,
             schedule_enabled: true,
@@ -733,6 +769,60 @@ mod tests {
         s.has_token = true;
 
         assert!(token_line(&s).contains("Settings"));
+    }
+
+    #[test]
+    fn a_remote_catalogs_run_log_says_where_it_actually_is() {
+        // Neither "Nothing has run yet" - false about a server that has run
+        // nightly for a month - nor the rows on this disk, which stopped being
+        // this catalog's the moment the app was pointed elsewhere.
+        let mut s = snapshot();
+        s.server_remote = true;
+        s.server_host = "151-145-94-93.nip.io".into();
+        s.run = RunView::default();
+
+        // The local renderer would say the wrong thing here, which is exactly
+        // why update() does not reach for it when the catalog is remote.
+        assert_eq!(progress_lines(&s.run), ["Nothing has run yet"]);
+    }
+
+    #[test]
+    fn a_remote_catalog_names_the_host_rather_than_a_local_process() {
+        // There is no pid to report and no process here to report on, so this
+        // line answers the question that does apply: which server, and is it
+        // answering.
+        let mut s = snapshot();
+        s.server_remote = true;
+        s.server_host = "151-145-94-93.nip.io".into();
+        s.server_owned = false;
+
+        let line = server_line(&s);
+        assert!(line.contains("151-145-94-93.nip.io"), "{line}");
+        assert!(line.contains("managed there"), "{line}");
+        assert!(!line.contains("pid"), "no local process to name: {line}");
+    }
+
+    #[test]
+    fn a_remote_catalog_that_is_down_says_so_without_offering_a_restart() {
+        // "Not answering" about somebody else's machine is a fact, not a thing
+        // this app can act on - and the menu must not imply otherwise.
+        let mut s = snapshot();
+        s.server_remote = true;
+        s.server_host = "eifo.example.com".into();
+        s.status = Status::Down;
+
+        let line = server_line(&s);
+        assert!(line.contains("eifo.example.com"), "{line}");
+        assert!(line.contains("not answering"), "{line}");
+    }
+
+    #[test]
+    fn a_local_catalog_still_reports_the_process_it_owns() {
+        // The change for remote must not have cost the local readout, which is
+        // the one nearly every install sees.
+        let s = snapshot();
+
+        assert_eq!(server_line(&s), "Web server: running (pid 1234)");
     }
 
     #[test]

@@ -104,6 +104,12 @@ pub struct Snapshot {
     pub run: RunView,
     pub server_owned: bool,
     pub server_pid: Option<u32>,
+    /// Whether the catalog is on another machine. What decides that the four
+    /// server controls are readouts rather than buttons.
+    pub server_remote: bool,
+    /// The host the catalog answers on, so the menu can name it rather than
+    /// saying "remote" and leaving somebody to go and look it up.
+    pub server_host: String,
     pub keep_server_up: bool,
     pub start_server_on_open: bool,
     pub schedule_enabled: bool,
@@ -198,7 +204,10 @@ impl Worker {
         // Opening Eifo brings the server up by default: a companion whose whole
         // job is "is the catalog answering" is not much use sitting next to a
         // server it could have started.
-        if self.health.status == Status::Down && self.config.start_server_on_open {
+        if self.health.status == Status::Down
+            && self.config.start_server_on_open
+            && !self.config.is_remote()
+        {
             self.start_server();
         }
         self.publish();
@@ -246,6 +255,14 @@ impl Worker {
             Command::Refresh => self.poll(),
             Command::Run(phase) => self.start_phase(phase),
             Command::StopFetch => self.stop_fetch(),
+            // The three below are refused outright for a remote catalog rather
+            // than relying on the menu having greyed them out. The menu is a
+            // readout of a snapshot taken up to twenty seconds ago; a click that
+            // crosses a change of server would otherwise start a process here
+            // that nothing is watching and that holds a port for no reason.
+            Command::StartServer if self.config.is_remote() => self.refuse_remote(),
+            Command::StopServer if self.config.is_remote() => self.refuse_remote(),
+            Command::RestartServer if self.config.is_remote() => self.refuse_remote(),
             Command::StartServer => {
                 self.restarts_given_up = false;
                 self.restart_attempt = 0;
@@ -352,7 +369,15 @@ impl Worker {
     }
 
     /// Put the server back up if it has gone, unless told not to.
+    ///
+    /// Never for a remote catalog. "Down" there means somebody else's server is
+    /// not answering, or that the network between here and it is not working -
+    /// and the answer to either is not to start a second server on this machine,
+    /// which is the only thing this could actually do.
     fn supervise(&mut self) {
+        if self.config.is_remote() {
+            return;
+        }
         if self.health.status != Status::Down
             || !self.config.keep_server_up
             || self.restarts_given_up
@@ -376,6 +401,14 @@ impl Worker {
         self.start_server();
     }
 
+    /// Say why a server control did nothing, for a catalog that is not here.
+    fn refuse_remote(&mut self) {
+        self.last_result = Some(format!(
+            "{} runs somewhere else - start and stop it there",
+            self.config.base_url
+        ));
+    }
+
     fn start_server(&mut self) {
         match self.server.start(&self.config) {
             Ok(()) => {
@@ -395,7 +428,7 @@ impl Worker {
             return;
         }
         self.last_result = None;
-        match procs::start_phase(&self.config, phase) {
+        match procs::start_phase(&self.config, phase, self.token.as_deref()) {
             Ok(fetch) => self.fetch = Some(fetch),
             Err(err) => self.last_result = Some(err),
         }
@@ -625,7 +658,16 @@ impl Worker {
             },
         };
 
-        self.run = runs::read(&self.config);
+        // Not for a catalog on another machine. The rows live in the database
+        // the fetcher posts to, and the one on this disk stopped receiving them
+        // the moment this app was pointed elsewhere - so reading it would show
+        // whatever ran here last, dated and captioned as if it were tonight.
+        // Nothing is a worse readout than a confident wrong one.
+        self.run = if self.config.is_remote() {
+            RunView::default()
+        } else {
+            runs::read(&self.config)
+        };
         // A run of one source, or of a phase that touches no source, has no
         // queue of sources behind it. Saying "3 to go" about a `sync --source
         // kan` would be a queue this app invented.
@@ -660,6 +702,8 @@ impl Worker {
             run: self.run.clone(),
             server_owned: self.server.is_running(),
             server_pid: self.server.pid(),
+            server_remote: self.config.is_remote(),
+            server_host: self.config.host_port().0,
             keep_server_up: self.config.keep_server_up,
             start_server_on_open: self.config.start_server_on_open,
             schedule_enabled: self.config.schedule_enabled,

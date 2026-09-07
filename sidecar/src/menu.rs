@@ -456,20 +456,11 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
 
     items.fetch_state.set_text(fetch_line(snapshot));
     items.progress.set_text(progress_label(&snapshot.run));
-    // A remote catalog keeps its run log where the runs are written, which is
-    // not this disk. Said plainly rather than shown as "Nothing has run yet",
-    // which would be false about a server that has been running nightly for a
-    // month, and rather than shown from the local database, which would be a
-    // stale run wearing tonight's date.
-    let progress = if snapshot.server_remote {
-        vec![format!(
-            "The run log is on {} - open Manage to read it",
-            snapshot.server_host
-        )]
-    } else {
-        progress_lines(&snapshot.run)
-    };
-    fill(&items.progress, &items.progress_rows, &progress);
+    fill(
+        &items.progress,
+        &items.progress_rows,
+        &progress_lines(&snapshot.run),
+    );
 
     let busy = snapshot.fetch_running || matches!(snapshot.update, UpdateView::Installing { .. });
     for item in [
@@ -769,21 +760,6 @@ mod tests {
         s.has_token = true;
 
         assert!(token_line(&s).contains("Settings"));
-    }
-
-    #[test]
-    fn a_remote_catalogs_run_log_says_where_it_actually_is() {
-        // Neither "Nothing has run yet" - false about a server that has run
-        // nightly for a month - nor the rows on this disk, which stopped being
-        // this catalog's the moment the app was pointed elsewhere.
-        let mut s = snapshot();
-        s.server_remote = true;
-        s.server_host = "151-145-94-93.nip.io".into();
-        s.run = RunView::default();
-
-        // The local renderer would say the wrong thing here, which is exactly
-        // why update() does not reach for it when the catalog is remote.
-        assert_eq!(progress_lines(&s.run), ["Nothing has run yet"]);
     }
 
     #[test]

@@ -611,6 +611,12 @@ fn sources(db: &Connection, last_sync: &HashMap<String, LastSync>) -> Vec<Source
 /// because SQLite writes whatever it was handed.
 fn timestamp(value: &str) -> Option<DateTime<Utc>> {
     let value = value.trim();
+    // The API answers in RFC 3339, with an offset; SQLite holds a naive local
+    // string. Both are read here so the rest of this file does not care which
+    // side a row came from.
+    if let Ok(fixed) = DateTime::parse_from_rfc3339(value) {
+        return Some(fixed.with_timezone(&Utc));
+    }
     NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f")
         .or_else(|_| NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f"))
         .ok()
@@ -1221,5 +1227,377 @@ mod tests {
         ));
         std::fs::create_dir_all(&base).unwrap();
         base
+    }
+}
+
+// ---------------------------------------------------------------- remote
+//
+// The same run log, read over the wire, for a catalog that is not on this
+// disk. Only where the rows come from changes: `current_run` and
+// `still_to_come` below are pure, so the picture the menu renders is assembled
+// by exactly the code the local path uses and tested by exactly its tests.
+//
+// Two calls rather than one, on two cadences. The runs change every few seconds
+// while a fetch is going and are asked for on every poll; the list of services
+// changes when somebody adds a plugin, and is asked for rarely - see
+// `SOURCES_EVERY` in the worker. Polling both at the fetch cadence would be
+// forty requests a minute at somebody else's server for one line of a menu.
+
+/// How long to wait on the API. The same generosity `health` allows, for the
+/// same reason: a nightly run can hold the write lock for a moment.
+const REMOTE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Runs per request. The admin API caps a page at 100, which is several nights
+/// across every source - and `current_run` stops at the first ten-minute gap
+/// long before it runs out of them.
+const REMOTE_ROWS: usize = 100;
+
+#[derive(serde::Deserialize)]
+struct RunPage {
+    items: Vec<RemoteRun>,
+}
+
+#[derive(serde::Deserialize)]
+struct RemoteRun {
+    source_key: Option<String>,
+    phase: String,
+    status: String,
+    started_at: String,
+    finished_at: Option<String>,
+    #[serde(default)]
+    stats: serde_json::Value,
+}
+
+#[derive(serde::Deserialize)]
+struct RemoteSource {
+    key: String,
+    name: String,
+    active: bool,
+    /// The operator's switch, the config file and the plugin's own default,
+    /// already folded together by the side that can see all three.
+    effective_enabled: bool,
+    /// When this source was last known good - the API's own answer, computed
+    /// over the whole history rather than the page of runs read above.
+    last_sync_at: Option<String>,
+}
+
+/// Every service the far catalog tracks, or None if it could not be asked.
+pub fn fetch_sources(config: &Config, token: Option<&str>) -> Option<Vec<SourceOption>> {
+    let rows: Vec<RemoteSource> = get_json(config, token, "/api/v1/admin/sources")?;
+    Some(
+        rows.into_iter()
+            .map(|row| SourceOption {
+                // Both halves, as the local query has it: a retired source is
+                // not offered however its switch reads.
+                on: row.active && row.effective_enabled,
+                last_ok: row.last_sync_at.as_deref().and_then(timestamp),
+                key: row.key,
+                name: row.name,
+            })
+            .collect(),
+    )
+}
+
+/// The far catalog's run log, given the services it was last known to have.
+///
+/// Returns None when the API could not be reached or would not answer, so the
+/// caller can keep the picture it already had. An empty view would say "nothing
+/// has run yet" about a server that has run nightly for a month, which is the
+/// one thing this must never do.
+pub fn fetch_run_view(
+    config: &Config,
+    token: Option<&str>,
+    sources: &[SourceOption],
+) -> Option<RunView> {
+    let page: RunPage = get_json(
+        config,
+        token,
+        &format!("/api/v1/admin/runs?page_size={REMOTE_ROWS}"),
+    )?;
+
+    // Newest first, which is the order the local query asks for and the order
+    // `current_run` walks backwards from.
+    let rows: Vec<Row> = page
+        .items
+        .into_iter()
+        .filter_map(|run| {
+            Some(Row {
+                key: run.source_key,
+                phase: run.phase,
+                state: StepState::read(&run.status),
+                started_at: timestamp(&run.started_at)?,
+                finished_at: run.finished_at.as_deref().and_then(timestamp),
+                stats: run.stats,
+            })
+        })
+        .collect();
+
+    let names: HashMap<String, String> = sources
+        .iter()
+        .map(|source| (source.key.clone(), source.name.clone()))
+        .collect();
+    // Only `started_at` is wanted here - what orders the queue of services
+    // still to come. Each source's last *good* sync came from the API above,
+    // which computes it over every run rather than the page read here.
+    let last_sync = last_sync_from(&rows);
+
+    let steps = current_run(rows, &names);
+    let waiting = still_to_come(&steps, sources, &last_sync);
+    Some(RunView {
+        steps,
+        waiting,
+        sources: sources.to_vec(),
+    })
+}
+
+/// When each source was last taken, from the runs already in hand.
+fn last_sync_from(rows: &[Row]) -> HashMap<String, LastSync> {
+    let mut found: HashMap<String, LastSync> = HashMap::new();
+    for row in rows.iter().filter(|row| row.phase == "sync") {
+        let Some(key) = row.key.clone() else { continue };
+        let entry = found.entry(key).or_insert(LastSync {
+            started_at: row.started_at,
+            ok_at: None,
+        });
+        if row.started_at > entry.started_at {
+            entry.started_at = row.started_at;
+        }
+    }
+    found
+}
+
+/// One authenticated GET, parsed, or None with the reason left unsaid.
+///
+/// Unsaid because every caller's answer to a failure is the same - keep what
+/// was already on screen - and a menu that reported "could not read the run
+/// log" on a dropped packet would be noisier than the thing it is reporting on.
+/// The dot beside it already says whether the server is answering.
+fn get_json<T: serde::de::DeserializeOwned>(
+    config: &Config,
+    token: Option<&str>,
+    path: &str,
+) -> Option<T> {
+    let url = format!("{}{path}", config.base_url.trim_end_matches('/'));
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(REMOTE_TIMEOUT))
+        .build()
+        .new_agent();
+
+    let mut request = agent.get(&url);
+    if let Some(token) = token {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+    request.call().ok()?.body_mut().read_json::<T>().ok()
+}
+
+#[cfg(test)]
+mod remote_tests {
+    use super::*;
+
+    /// One page of runs, exactly as `GET /api/v1/admin/runs` answers it.
+    const RUNS: &str = r#"{
+      "items": [
+        {"id": 3, "source_key": null, "phase": "enrich", "status": "running",
+         "started_at": "2026-09-07T14:40:00Z", "finished_at": null,
+         "stats": {}, "has_log": false},
+        {"id": 2, "source_key": "mako", "phase": "sync", "status": "ok",
+         "started_at": "2026-09-07T14:35:00Z", "finished_at": "2026-09-07T14:38:00Z",
+         "stats": {"items_seen": 120, "titles_created": 4}, "has_log": true},
+        {"id": 1, "source_key": "kan", "phase": "sync", "status": "ok",
+         "started_at": "2026-09-07T14:30:00Z", "finished_at": "2026-09-07T14:34:00Z",
+         "stats": {"items_seen": 90}, "has_log": true}
+      ],
+      "page": 1, "page_size": 100, "total": 3
+    }"#;
+
+    const SOURCES: &str = r#"[
+      {"key": "kan", "name": "Kan Box", "kind": "free",
+       "website_url": "https://kan.org.il", "active": true, "enabled": null,
+       "effective_enabled": true, "last_sync_at": "2026-09-07T14:34:00Z",
+       "last_sync_status": "ok", "stale": false},
+      {"key": "mako", "name": "Mako VOD", "kind": "free",
+       "website_url": "https://mako.co.il", "active": true, "enabled": null,
+       "effective_enabled": true, "last_sync_at": "2026-09-07T14:38:00Z",
+       "last_sync_status": "ok", "stale": false},
+      {"key": "gone", "name": "Retired", "kind": "free",
+       "website_url": "https://gone.example", "active": false, "enabled": null,
+       "effective_enabled": true, "last_sync_at": null,
+       "last_sync_status": null, "stale": false},
+      {"key": "off", "name": "Switched Off", "kind": "free",
+       "website_url": "https://off.example", "active": true, "enabled": false,
+       "effective_enabled": false, "last_sync_at": null,
+       "last_sync_status": null, "stale": false}
+    ]"#;
+
+    fn sources() -> Vec<SourceOption> {
+        let rows: Vec<RemoteSource> = serde_json::from_str(SOURCES).expect("sources parse");
+        rows.into_iter()
+            .map(|row| SourceOption {
+                on: row.active && row.effective_enabled,
+                last_ok: row.last_sync_at.as_deref().and_then(timestamp),
+                key: row.key,
+                name: row.name,
+            })
+            .collect()
+    }
+
+    fn view() -> RunView {
+        let page: RunPage = serde_json::from_str(RUNS).expect("runs parse");
+        let sources = sources();
+        let rows: Vec<Row> = page
+            .items
+            .into_iter()
+            .filter_map(|run| {
+                Some(Row {
+                    key: run.source_key,
+                    phase: run.phase,
+                    state: StepState::read(&run.status),
+                    started_at: timestamp(&run.started_at)?,
+                    finished_at: run.finished_at.as_deref().and_then(timestamp),
+                    stats: run.stats,
+                })
+            })
+            .collect();
+        let names = sources
+            .iter()
+            .map(|s| (s.key.clone(), s.name.clone()))
+            .collect();
+        let last_sync = last_sync_from(&rows);
+        let steps = current_run(rows, &names);
+        let waiting = still_to_come(&steps, &sources, &last_sync);
+        RunView {
+            steps,
+            waiting,
+            sources,
+        }
+    }
+
+    #[test]
+    fn an_api_timestamp_reads_as_readily_as_a_sqlite_one() {
+        // The two sides write them differently and the rest of this file must
+        // not have to care which it is holding.
+        let api = timestamp("2026-09-07T14:34:00Z").expect("rfc 3339");
+        let sqlite = timestamp("2026-09-07 14:34:00").expect("sqlite");
+
+        assert_eq!(api, sqlite);
+        assert!(timestamp("2026-09-07T14:34:00.372000+00:00").is_some());
+    }
+
+    #[test]
+    fn a_page_of_runs_becomes_the_run_the_menu_renders() {
+        let view = view();
+
+        // Oldest first, the way the run happened and the way it is read.
+        let names: Vec<&str> = view.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Kan Box", "Mako VOD", "Ratings and metadata"]);
+    }
+
+    #[test]
+    fn a_source_key_is_resolved_to_the_name_a_person_knows_it_by() {
+        // The runs carry keys; the names live on the sources call. A menu row
+        // reading "mako" rather than "Mako VOD" is the whole reason both are
+        // fetched.
+        assert!(view().steps.iter().any(|s| s.name == "Mako VOD"));
+    }
+
+    #[test]
+    fn the_run_still_going_is_the_one_reported_as_current() {
+        let view = view();
+
+        let current = view.current().expect("something is running");
+        assert_eq!(current.name, "Ratings and metadata");
+        // No fraction: the step running is the enrich, and "2 of 4 services"
+        // said about it would be a queue that has nothing to do with it.
+        assert_eq!(view.sync_position(), None);
+    }
+
+    #[test]
+    fn what_a_step_found_survives_the_wire() {
+        // `stats` is free-form JSON on both sides, and it is what every count
+        // in the menu is read out of.
+        let view = view();
+
+        let mako = view
+            .steps
+            .iter()
+            .find(|s| s.name == "Mako VOD")
+            .expect("mako ran");
+        assert!(mako.found().contains("120"), "{}", mako.found());
+    }
+
+    #[test]
+    fn a_retired_or_switched_off_service_is_not_offered() {
+        // Both halves of the local query's answer: `active` and the switch. A
+        // menu item that quietly does nothing is worse than one that is absent.
+        let sources = sources();
+        let offered: Vec<&str> = sources
+            .iter()
+            .filter(|s| s.on)
+            .map(|s| s.key.as_str())
+            .collect();
+
+        assert_eq!(offered, ["kan", "mako"]);
+    }
+
+    #[test]
+    fn when_a_service_was_last_known_good_comes_from_the_api() {
+        // Computed there over every run, rather than here over the page just
+        // read - which would date a source no older than the last hundred rows.
+        let sources = sources();
+        let kan = sources.iter().find(|s| s.key == "kan").expect("kan");
+
+        assert_eq!(kan.last_ok, timestamp("2026-09-07T14:34:00Z"));
+    }
+
+    #[test]
+    fn a_service_this_run_has_not_reached_is_still_to_come() {
+        // Nothing here has synced "off" or "gone", and neither is offered, so
+        // the queue is empty - the two that are offered have both been taken.
+        assert!(view().waiting.is_empty());
+    }
+
+    #[test]
+    fn a_reply_that_is_not_what_was_asked_for_is_declined_rather_than_guessed() {
+        assert!(serde_json::from_str::<RunPage>("{\"items\": \"nope\"}").is_err());
+        assert!(serde_json::from_str::<Vec<RemoteSource>>("{}").is_err());
+    }
+}
+
+#[cfg(test)]
+mod live {
+    use super::*;
+
+    /// The real thing, against a real catalog. Ignored by default because it
+    /// needs a server and a credential; the fixtures above pin the shape, and
+    /// this pins that the shape is still what the API actually sends.
+    ///
+    ///   EIFO_TEST_BASE_URL=https://… EIFO_TEST_TOKEN=eifo_pat_… \
+    ///     cargo test live -- --ignored --nocapture
+    #[test]
+    #[ignore = "needs a reachable catalog and an administrator's token"]
+    fn a_real_catalog_answers_in_the_shape_this_reads() {
+        let Ok(base_url) = std::env::var("EIFO_TEST_BASE_URL") else {
+            panic!("set EIFO_TEST_BASE_URL");
+        };
+        let token = std::env::var("EIFO_TEST_TOKEN").ok();
+
+        let mut config = Config::new(std::path::PathBuf::from("/tmp"));
+        config.base_url = base_url;
+
+        let sources = fetch_sources(&config, token.as_deref()).expect("sources");
+        assert!(!sources.is_empty(), "a catalog with no sources at all");
+
+        let view = fetch_run_view(&config, token.as_deref(), &sources).expect("runs");
+        assert!(!view.steps.is_empty(), "a catalog that has never run");
+
+        println!(
+            "  {} services, {} offered; last run: {}",
+            sources.len(),
+            sources.iter().filter(|s| s.on).count(),
+            view.outcome().unwrap_or_else(|| "none".into())
+        );
+        for line in crate::menu::progress_lines(&view) {
+            println!("  {line}");
+        }
     }
 }

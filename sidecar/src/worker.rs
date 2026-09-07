@@ -37,6 +37,9 @@ const SETTLE: Duration = Duration::from_secs(6);
 /// Backing off rather than hammering: whatever is wrong at attempt four is not
 /// going to be fixed by attempt forty, and a restart loop hides the cause.
 const BACKOFF: [u64; 4] = [2, 10, 30, 120];
+/// How often to ask a remote catalog which services it tracks. Rarely: the
+/// answer changes when a plugin is installed, not while a run is going.
+const SOURCES_EVERY: Duration = Duration::from_secs(5 * 60);
 
 /// What the main thread can ask for.
 ///
@@ -149,6 +152,12 @@ struct Worker {
     /// The run log as of the last publish, so the menu shows the same picture
     /// the last reading gave rather than one query's worth of a different one.
     run: RunView,
+    /// The far catalog's services, kept between polls. The run log is asked for
+    /// every few seconds while a fetch is going; this changes when somebody
+    /// installs a plugin, so asking for it at the same rate would be forty
+    /// requests a minute at somebody else's server for one line of a menu.
+    remote_sources: Vec<runs::SourceOption>,
+    remote_sources_at: Option<Instant>,
     /// The API token, read from the Keychain at startup and whenever it
     /// changes. Held rather than fetched per poll: the Keychain is a system
     /// service, and this polls every three seconds while a fetch runs.
@@ -181,6 +190,8 @@ impl Worker {
             health: Health::unknown("starting up"),
             fetch: None,
             run: RunView::default(),
+            remote_sources: Vec::new(),
+            remote_sources_at: None,
             token: keychain::token(),
             fetching: false,
             seen_a_reading: false,
@@ -399,6 +410,25 @@ impl Worker {
         std::thread::sleep(Duration::from_secs(BACKOFF[self.restart_attempt]));
         self.restart_attempt += 1;
         self.start_server();
+    }
+
+    /// Ask the far catalog what services it tracks, occasionally.
+    ///
+    /// Kept until it answers: a list that empties on one failed request would
+    /// take "Sync one service" down with it, and the services a catalog tracks
+    /// do not change while a packet is being dropped.
+    fn refresh_remote_sources(&mut self) {
+        let due = match self.remote_sources_at {
+            None => true,
+            Some(at) => at.elapsed() >= SOURCES_EVERY,
+        };
+        if !due {
+            return;
+        }
+        if let Some(sources) = runs::fetch_sources(&self.config, self.token.as_deref()) {
+            self.remote_sources = sources;
+            self.remote_sources_at = Some(Instant::now());
+        }
     }
 
     /// Say why a server control did nothing, for a catalog that is not here.
@@ -658,16 +688,22 @@ impl Worker {
             },
         };
 
-        // Not for a catalog on another machine. The rows live in the database
-        // the fetcher posts to, and the one on this disk stopped receiving them
-        // the moment this app was pointed elsewhere - so reading it would show
-        // whatever ran here last, dated and captioned as if it were tonight.
-        // Nothing is a worse readout than a confident wrong one.
-        self.run = if self.config.is_remote() {
-            RunView::default()
+        // A remote catalog keeps its rows where the fetcher posts them, so they
+        // are asked for rather than read off this disk - the database here
+        // stopped being this catalog's the moment the app was pointed
+        // elsewhere. A reading that fails keeps the last good one: an empty
+        // view would say "nothing has run yet" about a server that has run
+        // nightly for a month, and a dropped packet is not news.
+        if self.config.is_remote() {
+            self.refresh_remote_sources();
+            if let Some(view) =
+                runs::fetch_run_view(&self.config, self.token.as_deref(), &self.remote_sources)
+            {
+                self.run = view;
+            }
         } else {
-            runs::read(&self.config)
-        };
+            self.run = runs::read(&self.config);
+        }
         // A run of one source, or of a phase that touches no source, has no
         // queue of sources behind it. Saying "3 to go" about a `sync --source
         // kan` would be a queue this app invented.

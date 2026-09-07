@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import func, literal, select, tuple_
 from sqlalchemy.orm import Session
 
@@ -68,6 +69,7 @@ from eifo_core.findings import Rating
 from eifo_core.models import FetchRun, SeretTitle, Title
 from eifo_core.providers import DeclaredProvider, register_declared_providers
 from eifo_core.seret import SeretEntry, index_status, wake_titles_newly_covered
+from eifo_core.settings import Settings
 from eifo_core.types import utcnow
 
 logger = logging.getLogger("eifo.api.ingest.enrich")
@@ -416,9 +418,23 @@ async def take_findings(
     enricher returned for it, and which of them failed. A title appears once
     however many enrichers looked at it, because "has this title been tried"
     is one fact and the queue is keyed on it.
+
+    Async only long enough to read the body, for the same reason as the sync
+    side: storing a chunk is a rating write, a patch, a rescore and a flush for
+    every title in it, and on the event loop that serves nothing else while it
+    runs. The rest of this router is plain ``def``, which FastAPI already hands
+    to a worker thread; this one was async for the body and took the CPU work
+    onto the loop with it.
     """
-    run = _running(session, run_id)
     payload = await _body(request)
+    return await run_in_threadpool(_store_findings, session, settings, run_id, payload)
+
+
+def _store_findings(
+    session: Session, settings: Settings, run_id: int, payload: list[Any]
+) -> EnrichChunkOut:
+    """The chunk itself. Runs in a worker thread; see :func:`take_findings`."""
+    run = _running(session, run_id)
 
     tally = _Tally.of(run)
     rejected: list[dict[str, Any]] = []

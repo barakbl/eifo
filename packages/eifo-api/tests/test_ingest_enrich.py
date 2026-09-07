@@ -15,6 +15,7 @@ aggregate that nothing downstream can tell apart from an honest one.
 from __future__ import annotations
 
 import datetime as dt
+import threading
 from base64 import b64encode
 from typing import Any
 
@@ -24,6 +25,7 @@ from helpers import MakeAdmin, SignIn
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from eifo_api.routers import enriching
 from eifo_api.security import CSRF_HEADER
 from eifo_core import ingest as wire
 from eifo_core.enums import (
@@ -673,3 +675,59 @@ class TestOpeningARun:
             other_id = other.id
 
         assert report(client, operator, other_id).status_code == 404
+
+
+class TestTheServerKeepsAnsweringWhileAChunkIsStored:
+    """The same defect the sync surface had, on the enrich side.
+
+    Storing a chunk is a rating write, a patch, a rescore and a flush for every
+    title in it. The rest of this router is plain ``def``, which FastAPI hands
+    to a worker thread; this endpoint was async so it could read the body, and
+    took all of that onto the event loop with it - where it serves nothing else
+    while it runs.
+    """
+
+    def test_another_request_is_served_while_a_chunk_is_still_storing(
+        self,
+        client: TestClient,
+        operator: str,
+        run: int,
+        title: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        storing = threading.Event()
+        release = threading.Event()
+        real = enriching.recompute
+
+        def blocking(*args: Any, **kwargs: Any) -> Any:
+            storing.set()
+            # Bounded, so a regression fails this test rather than hanging the
+            # whole suite.
+            release.wait(timeout=30)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(enriching, "recompute", blocking)
+
+        answers: list[Any] = []
+        chunk = threading.Thread(
+            target=lambda: answers.append(
+                report(client, operator, run, {"title_id": title, "findings": []})
+            )
+        )
+        probed: list[Any] = []
+        probe = threading.Thread(target=lambda: probed.append(client.get("/api/v1/meta")))
+
+        chunk.start()
+        try:
+            assert storing.wait(timeout=10), "the chunk never reached the store"
+            probe.start()
+            probe.join(timeout=10)
+            served = not probe.is_alive()
+        finally:
+            release.set()
+            probe.join(timeout=15)
+            chunk.join(timeout=15)
+
+        assert served, "the event loop was blocked: nothing was served while a chunk stored"
+        assert probed[0].status_code == 200
+        assert answers[0].status_code == 200

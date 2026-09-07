@@ -339,6 +339,14 @@ class KnownTitles:
     the comparison meant every stored name was folded again for every listing
     - 300,000 calls to :func:`normalise` for a chunk of 50, three quarters of
     all the time matching took. The strings compared are the same either way.
+
+    Four columns are read rather than whole rows. The comparison looks at a
+    year and two names and never at anything else, and hydrating 8,803 ORM
+    objects to read four fields off them costs 1.44s on the deployed server
+    against 0.13s for the columns alone - per chunk, so about a minute of a
+    sync spent building objects to ignore. The winner is fetched as a real
+    row afterwards, by id, which is one lookup and usually already in the
+    session.
     """
 
     def __init__(self, session: Session) -> None:
@@ -349,9 +357,17 @@ class KnownTitles:
         """Every title of one kind, folded ready to compare."""
         cached = self._by_kind.get(kind)
         if cached is None:
+            rows = self._session.execute(
+                select(Title.id, Title.year, Title.name_he, Title.name_en).where(Title.type == kind)
+            ).all()
             cached = [
-                _Candidate.of(title)
-                for title in self._session.scalars(select(Title).where(Title.type == kind))
+                _Candidate(
+                    title_id=title_id,
+                    year=year,
+                    he=normalise(name_he) if name_he else None,
+                    en=normalise(name_en) if name_en else None,
+                )
+                for title_id, year, name_he, name_en in rows
             ]
             self._by_kind[kind] = cached
         return cached
@@ -360,12 +376,23 @@ class KnownTitles:
         """Note a title that has just been created, so the next match sees it."""
         cached = self._by_kind.get(title.type)
         if cached is not None:
-            cached.append(_Candidate.of(title))
+            cached.append(
+                _Candidate(
+                    title_id=title.id,
+                    year=title.year,
+                    he=normalise(title.name_he) if title.name_he else None,
+                    en=normalise(title.name_en) if title.name_en else None,
+                )
+            )
+
+    def title(self, title_id: int) -> Title | None:
+        """The full row for a candidate the comparison settled on."""
+        return self._session.get(Title, title_id)
 
 
 @dataclass(slots=True)
 class _Candidate:
-    """A stored title with its names already folded for comparison.
+    """A stored title's year and folded names - what the comparison reads.
 
     ``he`` and ``en`` are ``None`` when the title carries no such name at all,
     which is the case the comparison skips. A name that is present but folds
@@ -373,19 +400,10 @@ class _Candidate:
     name we hold and the comparison should say what it says about it.
     """
 
-    title: Title
+    title_id: int
     year: int | None
     he: str | None
     en: str | None
-
-    @classmethod
-    def of(cls, title: Title) -> _Candidate:
-        return cls(
-            title=title,
-            year=title.year,
-            he=normalise(title.name_he) if title.name_he else None,
-            en=normalise(title.name_en) if title.name_en else None,
-        )
 
 
 class TitleMatcher:
@@ -711,7 +729,7 @@ class TitleMatcher:
 
         year = item.year
         ratio = fuzz.ratio
-        best: Title | None = None
+        best_id: int | None = None
         best_score = 0.0
 
         for candidate in candidates:
@@ -726,13 +744,15 @@ class TitleMatcher:
             if query_he is not None and candidate.he is not None:
                 score = ratio(query_he, candidate.he, score_cutoff=best_score)
                 if score > best_score:
-                    best, best_score = candidate.title, score
+                    best_id, best_score = candidate.title_id, score
             if query_en is not None and candidate.en is not None:
                 score = ratio(query_en, candidate.en, score_cutoff=best_score)
                 if score > best_score:
-                    best, best_score = candidate.title, score
+                    best_id, best_score = candidate.title_id, score
 
-        return best, best_score
+        if best_id is None:
+            return None, best_score
+        return self._known.title(best_id), best_score
 
     def _review_candidate(self, item: RawItem) -> tuple[Title | None, float]:
         """The closest title worth a human's attention, looking wider than matching.

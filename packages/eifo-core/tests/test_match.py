@@ -1022,7 +1022,7 @@ class TestReadingTheCatalogOncePerChunk:
         assert second.method is not MatchMethod.CREATED
 
     def test_a_stored_name_is_folded_once_however_many_listings_are_compared(
-        self, session: Session
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The cost that made a sync visible from the web app.
 
@@ -1031,22 +1031,20 @@ class TestReadingTheCatalogOncePerChunk:
         chunk of 50, three quarters of the time matching took, and all of it
         holding the GIL where the server was trying to answer requests.
 
-        Folding now happens when a title enters the cache, so it scales with
-        the catalog rather than with the catalog times the chunk.
+        Folding a stored name now happens once, when the title enters the
+        cache. Each listing still folds its own name, which is once per
+        listing and is the part that has to scale with the chunk.
         """
-        session.add(Title(type=TitleKind.SERIES, name_he="פאודה", name_en="Fauda", year=2015))
+        marker = "Zzz A Name No Listing Here Carries"
+        session.add(Title(type=TitleKind.SERIES, name_he="פאודה", name_en=marker, year=2015))
         session.flush()
 
         known = KnownTitles(session)
-        folded = _count_folds()
-        # Listings that all land on the stored title, so nothing new enters the
-        # cache and every fold counted would be a re-fold.
+        folds_of = _count_folds_of(marker, monkeypatch)
         for ref in range(20):
             TitleMatcher(session, known=known).match(item(source_ref=f"r{ref}"))
 
-        # Two names on the one stored title, folded as it entered the cache,
-        # and never again - whatever the listings do.
-        assert folded() == 2
+        assert folds_of() == 1
 
     def test_a_kind_is_only_read_when_something_asks_for_it(self, session: Session) -> None:
         """Films are not loaded to match a series."""
@@ -1067,7 +1065,8 @@ def _catalog_reads(session: Session, *, listings: int, shared: bool) -> int:
         nonlocal seen
         # The full-catalog read specifically, not every query naming the table.
         flat = " ".join(statement.split())
-        if flat.startswith("SELECT") and "FROM titles" in flat and "JOIN" not in flat:
+        # The whole-catalog sweep, not the by-id lookup of whatever won it.
+        if flat.startswith("SELECT") and "FROM titles" in flat and "titles.type =" in flat:
             seen += 1
 
     bind = session.get_bind()
@@ -1100,17 +1099,18 @@ def _reads_of(session: Session, kind: TitleKind) -> int:
         event.remove(bind, "before_cursor_execute", before)
 
 
-def _count_folds() -> Any:
-    """Counts normalise() calls against stored names from here on."""
+def _count_folds_of(name: str, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Counts normalise() calls for one particular name, for this test only."""
     import eifo_core.match as match_module
 
     seen = 0
-    real = match_module._Candidate.of
+    real = match_module.normalise
 
-    def counting(title: Any) -> Any:
+    def counting(value: str) -> str:
         nonlocal seen
-        seen += sum(1 for name in (title.name_he, title.name_en) if name)
-        return real(title)
+        if value == name:
+            seen += 1
+        return real(value)
 
-    match_module._Candidate.of = counting  # type: ignore[method-assign]
+    monkeypatch.setattr(match_module, "normalise", counting)
     return lambda: seen

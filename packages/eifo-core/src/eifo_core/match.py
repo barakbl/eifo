@@ -333,17 +333,26 @@ class KnownTitles:
     Kept current rather than invalidated: a matcher that creates a title adds
     it here, because a sync creates titles constantly and dropping the cache
     on each one would put us straight back to reading per listing.
+
+    Each name is normalised once, when the title first enters the cache. The
+    comparison needs normalised text on both sides, and computing it inside
+    the comparison meant every stored name was folded again for every listing
+    - 300,000 calls to :func:`normalise` for a chunk of 50, three quarters of
+    all the time matching took. The strings compared are the same either way.
     """
 
     def __init__(self, session: Session) -> None:
         self._session = session
-        self._by_kind: dict[TitleKind, list[Title]] = {}
+        self._by_kind: dict[TitleKind, list[_Candidate]] = {}
 
-    def of_kind(self, kind: TitleKind) -> list[Title]:
-        """Every title of one kind, from the cache after the first call."""
+    def of_kind(self, kind: TitleKind) -> list[_Candidate]:
+        """Every title of one kind, folded ready to compare."""
         cached = self._by_kind.get(kind)
         if cached is None:
-            cached = list(self._session.scalars(select(Title).where(Title.type == kind)))
+            cached = [
+                _Candidate.of(title)
+                for title in self._session.scalars(select(Title).where(Title.type == kind))
+            ]
             self._by_kind[kind] = cached
         return cached
 
@@ -351,7 +360,32 @@ class KnownTitles:
         """Note a title that has just been created, so the next match sees it."""
         cached = self._by_kind.get(title.type)
         if cached is not None:
-            cached.append(title)
+            cached.append(_Candidate.of(title))
+
+
+@dataclass(slots=True)
+class _Candidate:
+    """A stored title with its names already folded for comparison.
+
+    ``he`` and ``en`` are ``None`` when the title carries no such name at all,
+    which is the case the comparison skips. A name that is present but folds
+    away to nothing is an empty string rather than ``None``, because that is a
+    name we hold and the comparison should say what it says about it.
+    """
+
+    title: Title
+    year: int | None
+    he: str | None
+    en: str | None
+
+    @classmethod
+    def of(cls, title: Title) -> _Candidate:
+        return cls(
+            title=title,
+            year=title.year,
+            he=normalise(title.name_he) if title.name_he else None,
+            en=normalise(title.name_en) if title.name_en else None,
+        )
 
 
 class TitleMatcher:
@@ -668,18 +702,35 @@ class TitleMatcher:
         wanted = kind or item.kind
         candidates = self._known.of_kind(wanted)
 
+        # Folded once for the whole sweep rather than inside it. The stored
+        # side is folded once when it enters the cache; see :class:`_Candidate`.
+        query_he = normalise(hebrew) if hebrew else None
+        query_en = normalise(english) if english else None
+        if query_he is None and query_en is None:
+            return None, 0.0
+
+        year = item.year
+        ratio = fuzz.ratio
         best: Title | None = None
         best_score = 0.0
+
         for candidate in candidates:
-            if not years_match(item.year, candidate.year, tolerance=year_tolerance):
+            other = candidate.year
+            # Inlined rather than calling years_match: this runs tens of
+            # thousands of times per listing and the call was costing more
+            # than the comparison it guards. Same rule - a missing year on
+            # either side is not evidence of a mismatch.
+            if year is not None and other is not None and abs(year - other) > year_tolerance:
                 continue
-            pairs = ((hebrew, candidate.name_he), (english, candidate.name_en))
-            for left, right in pairs:
-                if not left or not right:
-                    continue
-                score = similarity(left, right)
+
+            if query_he is not None and candidate.he is not None:
+                score = ratio(query_he, candidate.he, score_cutoff=best_score)
                 if score > best_score:
-                    best, best_score = candidate, score
+                    best, best_score = candidate.title, score
+            if query_en is not None and candidate.en is not None:
+                score = ratio(query_en, candidate.en, score_cutoff=best_score)
+                if score > best_score:
+                    best, best_score = candidate.title, score
 
         return best, best_score
 

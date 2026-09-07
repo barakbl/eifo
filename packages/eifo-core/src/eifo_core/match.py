@@ -315,6 +315,45 @@ def fallback_name(item: RawItem) -> str:
     return item.name
 
 
+class KnownTitles:
+    """Every stored title of a kind, read once and kept current after that.
+
+    The fuzzy comparison has to look at the whole catalog of a kind, because
+    the question it answers - is anything here nearly this name - has no
+    narrower query. A sync matches listings one at a time, and each match was
+    reading the catalog again: a chunk of 200 listings read 39,000 rows two
+    hundred times, hydrating every one into an ORM object. That is what took
+    the Oracle box down on 2026-09-07, and it was slow everywhere else too.
+
+    Passing one of these to every matcher in a chunk makes it one read. The
+    cost is that a title created by something *other* than the matchers
+    sharing it would go unseen, so it is scoped to a single chunk and handed
+    in explicitly rather than cached somewhere longer-lived.
+
+    Kept current rather than invalidated: a matcher that creates a title adds
+    it here, because a sync creates titles constantly and dropping the cache
+    on each one would put us straight back to reading per listing.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+        self._by_kind: dict[TitleKind, list[Title]] = {}
+
+    def of_kind(self, kind: TitleKind) -> list[Title]:
+        """Every title of one kind, from the cache after the first call."""
+        cached = self._by_kind.get(kind)
+        if cached is None:
+            cached = list(self._session.scalars(select(Title).where(Title.type == kind)))
+            self._by_kind[kind] = cached
+        return cached
+
+    def add(self, title: Title) -> None:
+        """Note a title that has just been created, so the next match sees it."""
+        cached = self._by_kind.get(title.type)
+        if cached is not None:
+            cached.append(title)
+
+
 class TitleMatcher:
     """Resolves :class:`RawItem` values to :class:`Title` rows."""
 
@@ -324,10 +363,14 @@ class TitleMatcher:
         *,
         tmdb: TmdbSearch | None = None,
         stats: MatchStats | None = None,
+        known: KnownTitles | None = None,
     ) -> None:
         self._session = session
         self._tmdb = tmdb
         self.stats = stats or MatchStats()
+        # Its own by default, so a lone matcher behaves exactly as before. A
+        # caller matching many items in a row shares one across all of them.
+        self._known = known or KnownTitles(session)
 
     def match(self, item: RawItem) -> MatchResult:
         """Resolve one item, creating or parking it when nothing matches."""
@@ -623,7 +666,7 @@ class TitleMatcher:
         """
         hebrew, english = names_of(item)
         wanted = kind or item.kind
-        candidates = self._session.scalars(select(Title).where(Title.type == wanted)).all()
+        candidates = self._known.of_kind(wanted)
 
         best: Title | None = None
         best_score = 0.0
@@ -688,6 +731,7 @@ class TitleMatcher:
         )
         self._session.add(title)
         self._session.flush()
+        self._known.add(title)
         return title
 
     def _create_from_tmdb(self, item: RawItem, hit: TmdbTitle) -> Title:
@@ -721,6 +765,7 @@ class TitleMatcher:
         )
         self._session.add(title)
         self._session.flush()
+        self._known.add(title)
         return title
 
     def _park_for_review(

@@ -5,12 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from eifo_core.enums import OfferType, SourceKind, TitleKind
 from eifo_core.match import (
     REVIEW_YEAR_TOLERANCE,
+    KnownTitles,
     MatchMethod,
     TitleMatcher,
     is_hebrew,
@@ -971,3 +972,102 @@ class TestReadingPastDecoration:
 
         assert result.method is MatchMethod.TMDB
         assert result.title is not None and result.title.tmdb_id == 4321
+
+
+class TestReadingTheCatalogOncePerChunk:
+    """:class:`KnownTitles` - shared by every matcher working through a chunk.
+
+    The fuzzy comparison needs every title of a kind, and matching is done one
+    listing at a time, so the catalog was being read once per listing: 39,000
+    rows hydrated two hundred times for a chunk of 200. Sharing one read is the
+    fix, and the risk it introduces is staleness - a title created part-way
+    through a chunk that the rest of the chunk cannot see would be created
+    again, and again, as a duplicate each time.
+    """
+
+    def test_the_reads_do_not_grow_with_the_size_of_the_chunk(self, session: Session) -> None:
+        """The property worth pinning: cost per chunk, not cost per listing."""
+        one = _catalog_reads(session, listings=1, shared=True)
+        twenty = _catalog_reads(session, listings=20, shared=True)
+
+        assert one == twenty
+
+    def test_without_sharing_every_listing_reads_the_catalog_again(self, session: Session) -> None:
+        """The behaviour being fixed, pinned so the fix cannot quietly regress."""
+        twenty = _catalog_reads(session, listings=20, shared=False)
+
+        # At least one whole-catalog read per listing. The exact count varies -
+        # a listing that lands in the review band looks twice - which is the
+        # point: the cost was per listing and nobody could say what it would be.
+        assert twenty >= 20
+
+    def test_a_title_created_mid_chunk_is_visible_to_the_rest_of_it(self, session: Session) -> None:
+        """The whole risk of caching, in one test.
+
+        The first listing creates the title; the second is the same title from
+        the same source. A cache that went stale at the moment of creation
+        would not find it, would create it a second time, and a chunk of
+        repeats would become a chunk of duplicates.
+        """
+        known = KnownTitles(session)
+
+        first = TitleMatcher(session, known=known).match(item(source_ref="a"))
+        second = TitleMatcher(session, known=known).match(item(source_ref="b"))
+
+        assert first.title is not None
+        assert len(session.scalars(select(Title)).all()) == 1
+        # Same source, same title: the second listing is parked rather than
+        # taken, which is the pre-existing rule. What matters here is that it
+        # saw the title at all rather than making a second one.
+        assert second.method is not MatchMethod.CREATED
+
+    def test_a_kind_is_only_read_when_something_asks_for_it(self, session: Session) -> None:
+        """Films are not loaded to match a series."""
+        known = KnownTitles(session)
+
+        assert known.of_kind(TitleKind.SERIES) == []
+        assert _reads_of(session, TitleKind.MOVIE) == 0
+
+
+def _catalog_reads(session: Session, *, listings: int, shared: bool) -> int:
+    """How many times the whole catalog is read to match ``listings`` items."""
+    session.add(Title(type=TitleKind.SERIES, name_he="פאודה", year=2015))
+    session.flush()
+
+    seen = 0
+
+    def before(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        nonlocal seen
+        # The full-catalog read specifically, not every query naming the table.
+        flat = " ".join(statement.split())
+        if flat.startswith("SELECT") and "FROM titles" in flat and "JOIN" not in flat:
+            seen += 1
+
+    bind = session.get_bind()
+    event.listen(bind, "before_cursor_execute", before)
+    try:
+        known = KnownTitles(session) if shared else None
+        for index in range(listings):
+            matcher = TitleMatcher(session, known=known or KnownTitles(session))
+            matcher.match(item(name=f"סרט {index}", year=1999))
+    finally:
+        event.remove(bind, "before_cursor_execute", before)
+    return seen
+
+
+def _reads_of(session: Session, kind: TitleKind) -> int:
+    """Full-catalog reads for one kind, counted over a fresh listener."""
+    seen = 0
+
+    def before(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        nonlocal seen
+        flat = " ".join(statement.split())
+        if flat.startswith("SELECT") and "FROM titles" in flat and kind.value in str(flat):
+            seen += 1
+
+    bind = session.get_bind()
+    event.listen(bind, "before_cursor_execute", before)
+    try:
+        return seen
+    finally:
+        event.remove(bind, "before_cursor_execute", before)

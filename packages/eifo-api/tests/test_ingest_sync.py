@@ -14,6 +14,7 @@ has whatever turns up.
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 import pytest
@@ -22,6 +23,7 @@ from helpers import MakeAdmin, SignIn
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from eifo_api.routers import syncing
 from eifo_api.security import CSRF_HEADER
 from eifo_core import ingest as wire
 from eifo_core.enums import FetchPhase, FetchStatus, SourceKind, TitleKind
@@ -383,3 +385,64 @@ class TestFinishingARun:
         self._finish(client, operator, run)
 
         assert offer(client, operator, run, {"item": listing()}).status_code == 409
+
+
+class TestTheServerKeepsAnsweringWhileAChunkIsMatched:
+    """The difference between a slow endpoint and a stopped server.
+
+    Matching a chunk is seconds of unbroken CPU. Run on the event loop it
+    serves nothing else meanwhile: the healthcheck times out, the web app
+    hangs, and requests queue up holding database sessions until the pool is
+    exhausted. That is how the deployed server went dark on 2026-09-07 - it
+    was not down, it was matching.
+    """
+
+    def test_another_request_is_served_while_a_chunk_is_still_matching(
+        self,
+        client: TestClient,
+        operator: str,
+        run: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        matching = threading.Event()
+        release = threading.Event()
+        real = syncing.TitleMatcher
+
+        class Blocking(real):  # type: ignore[valid-type,misc]
+            """Holds the chunk open until the test says otherwise."""
+
+            def match(self, item: Any) -> Any:
+                matching.set()
+                # Bounded, so a regression fails this test rather than hanging
+                # the whole suite.
+                release.wait(timeout=30)
+                return super().match(item)
+
+        monkeypatch.setattr(syncing, "TitleMatcher", Blocking)
+
+        answers: list[Any] = []
+        chunk = threading.Thread(
+            target=lambda: answers.append(
+                offer(client, operator, run, {"item": listing(), "resolved": True})
+            )
+        )
+        probed: list[Any] = []
+        probe = threading.Thread(target=lambda: probed.append(client.get("/api/v1/meta")))
+
+        chunk.start()
+        try:
+            assert matching.wait(timeout=10), "the chunk never reached the matcher"
+            # The chunk is now parked inside the handler, waiting on us. If it
+            # were waiting on the event loop this could not be answered until
+            # we let go - and we are not going to.
+            probe.start()
+            probe.join(timeout=10)
+            served = not probe.is_alive()
+        finally:
+            release.set()
+            probe.join(timeout=15)
+            chunk.join(timeout=15)
+
+        assert served, "the event loop was blocked: nothing was served while a chunk matched"
+        assert probed[0].status_code == 200
+        assert answers[0].status_code == 200

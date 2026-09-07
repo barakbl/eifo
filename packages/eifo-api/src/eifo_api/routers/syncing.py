@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -65,7 +66,7 @@ from eifo_core.catalog import (
 from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.fts import ensure_search_triggers
 from eifo_core.items import RawItem, SourceInfo, TmdbTitle
-from eifo_core.match import MatchStats, TitleMatcher, TmdbUnavailableError
+from eifo_core.match import KnownTitles, MatchStats, TitleMatcher, TmdbUnavailableError
 from eifo_core.models import FetchRun, Source
 from eifo_core.people import apply_credits
 from eifo_core.types import utcnow
@@ -250,10 +251,27 @@ async def take_chunk(
 
     The body is a JSON array of listings, optionally paired with a TMDB hit the
     sender has already looked up - which is what the second pass sends back.
+
+    Async only long enough to read the body. Matching a chunk is seconds of
+    unbroken CPU, and on the event loop that is not a slow endpoint, it is a
+    stopped server: nothing else is served while it runs, so the healthcheck
+    times out, the web app hangs, and requests pile up holding sessions until
+    the connection pool is exhausted. That is exactly how the Oracle box went
+    dark on 2026-09-07. In a worker thread a heavy sync is merely a heavy sync.
+    """
+    payload = await _body(request)
+    return await run_in_threadpool(_match_chunk, session, run_id, payload)
+
+
+def _match_chunk(session: Session, run_id: int, payload: list[Any]) -> SyncChunkOut:
+    """The chunk itself: match, write, tally. Runs in a worker thread.
+
+    The session is used from a thread other than the one that made it, which is
+    safe because it is used by this thread alone and the SQLite pool is built
+    with ``check_same_thread=False``.
     """
     run = _running(session, run_id)
     source = _source_of(session, run)
-    payload = await _body(request)
 
     items: list[RawItem] = []
     hits: list[TmdbTitle | None] = []
@@ -284,10 +302,18 @@ async def take_chunk(
     stats_seen = MatchStats()
     unresolved: list[int] = []
     written: dict[Any, Any] = {}
+    # Read the catalog once for the chunk rather than once per listing. The
+    # fuzzy comparison needs every title of a kind, so a 200-listing chunk was
+    # reading 39,000 rows two hundred times - minutes of pure CPU on a small
+    # box, for a catalog that had not changed between listings.
+    known = KnownTitles(session)
 
     for index, item in enumerate(items):
         matcher = TitleMatcher(
-            session, tmdb=_Resolver(hits[index], asked=asked[index]), stats=stats_seen
+            session,
+            tmdb=_Resolver(hits[index], asked=asked[index]),
+            stats=stats_seen,
+            known=known,
         )
         try:
             match = matcher.match(item)

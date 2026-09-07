@@ -25,10 +25,23 @@ from seed import Seeded, seed_catalog
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_api.app import create_app
+from eifo_api.routers.catalog import forget_totals
 from eifo_core.enums import AuthProvider, FetchPhase, FetchStatus, SourceKind
 from eifo_core.migrate import upgrade
 from eifo_core.models import FetchRun, Source
 from eifo_core.settings import Settings
+
+
+@pytest.fixture(autouse=True)
+def _forget_totals() -> Iterator[None]:
+    """Page totals are remembered for a minute, in a module-level cache.
+
+    Every test gets its own database, so a total remembered by one would be
+    handed to the next as though it were about theirs.
+    """
+    forget_totals()
+    yield
+    forget_totals()
 
 
 @pytest.fixture

@@ -265,6 +265,20 @@ class Settings(BaseSettings):
     #: I 4, O 6), and is what the menu-bar companion expects by default too.
     serve_host: str = "127.0.0.1"
     serve_port: int = 3436
+    #: How many worker processes ``eifo-api`` starts.
+    #:
+    #: One by default, which is right for a checkout and for anywhere the
+    #: catalog is only being read. Raise it where a fetcher writes through the
+    #: API while people are using the web app: a chunk of a sync is seconds of
+    #: Python, and Python holds one interpreter lock per process, so a browser
+    #: request that needs the ORM waits behind it. Separate processes have
+    #: separate locks, and the request is simply served by another one.
+    #:
+    #: SQLite is fine with this - WAL takes concurrent readers and serialises
+    #: writers, and ``busy_timeout`` makes the loser wait rather than fail -
+    #: but each worker is a whole copy of the application in memory, so on a
+    #: small box two is a considered choice and eight is not.
+    serve_workers: int = 1
     stale_after_hours: int = 48
     #: Bring the schema to head as the API starts, so an upgrade is a
     #: restart rather than a restart plus a remembered command. Turn it off

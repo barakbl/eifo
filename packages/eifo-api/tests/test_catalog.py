@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from seed import NOW, Seeded
+from sqlalchemy import event
 from sqlalchemy.orm import Session, sessionmaker
 
+from eifo_api.routers import catalog as catalog_router
 from eifo_core.enums import (
     CreditRole,
     FetchPhase,
@@ -999,3 +1003,120 @@ class TestRelevance:
         body = client.get("/api/v1/titles", params={"available": "any"}).json()
 
         assert ids(body)[0] == catalog.foxtrot
+
+
+class TestRememberingTheTotal:
+    """Counting every match is about half the cost of a titles request.
+
+    38,812 rows for the default view on the deployed catalog, 153ms of the
+    ~315ms the request takes - for a number that is the same all day. It is
+    remembered for a minute, which is what these pin: cheap when the filters
+    repeat, never shared between filters that mean different things.
+    """
+
+    def test_the_count_is_not_run_again_for_the_same_filters(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        counted = _count_counts(session_factory)
+        for _ in range(5):
+            client.get("/api/v1/titles", params={"available": "any"})
+
+        assert counted() == 1
+
+    def test_different_filters_get_their_own_count(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """A total belongs to the filters that produced it, or the grid says
+        there are three pages of something there is one page of."""
+        counted = _count_counts(session_factory)
+        client.get("/api/v1/titles", params={"available": "any"})
+        client.get("/api/v1/titles", params={"available": "any", "type": "movie"})
+
+        assert counted() == 2
+
+    def test_paging_reuses_the_count_rather_than_redoing_it(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        """Page two matches the same rows as page one; only the slice differs."""
+        counted = _count_counts(session_factory)
+        client.get("/api/v1/titles", params={"available": "any", "page_size": 1})
+        client.get("/api/v1/titles", params={"available": "any", "page_size": 1, "page": 2})
+
+        assert counted() == 1
+
+    def test_the_totals_are_still_right(self, client: TestClient, catalog: Seeded) -> None:
+        """The cheap answer has to be the same answer."""
+        everything = client.get("/api/v1/titles", params={"available": "any"}).json()
+        films = client.get("/api/v1/titles", params={"available": "any", "type": "movie"}).json()
+
+        assert everything["total"] == 3
+        assert films["total"] == len(
+            [item for item in everything["items"] if item["type"] == "movie"]
+        )
+
+    def test_a_total_past_its_minute_is_counted_again(
+        self,
+        client: TestClient,
+        catalog: Seeded,
+        session_factory: sessionmaker[Session],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Remembered, but not for ever - otherwise a sync's new titles would
+        never show up in the page count."""
+        monkeypatch.setattr(catalog_router, "COUNT_TTL", dt.timedelta(seconds=-1))
+        counted = _count_counts(session_factory)
+        for _ in range(3):
+            client.get("/api/v1/titles", params={"available": "any"})
+
+        assert counted() == 3
+
+    def test_a_new_title_reaches_the_total_once_the_minute_is_up(
+        self, client: TestClient, catalog: Seeded, session_factory: sessionmaker[Session]
+    ) -> None:
+        before = client.get("/api/v1/titles", params={"available": "any"}).json()["total"]
+        with session_factory() as session:
+            title = Title(type=TitleKind.MOVIE, name_en="Something New", year=2026)
+            session.add(title)
+            session.flush()
+            # A title reaches the catalog by being offered somewhere; one with
+            # no availability at all is not in it and should not be counted.
+            session.add(
+                Availability(
+                    title_id=title.id,
+                    source_id=catalog.netflix,
+                    offer_type=OfferType.STREAM,
+                    first_seen=NOW,
+                    last_seen=NOW,
+                )
+            )
+            session.commit()
+
+        catalog_router.forget_totals()
+        after = client.get("/api/v1/titles", params={"available": "any"}).json()["total"]
+
+        assert after == before + 1
+
+    def test_what_is_remembered_cannot_grow_without_bound(
+        self, client: TestClient, catalog: Seeded, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A crawler trying every filter combination must not be able to fill
+        memory with page totals."""
+        monkeypatch.setattr(catalog_router, "COUNT_CACHE_SIZE", 4)
+        for year in range(1990, 2000):
+            client.get("/api/v1/titles", params={"available": "any", "year_min": year})
+
+        assert len(catalog_router._counts) <= 4
+
+
+def _count_counts(factory: sessionmaker[Session]) -> Any:
+    """Counts SELECT count(*) statements issued from here on."""
+    seen = 0
+
+    def before(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        nonlocal seen
+        if "count(*)" in statement.lower():
+            seen += 1
+
+    bind = factory.kw["bind"]
+    event.listen(bind, "before_cursor_execute", before)
+    return lambda: seen

@@ -29,6 +29,7 @@ from eifo_api.routers import (
 from eifo_api.static import mount_client, mount_images
 from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
 from eifo_core.fts import ensure_search_triggers, missing_triggers
+from eifo_core.match import FoldedTitles
 from eifo_core.migrate import ensure_current
 from eifo_core.settings import Settings, get_settings
 
@@ -106,6 +107,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
+    # The folded catalog the matcher compares against, kept between requests.
+    # Rebuilding it is most of what a sync chunk costs, and nothing about it
+    # belongs to one request; FoldedTitles checks the catalog has not moved
+    # before it hands the fold over.
+    app.state.folded_titles = FoldedTitles()
 
     install_error_handlers(app)
     install_log_filters()

@@ -66,7 +66,13 @@ from eifo_core.catalog import (
 from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.fts import ensure_search_triggers
 from eifo_core.items import RawItem, SourceInfo, TmdbTitle
-from eifo_core.match import KnownTitles, MatchStats, TitleMatcher, TmdbUnavailableError
+from eifo_core.match import (
+    FoldedTitles,
+    KnownTitles,
+    MatchStats,
+    TitleMatcher,
+    TmdbUnavailableError,
+)
 from eifo_core.models import FetchRun, Source
 from eifo_core.people import apply_credits
 from eifo_core.types import utcnow
@@ -260,10 +266,14 @@ async def take_chunk(
     dark on 2026-09-07. In a worker thread a heavy sync is merely a heavy sync.
     """
     payload = await _body(request)
-    return await run_in_threadpool(_match_chunk, session, run_id, payload)
+    return await run_in_threadpool(
+        _match_chunk, session, run_id, payload, request.app.state.folded_titles
+    )
 
 
-def _match_chunk(session: Session, run_id: int, payload: list[Any]) -> SyncChunkOut:
+def _match_chunk(
+    session: Session, run_id: int, payload: list[Any], folded: FoldedTitles
+) -> SyncChunkOut:
     """The chunk itself: match, write, tally. Runs in a worker thread.
 
     The session is used from a thread other than the one that made it, which is
@@ -302,11 +312,13 @@ def _match_chunk(session: Session, run_id: int, payload: list[Any]) -> SyncChunk
     stats_seen = MatchStats()
     unresolved: list[int] = []
     written: dict[Any, Any] = {}
-    # Read the catalog once for the chunk rather than once per listing. The
-    # fuzzy comparison needs every title of a kind, so a 200-listing chunk was
-    # reading 39,000 rows two hundred times - minutes of pure CPU on a small
-    # box, for a catalog that had not changed between listings.
-    known = KnownTitles(session)
+    # Read the catalog once, and keep it between chunks. The fuzzy comparison
+    # needs every title of a kind, so a 200-listing chunk was reading 39,000
+    # rows two hundred times - minutes of pure CPU on a small box, for a
+    # catalog that had not changed between listings. Rebuilding it once per
+    # chunk was still most of what a chunk cost, so the fold is held on the
+    # application and handed back whenever the titles table has not moved.
+    known = KnownTitles(session, shared=folded)
 
     for index, item in enumerate(items):
         matcher = TitleMatcher(

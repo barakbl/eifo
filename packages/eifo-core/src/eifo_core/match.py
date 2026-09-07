@@ -13,6 +13,7 @@ up as a changed ``matched_by`` histogram in a single ``fetch_runs`` row.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import re
 import unicodedata
@@ -23,13 +24,14 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from rapidfuzz import fuzz
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from eifo_core.enums import MatchDecision, TitleKind
 from eifo_core.items import RawItem, TmdbTitle, plausible_year
 from eifo_core.models import Availability, MatchReview, Source, Title, TmdbAlias
 from eifo_core.naming import is_hebrew, latin_script, split_by_script
+from eifo_core.types import utcnow
 
 
 class TmdbUnavailableError(Exception):
@@ -315,6 +317,97 @@ def fallback_name(item: RawItem) -> str:
     return item.name
 
 
+#: How long a shared fold survives before it is rebuilt regardless.
+#:
+#: The stamp below catches everything it can see, and the one thing it cannot
+#: is a writer whose timestamp predates our own last write but whose commit
+#: lands after it - a concurrent enrich renaming a title, most plausibly. That
+#: window is narrow and this closes it: a name can be stale for at most this
+#: long, whatever else happens.
+FOLD_MAX_AGE = dt.timedelta(seconds=30)
+
+
+@dataclass(slots=True)
+class _Stamp:
+    """What the titles table looked like when a fold was taken.
+
+    Three numbers, one cheap query - 5ms against 339ms to rebuild the fold on
+    the deployed catalog. ``count`` and ``newest`` catch anything inserted or
+    deleted; ``touched`` catches anything edited, because every write to a
+    title moves its ``updated_at``.
+    """
+
+    count: int
+    newest: int | None
+    touched: dt.datetime | None
+
+    @classmethod
+    def of(cls, session: Session) -> _Stamp:
+        count, newest, touched = session.execute(
+            select(func.count(Title.id), func.max(Title.id), func.max(Title.updated_at))
+        ).one()
+        return cls(count=count, newest=newest, touched=touched)
+
+    def saw(self, title: Title) -> None:
+        """Record a write we made ourselves, so it does not read as somebody else's.
+
+        A fold that already holds this title is still current, and without this
+        every chunk would invalidate its own cache the moment it created a
+        title or filled in a poster URL.
+        """
+        self.newest = title.id if self.newest is None else max(self.newest, title.id)
+        if title.updated_at is not None:
+            self.touched = (
+                title.updated_at if self.touched is None else max(self.touched, title.updated_at)
+            )
+
+
+class FoldedTitles:
+    """A folded catalog that outlives the request that built it.
+
+    Rebuilding it costs 339ms on the deployed server and a sync does it thirty
+    times, which is most of what a chunk spends. Nothing about the fold belongs
+    to one request, so it is kept and checked instead: :class:`_Stamp` says
+    whether the titles table has moved since, and moving is the only thing that
+    can make a fold wrong.
+
+    Held per process. Two workers keep two of these, which costs the memory
+    twice and is otherwise nobody's business.
+
+    Not locked. A sync offers its chunks one after another, so in practice one
+    request touches this at a time; if two ever did, the worst of it is a fold
+    built twice or an entry replaced twice, because every write here is a list
+    append or a slot assignment. Nothing reads a half-written candidate, and a
+    fold that loses a race is still a fold of the catalog it was stamped
+    against.
+    """
+
+    def __init__(self) -> None:
+        self.by_kind: dict[TitleKind, list[_Candidate]] = {}
+        self.stamp: _Stamp | None = None
+        self.taken_at: dt.datetime | None = None
+
+    def usable(self, session: Session, *, now: dt.datetime) -> bool:
+        """Whether what is held still describes the catalog."""
+        if self.stamp is None or self.taken_at is None:
+            return False
+        if now - self.taken_at > FOLD_MAX_AGE:
+            return False
+        return _Stamp.of(session) == self.stamp
+
+    def start(self, session: Session, *, now: dt.datetime) -> None:
+        """Begin a fresh fold, stamped as of now."""
+        self.by_kind = {}
+        self.stamp = _Stamp.of(session)
+        self.taken_at = now
+
+    def forget(self) -> None:
+        """Drop it. For tests, and for anything that would rather not guess."""
+        self.by_kind = {}
+        self.stamp = None
+        self.taken_at = None
+
+
 class KnownTitles:
     """Every stored title of a kind, read once and kept current after that.
 
@@ -349,9 +442,24 @@ class KnownTitles:
     session.
     """
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, shared: FoldedTitles | None = None) -> None:
         self._session = session
-        self._by_kind: dict[TitleKind, list[_Candidate]] = {}
+        # Its own fold by default, which is what a lone matcher and every test
+        # gets. A caller working through chunk after chunk hands in one that
+        # outlives the request; see :class:`FoldedTitles`.
+        held = shared or FoldedTitles()
+        if shared is None or not held.usable(session, now=utcnow()):
+            held.start(session, now=utcnow())
+        self._held = held
+
+    @property
+    def _by_kind(self) -> dict[TitleKind, list[_Candidate]]:
+        return self._held.by_kind
+
+    def _noticed(self, title: Title) -> None:
+        """Tell the stamp about a write we just made."""
+        if self._held.stamp is not None:
+            self._held.stamp.saw(title)
 
     def of_kind(self, kind: TitleKind) -> list[_Candidate]:
         """Every title of one kind, folded ready to compare."""
@@ -374,16 +482,12 @@ class KnownTitles:
 
     def add(self, title: Title) -> None:
         """Note a title that has just been created, so the next match sees it."""
+        if self._held.stamp is not None:
+            self._held.stamp.count += 1
+        self._noticed(title)
         cached = self._by_kind.get(title.type)
         if cached is not None:
-            cached.append(
-                _Candidate(
-                    title_id=title.id,
-                    year=title.year,
-                    he=normalise(title.name_he) if title.name_he else None,
-                    en=normalise(title.name_en) if title.name_en else None,
-                )
-            )
+            cached.append(_fold(title))
 
     def refresh(self, title: Title) -> None:
         """Re-fold a title whose names or year have just changed.
@@ -395,15 +499,11 @@ class KnownTitles:
         have matched on the newly filled name would miss it and create a
         second title for the same work.
         """
+        self._noticed(title)
         cached = self._by_kind.get(title.type)
         if cached is None:
             return
-        fresh = _Candidate(
-            title_id=title.id,
-            year=title.year,
-            he=normalise(title.name_he) if title.name_he else None,
-            en=normalise(title.name_en) if title.name_en else None,
-        )
+        fresh = _fold(title)
         for index, candidate in enumerate(cached):
             if candidate.title_id == title.id:
                 cached[index] = fresh
@@ -413,6 +513,16 @@ class KnownTitles:
     def title(self, title_id: int) -> Title | None:
         """The full row for a candidate the comparison settled on."""
         return self._session.get(Title, title_id)
+
+
+def _fold(title: Title) -> _Candidate:
+    """A title's year and folded names - the only three things compared."""
+    return _Candidate(
+        title_id=title.id,
+        year=title.year,
+        he=normalise(title.name_he) if title.name_he else None,
+        en=normalise(title.name_en) if title.name_en else None,
+    )
 
 
 @dataclass(slots=True)

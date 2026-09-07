@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any
 
 import pytest
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 from eifo_core.enums import OfferType, SourceKind, TitleKind
 from eifo_core.match import (
     REVIEW_YEAR_TOLERANCE,
+    FoldedTitles,
     KnownTitles,
     MatchMethod,
     TitleMatcher,
@@ -1143,4 +1145,121 @@ def _count_folds_of(name: str, monkeypatch: pytest.MonkeyPatch) -> Any:
         return real(value)
 
     monkeypatch.setattr(match_module, "normalise", counting)
+    return lambda: seen
+
+
+class TestAFoldThatOutlivesTheRequest:
+    """:class:`FoldedTitles` - the catalog folded once for many chunks.
+
+    Rebuilding it is 339ms on the deployed server and a sync did it thirty
+    times, which was most of what a chunk cost. Keeping it is only safe while
+    the titles table has not moved, so what matters here is not that it is
+    reused but that it stops being reused the moment anything changes.
+    """
+
+    def test_a_second_chunk_does_not_read_the_catalog_again(self, session: Session) -> None:
+        session.add(Title(type=TitleKind.SERIES, name_he="פאודה", year=2015))
+        session.commit()
+        shared = FoldedTitles()
+        KnownTitles(session, shared=shared).of_kind(TitleKind.SERIES)
+
+        reads = _catalog_sweeps(session)
+        for _ in range(5):
+            KnownTitles(session, shared=shared).of_kind(TitleKind.SERIES)
+
+        assert reads() == 0
+
+    def test_a_title_somebody_else_created_forces_a_rebuild(self, session: Session) -> None:
+        """The whole risk, and the reason the stamp exists.
+
+        A fold that missed a title would let the next listing for it create a
+        second one - the duplicate this cache exists to avoid.
+        """
+        session.add(Title(type=TitleKind.SERIES, name_he="פאודה", year=2015))
+        session.commit()
+        shared = FoldedTitles()
+        KnownTitles(session, shared=shared).of_kind(TitleKind.SERIES)
+
+        # Somebody else, not through this cache.
+        session.add(Title(type=TitleKind.SERIES, name_he="שטיסל", year=2013))
+        session.commit()
+
+        held = KnownTitles(session, shared=shared).of_kind(TitleKind.SERIES)
+
+        assert {c.he for c in held} == {normalise("פאודה"), normalise("שטיסל")}
+
+    def test_a_title_somebody_else_renamed_forces_a_rebuild(self, session: Session) -> None:
+        """Every write to a title moves its updated_at, which is what is watched."""
+        stored = Title(type=TitleKind.SERIES, name_he="פאודה", year=2015)
+        session.add(stored)
+        session.commit()
+        shared = FoldedTitles()
+        KnownTitles(session, shared=shared).of_kind(TitleKind.SERIES)
+
+        stored.name_he = "שטיסל"
+        session.commit()
+
+        held = KnownTitles(session, shared=shared).of_kind(TitleKind.SERIES)
+
+        assert {c.he for c in held} == {normalise("שטיסל")}
+
+    def test_our_own_new_title_does_not_throw_the_fold_away(self, session: Session) -> None:
+        """A sync creates titles constantly. If its own writes invalidated the
+        fold, it would be rebuilt every chunk and none of this would pay."""
+        session.add(Title(type=TitleKind.SERIES, name_he="פאודה", year=2015))
+        session.commit()
+        shared = FoldedTitles()
+        known = KnownTitles(session, shared=shared)
+        known.of_kind(TitleKind.SERIES)
+        TitleMatcher(session, known=known).match(item(name="תוכנית חדשה", year=2024))
+        session.commit()
+
+        reads = _catalog_sweeps(session)
+        KnownTitles(session, shared=shared).of_kind(TitleKind.SERIES)
+
+        assert reads() == 0
+
+    def test_a_fold_is_rebuilt_once_it_is_old_however_quiet_the_catalog(
+        self, session: Session, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The stamp cannot see a writer whose timestamp predates our own last
+        write but whose commit lands after it. Age closes that window."""
+        import eifo_core.match as match_module
+
+        session.add(Title(type=TitleKind.SERIES, name_he="פאודה", year=2015))
+        session.commit()
+        shared = FoldedTitles()
+        KnownTitles(session, shared=shared).of_kind(TitleKind.SERIES)
+
+        monkeypatch.setattr(match_module, "FOLD_MAX_AGE", dt.timedelta(seconds=-1))
+        reads = _catalog_sweeps(session)
+        KnownTitles(session, shared=shared).of_kind(TitleKind.SERIES)
+
+        assert reads() == 1
+
+    def test_without_sharing_nothing_is_kept(self, session: Session) -> None:
+        """The default is still a fold per matcher, which is what tests and a
+        one-off match get."""
+        session.add(Title(type=TitleKind.SERIES, name_he="פאודה", year=2015))
+        session.commit()
+
+        reads = _catalog_sweeps(session)
+        for _ in range(3):
+            KnownTitles(session).of_kind(TitleKind.SERIES)
+
+        assert reads() == 3
+
+
+def _catalog_sweeps(session: Session) -> Any:
+    """Counts whole-catalog reads of one kind, from here on."""
+    seen = 0
+
+    def before(_conn: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        nonlocal seen
+        flat = " ".join(statement.split())
+        if flat.startswith("SELECT") and "FROM titles" in flat and "titles.type =" in flat:
+            seen += 1
+
+    bind = session.get_bind()
+    event.listen(bind, "before_cursor_execute", before)
     return lambda: seen

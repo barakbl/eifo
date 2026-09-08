@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.3](https://github.com/barakbl/eifo/compare/v0.15.2...v0.15.3) (2026-09-08)
+
+
+### Bug Fixes
+
+* a service that rents and sells is one row, not two ([#115](https://github.com/barakbl/eifo/issues/115)) ([f4f139e](https://github.com/barakbl/eifo/commit/f4f139ec220bea3c5a5d0ec96ce7e89f320dbf6f))
+
 ## [0.15.2](https://github.com/barakbl/eifo/compare/v0.15.1...v0.15.2) (2026-09-08)
 
 

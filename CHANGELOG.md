@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/barakbl/eifo/compare/v0.15.0...v0.15.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* the header and the filter panels fit a phone ([#111](https://github.com/barakbl/eifo/issues/111)) ([77f2899](https://github.com/barakbl/eifo/commit/77f2899e7e0444560bb72f8ab1b64986b30a5d12))
+
 ## [0.15.0](https://github.com/barakbl/eifo/compare/v0.14.0...v0.15.0) (2026-09-08)
 
 

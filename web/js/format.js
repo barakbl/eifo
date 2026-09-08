@@ -217,6 +217,56 @@ export function offerState(offer) {
   return "available";
 }
 
+/* The order offers read in when a service has more than one: what you can
+ * watch for nothing first, then what a subscription covers, then what costs
+ * money - cheapest commitment first. Not the enum's order, which is the order
+ * they were written down in. */
+const OFFER_ORDER = ["free", "stream", "rent", "buy"];
+
+/**
+ * One row per service, not one per deal.
+ *
+ * Apple TV Store sells and rents almost everything, so a film listed there
+ * produced two rows with the same name, the same date and, since neither
+ * carries a price, nothing whatever to tell them apart - 15,576 titles of
+ * them. What a reader wants to know is that the film is on Apple TV and what
+ * it would cost; that is one row saying "Rent · Buy".
+ *
+ * Grouped by state as well as by service, so a service that still rents a
+ * title it no longer sells stays two rows. Merging those would put "Rent ·
+ * Buy" next to one badge and claim something the catalog does not know.
+ */
+export function offersByService(availability) {
+  const groups = new Map();
+  for (const offer of availability) {
+    const state = offerState(offer);
+    const key = `${offer.source_key}\u0000${state}`;
+    const group = groups.get(key);
+    if (group) {
+      group.offers.push(offer);
+      continue;
+    }
+    groups.set(key, { ...offer, state, offers: [offer] });
+  }
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      offers: [...group.offers].sort(
+        (a, b) => OFFER_ORDER.indexOf(a.offer_type) - OFFER_ORDER.indexOf(b.offer_type),
+      ),
+      // The freshest sighting of any of them: the row says when the service was
+      // last seen carrying this title, and one deal is enough for that.
+      last_seen: group.offers.reduce(
+        (latest, offer) => (offer.last_seen > latest ? offer.last_seen : latest),
+        group.offers[0].last_seen,
+      ),
+      // Whichever deal knows where it goes. They are the same page.
+      deep_link_url: group.offers.find((offer) => offer.deep_link_url)?.deep_link_url ?? null,
+    }))
+    .sort((a, b) => Number(b.is_current) - Number(a.is_current));
+}
+
 /**
  * What the catalog shows when nobody has asked for anything.
  *

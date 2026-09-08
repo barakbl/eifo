@@ -169,6 +169,25 @@ img {
   margin-inline-start: auto;
 }
 
+/* On a phone the row cannot hold all three: the wordmark and the actions have
+ * a width they need, `flex: 1` gives what is left to the search, and what was
+ * left was 102px of a 390px screen - a box wide enough for one letter. Wrapping
+ * puts the search on its own line, where it is the width of the screen and the
+ * thing it is for is possible. */
+@media (max-width: 40rem) {
+  .header__inner {
+    flex-wrap: wrap;
+    row-gap: var(--space-2);
+    padding-block-end: var(--space-2);
+  }
+
+  .search {
+    order: 3;
+    flex-basis: 100%;
+    max-inline-size: none;
+  }
+}
+
 .icon-button {
   display: inline-flex;
   align-items: center;
@@ -489,6 +508,37 @@ img {
   min-inline-size: 20rem;
   max-inline-size: min(26rem, 92vw);
 }
+
+/* The panel is as wide as its contents and starts at the start edge of the
+ * button that opened it. On a wide screen that is what you want. On a phone a
+ * button two thirds of the way across the filter bar opens a panel that starts
+ * two thirds of the way across and is capped at 92vw, so most of it - the
+ * genres, the year boxes, the apply button - is off the side of the screen and
+ * unreachable, because the page does not scroll sideways to reach it.
+ *
+ * Taking the positioning off the button and giving it to the row makes the
+ * panel span the row instead: full width on a phone, under the bar, with
+ * nothing outside the screen. `100%` in the offset above still means "below
+ * the thing I am positioned against", which is now the bar rather than the
+ * button, and reads better for it. */
+@media (max-width: 40rem) {
+  .filters__row {
+    position: relative;
+  }
+
+  .combo {
+    position: static;
+  }
+
+  .combo__panel,
+  .combo__panel--wide {
+    inset-inline: 0;
+    inline-size: auto;
+    min-inline-size: 0;
+    max-inline-size: none;
+  }
+}
+
 
 .morefilters__group + .morefilters__group {
   margin-block-start: var(--space-3);

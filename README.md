@@ -247,6 +247,14 @@ docker compose exec fetcher eifo-fetch all
 
 Open <http://localhost:3436>.
 
+One knob worth knowing about if people browse the catalog while a fetcher writes to it:
+`EIFO_SERVE_WORKERS` (default 1) is how many worker processes the API runs. One is right
+for a checkout and for a server that is only read. Raise it where a fetcher fills the
+catalog through the API while the web app is in use, since Python holds one interpreter
+lock per process. It needs the schema to be somebody else's job - the `migrate` service
+already does that here - so set `EIFO_AUTO_MIGRATE=false` alongside it, or the command
+refuses to start rather than let every worker race to apply the same migration.
+
 Nothing else to install: the image ships the headless Chromium that the Kan and Reshet 13
 sources drive, so they work in a container with no setup on the host. That browser is most
 of the image (roughly 1.7 GB with it, 0.4 GB without). If you leave `[sources.kan]` and
@@ -761,6 +769,18 @@ each found - the one it is on now, and the ones still to come, read from the
 `eifo-fetch sync --source KEY` for any single service, each listed with how old
 its catalog is, so a source that has just come back is a click rather than a
 full sweep. When a run ends, whoever started it, a notification says how it went.
+
+It works the same way against a catalog on another machine. Point it at one by
+setting `base_url` in `~/Library/Application Support/Eifo/config.json`, and it
+fetches here and writes there - the arrangement the section above describes. Two
+things change when it does. The web server stops being something it can start,
+stop or keep up, because that server is not on this machine and pretending
+otherwise only offers buttons that cannot work; the menu says who is hosting it
+instead. And the run log it draws Progress from comes from the API rather than
+from a database file it cannot see, so the same list appears for a catalog it
+has no disk access to. It needs an API token for that, the same one the fetcher
+uses - **Paste API token from clipboard**, from `eifo-fetch token create` on the
+server.
 
 See [`sidecar/README.md`](sidecar/README.md).
 

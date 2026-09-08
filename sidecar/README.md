@@ -231,6 +231,23 @@ started with a matching `--host localhost --port 3436` (`localhost`, not
 by setting `base_url` in `config.json`; the host and port the server binds are
 parsed back out of whatever you put there.
 
+Put a hostname that is not this machine there - `https://eifo.example.com` - and
+it stops trying to run the server at all. Start, Stop, Restart, **Start when
+Eifo opens** and **Restart if it stops** are all greyed out, and the status line names
+the host instead of reporting on a process: that server is somebody else's, the
+commands could only fail, and a red dot for "not answering" would be reporting a
+network, not a crash. What the menu still does is everything about fetching -
+the nightly chain, **Sync one service**, Progress - because the fetcher runs
+here whatever the catalog it fills.
+
+Progress needs the run log, and for a catalog on another machine that means the
+API rather than a database file this machine cannot open. It reads
+`/api/v1/admin/runs` and `/api/v1/admin/sources`, which need an administrator's
+API token - **Paste API token from clipboard**, from the web app's Settings or
+`eifo-fetch token create` on the server. Sources are re-read every five minutes
+rather than on every poll, and a failed poll keeps the last good list rather than
+replacing a month of history with "Nothing has run yet".
+
 > Why 3436? No RFC, no committee, no lovingly curated list of "great ports for
 > your app". Just a rotary phone and the word `EIFO`: E and F on the 3 (DEF),
 > I on the 4 (GHI), O on the 6 (MNO) — dial E-I-F-O, get 3-4-3-6. And if you

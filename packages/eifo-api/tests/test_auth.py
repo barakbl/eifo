@@ -11,7 +11,7 @@ import pytest
 import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from helpers import SignIn
+from helpers import SignIn, start_login
 from providers import (
     GOOGLE_CLIENT_ID,
     GOOGLE_SUBJECT,
@@ -29,14 +29,6 @@ from eifo_api.security import OAUTH_COOKIE, SESSION_COOKIE
 from eifo_core.enums import AuthProvider
 from eifo_core.models import User, UserSession
 from eifo_core.settings import Settings
-
-
-def start_login(client: TestClient, provider: str = "google") -> tuple[str, str]:
-    """Begin a login and return the provider URL and the state it minted."""
-    response = client.get(f"/api/v1/auth/login/{provider}", follow_redirects=False)
-    assert response.status_code == 302
-    location = response.headers["location"]
-    return location, parse_qs(urlparse(location).query)["state"][0]
 
 
 class TestLoginRedirect:

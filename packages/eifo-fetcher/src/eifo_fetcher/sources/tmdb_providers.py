@@ -7,8 +7,8 @@ and each :class:`RawItem` carries its own ``source_key``.
 
 Two consequences of using this dataset, both required by its licence and shape:
 the UI must credit JustWatch (the API serves that string from ``/meta``), and
-there are no deep links - the JustWatch export does not include them, so items
-link to the service's own site instead.
+there are no deep links - the JustWatch export does not include them, so the
+offers this plugin produces carry no URL and the UI shows no button for them.
 """
 
 from __future__ import annotations
@@ -28,14 +28,23 @@ from eifo_fetcher.sources.base import (
 )
 from eifo_fetcher.tmdb import MAX_PAGE, TmdbClient, TmdbTitle, image_url
 
-#: Where a viewer is sent for a specific title.
+#: There is deliberately no watch URL here.
 #:
-#: The JustWatch export behind this data carries no per-provider deep links, so
-#: a service's own homepage was used at first - a "Watch" button that did not
-#: take you to the thing you clicked. TMDB publishes a per-title watch page
-#: instead, which names every service carrying it in the region. The slug is
-#: optional: TMDB redirects the bare id to the canonical URL.
-WATCH_URL_TEMPLATE = "https://www.themoviedb.org/{media}/{tmdb_id}/watch?locale={region}"
+#: The response carries a per-title ``link``, but it is TMDB's own page, and a
+#: provider entry is ``{logo_path, provider_id, provider_name,
+#: display_priority}`` - no URL at all. So a "Watch" button for one of these
+#: offers cannot go where it says it goes.
+#:
+#: Two things were tried before this. The service's homepage: a button that
+#: took you to Netflix but not to the thing you clicked. Then TMDB's watch
+#: page, which at least names every service carrying it - but it is a detour
+#: through a third site to be told what the row you clicked already said.
+#:
+#: A button is a promise about where it goes. Where that promise cannot be
+#: kept, this offers no button: the row still names the service, the offer type
+#: and the price, which is what the page is actually for. Sources that are read
+#: directly - freetv, Disney+, mako, kan - do carry real links, and those
+#: still get their button.
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,7 +252,7 @@ class TmdbProvidersPlugin(SourcePlugin):
         """
         if not source.verified_offer_types:
             ctx.record_success()
-            yield self._item(source, kind, hit, OfferType.STREAM, provider_id, tmdb.region)
+            yield self._item(source, kind, hit, OfferType.STREAM, provider_id)
             return
 
         try:
@@ -261,7 +270,7 @@ class TmdbProvidersPlugin(SourcePlugin):
         ctx.record_success()
         for offer_type in source.verified_offer_types:
             if _carries(offered, offer_type, provider_id):
-                yield self._item(source, kind, hit, offer_type, provider_id, tmdb.region)
+                yield self._item(source, kind, hit, offer_type, provider_id)
 
     def _item(
         self,
@@ -270,7 +279,6 @@ class TmdbProvidersPlugin(SourcePlugin):
         hit: TmdbTitle,
         offer_type: OfferType,
         provider_id: int,
-        region: str,
     ) -> RawItem:
         return RawItem(
             source_key=source.key,
@@ -280,7 +288,7 @@ class TmdbProvidersPlugin(SourcePlugin):
             year=hit.year,
             tmdb_id=hit.tmdb_id,
             offer_type=offer_type,
-            deep_link_url=watch_url(kind, hit.tmdb_id, region),
+            deep_link_url=None,
             poster_url=image_url(hit.poster_path) if hit.poster_path else None,
             extra={"provider_id": provider_id},
         )
@@ -334,12 +342,6 @@ class TmdbProvidersPlugin(SourcePlugin):
         ctx.logger.info("%s %s: read %d titles", source.key, kind.value, len(seen))
         if truncated:
             ctx.logger.warning("%s %s: catalog may be truncated", source.key, kind.value)
-
-
-def watch_url(kind: TitleKind, tmdb_id: int, region: str) -> str:
-    """The page listing where this specific title can be watched."""
-    media = "movie" if kind is TitleKind.MOVIE else "tv"
-    return WATCH_URL_TEMPLATE.format(media=media, tmdb_id=tmdb_id, region=region)
 
 
 def _source_for(key: str) -> ProviderSource | None:

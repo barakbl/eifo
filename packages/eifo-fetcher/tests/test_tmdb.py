@@ -210,6 +210,33 @@ class TestProviderHarvester:
         assert items[0].poster_url == "https://image.tmdb.org/t/p/w500/p.jpg"
 
     @respx.mock
+    def test_it_offers_no_watch_link_at_all(self, http: HttpClient) -> None:
+        """JustWatch gives a provider a name, an id and a logo - never a URL.
+
+        A link was invented for a while: first the service's homepage, then
+        TMDB's own watch page. Both were a button that did not go where it
+        said. With no URL the row gets no button, which is the honest version
+        of not knowing.
+        """
+        respx.get(f"{BASE_URL}/watch/providers/movie").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"provider_id": 8, "provider_name": "Netflix"}]}
+            )
+        )
+        respx.get(f"{BASE_URL}/watch/providers/tv").mock(
+            return_value=httpx.Response(200, json={"results": []})
+        )
+        respx.get(f"{BASE_URL}/discover/movie").mock(
+            return_value=httpx.Response(
+                200, json={"total_pages": 1, "results": [movie_result(11, "Foxtrot")]}
+            )
+        )
+
+        items = list(TmdbProvidersPlugin().fetch(self._ctx(http, "netflix_il")))
+
+        assert [item.deep_link_url for item in items] == [None]
+
+    @respx.mock
     def test_matches_a_provider_whose_tmdb_name_differs_from_ours(self, http: HttpClient) -> None:
         """We call it Prime Video; TMDB calls it Amazon Prime Video."""
         respx.get(f"{BASE_URL}/watch/providers/movie").mock(

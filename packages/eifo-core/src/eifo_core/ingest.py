@@ -25,7 +25,9 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from eifo_core.enums import FetchPhase
+from eifo_core.enums import FetchPhase, OfferType, RatingProvider, TitleKind
+from eifo_core.findings import EnrichResult, Rating, TitleView
+from eifo_core.items import RawItem, TmdbTitle
 
 #: Bumped when a change would make an older fetcher's archive wrong rather than
 #: merely incomplete. The server refuses what it does not recognise instead of
@@ -62,10 +64,19 @@ POSTER_VARIANT_NAMES = frozenset(variant.name for variant in POSTER_VARIANTS)
 
 #: The phases a fetcher somewhere else could be running.
 #:
-#: Only these have to be swept by the clock. Every other phase still opens the
-#: database directly, so it can only be running on the machine that holds the
-#: lock - and the lock still proves what it always did.
-REMOTE_PHASES = frozenset({FetchPhase.IMAGES})
+#: All of them, now that sync and enrich write through the API too. It was one
+#: phase when only artwork did, and the distinction earned its keep then: every
+#: other phase opened the database directly, so it could only be running on the
+#: machine holding the lock, and the lock proved what it always had.
+#:
+#: Nothing proves that any more. A fetcher on a laptop can be halfway through a
+#: sync of this catalog while a command on the server holds a lock that means
+#: nothing to it, so every phase has to be swept by the clock rather than on
+#: sight. The set is kept - rather than the checks that read it being deleted -
+#: because it is the thing that would have to shrink again if a phase ever went
+#: back to writing locally, and an empty exception is easier to reason about
+#: than a rule that has been inlined into two callers.
+REMOTE_PHASES = frozenset(FetchPhase)
 
 #: How long a run may sit RUNNING before it is taken to be gone.
 #:
@@ -263,4 +274,238 @@ class ManifestError(ValueError):
     The message is written to be shown to whoever sent the archive: they are
     the only person who can fix it, and "invalid manifest" would leave them
     reading their own code to find out which part.
+    """
+
+
+# ------------------------------------------------------------------ listings
+#
+# A sync used to be one process reading a catalog and writing rows. It is two
+# now: a fetcher that reads, and an API that decides and writes. What crosses
+# between them is a listing, and these are the shapes it crosses in.
+#
+# A chunk is a request and a transaction. Small enough that a failed one is
+# retried alone and an interrupted run keeps what it had, large enough that the
+# per-request cost is nothing beside the reading.
+
+#: Listings per request. Matches the commit cadence the single-process pipeline
+#: used, so the write lock is held for the same span it always was.
+SYNC_CHUNK_SIZE = 200
+
+#: The most a server will take in one chunk, whatever the sender thinks.
+MAX_SYNC_CHUNK = 500
+
+#: Titles handed to one enrich batch. Smaller than a sync chunk because each
+#: one costs the fetcher a round of network calls before it can be reported.
+ENRICH_CHUNK_SIZE = 25
+MAX_ENRICH_CHUNK = 100
+
+#: Titles the queue will hand over in one answer, and the most it ever will.
+#:
+#: Its own cap rather than the chunk size, because it is the other direction and
+#: a different cost: a due title is seven small fields, and a thousand of them
+#: is a small response, while a batch of findings is a write.
+#:
+#: It has to be a single answer. A title stays due until something reports on
+#: it, so the queue does not move while it is being read - ask twice and the
+#: same head comes back. Paging it would hand out the first hundred titles five
+#: times and never reach the rest, which is exactly what a nightly run with the
+#: default batch of five hundred did.
+DUE_PAGE_SIZE = 100
+MAX_DUE_PAGE = 1000
+
+#: Rows of the Seret index read per request. The whole index is ~8,900 rows and
+#: the crawl needs all of them before it can say what is stale, so this is
+#: sized to fetch it in a handful of requests rather than to be gentle.
+SERET_READ_PAGE = 2000
+
+#: Crawled pages written per request. Small: each one cost a deliberately slow
+#: round trip to somebody else's site, and a batch that fails is that much of a
+#: patient crawl to do again.
+SERET_WRITE_CHUNK = 200
+MAX_SERET_WRITE_CHUNK = 1000
+
+#: Titles asked about per request by the IMDb bulk pass, and ratings sent back
+#: per request. Larger than anything else here because neither side does any
+#: network work per row - it is one join over a file already downloaded.
+IMDB_READ_PAGE = 2000
+IMDB_WRITE_CHUNK = 2000
+MAX_IMDB_WRITE_CHUNK = 5000
+
+
+def item_to_wire(item: RawItem) -> dict[str, Any]:
+    """One listing, as JSON the API can read back.
+
+    Explicit rather than ``dataclasses.asdict``: the wire format is a contract
+    and should change when somebody means it to, not when a field is renamed.
+    """
+    return {
+        "source_key": item.source_key,
+        "kind": item.kind.value,
+        "name": item.name,
+        "offer_type": item.offer_type.value,
+        "name_alt": item.name_alt,
+        "year": item.year,
+        "tmdb_id": item.tmdb_id,
+        "imdb_id": item.imdb_id,
+        "deep_link_url": item.deep_link_url,
+        "source_ref": item.source_ref,
+        "poster_url": item.poster_url,
+        "price_minor": item.price_minor,
+        "price_currency": item.price_currency,
+        "credits": [dict(entry) for entry in item.credits],
+        "origin_countries": item.origin_countries,
+        "extra": dict(item.extra),
+    }
+
+
+def item_from_wire(payload: Any) -> RawItem:
+    """A listing, or a refusal naming what is wrong with it.
+
+    Raises:
+        WireError: whenever the payload is not one. The caller reports it
+            against its own index in the chunk, so the sender is told which
+            listing rather than only that one of two hundred was bad.
+    """
+    if not isinstance(payload, dict):
+        raise WireError("a listing is not an object")
+    try:
+        return RawItem(
+            source_key=str(payload["source_key"]),
+            kind=TitleKind(payload["kind"]),
+            name=str(payload["name"]),
+            offer_type=OfferType(payload.get("offer_type", OfferType.STREAM.value)),
+            name_alt=_optional_str(payload.get("name_alt")),
+            year=_optional_int(payload.get("year")),
+            tmdb_id=_optional_int(payload.get("tmdb_id")),
+            imdb_id=_optional_str(payload.get("imdb_id")),
+            deep_link_url=_optional_str(payload.get("deep_link_url")),
+            source_ref=_optional_str(payload.get("source_ref")),
+            poster_url=_optional_str(payload.get("poster_url")),
+            price_minor=_optional_int(payload.get("price_minor")),
+            price_currency=_optional_str(payload.get("price_currency")),
+            credits=tuple(payload.get("credits") or ()),
+            origin_countries=_optional_str(payload.get("origin_countries")),
+            extra=payload.get("extra") or {},
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        # RawItem validates itself - a blank name, a price with no currency -
+        # and those refusals are as much part of the contract as the shape is.
+        raise WireError(f"not a usable listing: {exc}") from exc
+
+
+def tmdb_to_wire(hit: TmdbTitle) -> dict[str, Any]:
+    return {
+        "tmdb_id": hit.tmdb_id,
+        "kind": hit.kind.value,
+        "name": hit.name,
+        "original_name": hit.original_name,
+        "year": hit.year,
+        "overview": hit.overview,
+        "poster_path": hit.poster_path,
+    }
+
+
+def tmdb_from_wire(payload: Any) -> TmdbTitle:
+    if not isinstance(payload, dict):
+        raise WireError("a TMDB hit is not an object")
+    try:
+        return TmdbTitle(
+            tmdb_id=int(payload["tmdb_id"]),
+            kind=TitleKind(payload["kind"]),
+            name=str(payload["name"]),
+            original_name=_optional_str(payload.get("original_name")),
+            year=_optional_int(payload.get("year")),
+            overview=_optional_str(payload.get("overview")),
+            poster_path=_optional_str(payload.get("poster_path")),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WireError(f"not a usable TMDB hit: {exc}") from exc
+
+
+# ------------------------------------------------------------------ findings
+
+
+def view_to_wire(view: TitleView) -> dict[str, Any]:
+    return {
+        "id": view.id,
+        "kind": view.kind.value,
+        "name_he": view.name_he,
+        "name_en": view.name_en,
+        "year": view.year,
+        "tmdb_id": view.tmdb_id,
+        "imdb_id": view.imdb_id,
+    }
+
+
+def view_from_wire(payload: Any) -> TitleView:
+    if not isinstance(payload, dict):
+        raise WireError("a title is not an object")
+    try:
+        return TitleView(
+            id=int(payload["id"]),
+            kind=TitleKind(payload["kind"]),
+            name_he=_optional_str(payload.get("name_he")),
+            name_en=_optional_str(payload.get("name_en")),
+            year=_optional_int(payload.get("year")),
+            tmdb_id=_optional_int(payload.get("tmdb_id")),
+            imdb_id=_optional_str(payload.get("imdb_id")),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WireError(f"not a usable title: {exc}") from exc
+
+
+def finding_to_wire(result: EnrichResult) -> dict[str, Any]:
+    return {
+        "ratings": [
+            {
+                "provider": rating.provider.value,
+                "score_raw": rating.score_raw,
+                "vote_count": rating.vote_count,
+                "url": rating.url,
+            }
+            for rating in result.ratings
+        ],
+        "metadata_patch": dict(result.metadata_patch),
+    }
+
+
+def finding_from_wire(payload: Any) -> EnrichResult:
+    if not isinstance(payload, dict):
+        raise WireError("a finding is not an object")
+    try:
+        ratings = [
+            Rating(
+                provider=RatingProvider(entry["provider"]),
+                score_raw=float(entry["score_raw"]),
+                vote_count=_optional_int(entry.get("vote_count")),
+                url=_optional_str(entry.get("url")),
+            )
+            for entry in payload.get("ratings") or []
+        ]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WireError(f"not a usable rating: {exc}") from exc
+
+    patch = payload.get("metadata_patch") or {}
+    if not isinstance(patch, dict):
+        raise WireError("metadata_patch is not an object")
+    return EnrichResult(ratings=ratings, metadata_patch=patch)
+
+
+def _optional_str(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    # bool is an int in Python, and True would silently become 1.
+    if value is None or isinstance(value, bool):
+        return None
+    return int(value)
+
+
+class WireError(ValueError):
+    """Something arrived that this version will not act on.
+
+    Carries a message written for whoever sent it: they are the only person who
+    can fix it, and "invalid payload" would leave them reading their own code to
+    find out which field.
     """

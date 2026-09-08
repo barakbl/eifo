@@ -11,6 +11,8 @@ from __future__ import annotations
 from typing import Any
 
 from eifo_core.enums import CreditRole, RatingProvider, TitleKind
+from eifo_core.match import similarity, years_match
+from eifo_core.naming import is_hebrew, latin_script
 from eifo_fetcher.enrichers.base import (
     ICONS_DIR,
     Enricher,
@@ -19,7 +21,6 @@ from eifo_fetcher.enrichers.base import (
     Rating,
     TitleView,
 )
-from eifo_fetcher.match import is_hebrew, latin_script, similarity, years_match
 from eifo_fetcher.sources.base import FetchContext
 from eifo_fetcher.tmdb import (
     ENGLISH_LANGUAGE,

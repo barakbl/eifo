@@ -10,6 +10,7 @@ round trips.
 from __future__ import annotations
 
 import datetime as dt
+from collections import OrderedDict
 from enum import StrEnum
 from typing import Annotated, Any
 
@@ -60,6 +61,24 @@ router = APIRouter(tags=["catalog"])
 MAX_PAGE_SIZE = 100
 DEFAULT_PAGE_SIZE = 24
 
+#: How long a page total may be out of date.
+#:
+#: The grid needs a total to say how many pages there are, and getting it means
+#: counting every matching row - 38,812 of them for the default view, 153ms on
+#: the deployed server, about half the cost of the whole request. It is the
+#: same number all day: the catalog changes when a sync runs, and a sync is
+#: exactly when the server has least to spare.
+#:
+#: A minute stale costs a page count that is briefly off by a few while a sync
+#: is mid-flight, next to a grid whose contents are changing underneath it
+#: anyway. Recomputing it for every browser that asks costs half of every
+#: request, all day, for a number nobody watches change.
+COUNT_TTL = dt.timedelta(seconds=60)
+#: Enough for the filter combinations a session actually uses; past that the
+#: least recently used is dropped, so a crawler trying every combination cannot
+#: grow this without bound.
+COUNT_CACHE_SIZE = 256
+
 
 class AvailabilityFilter(StrEnum):
     """Which availability state a search is interested in."""
@@ -98,6 +117,33 @@ NATURAL_ORDER = {
     Sort.NAME: SortOrder.ASC,
     Sort.RECENTLY_ADDED: SortOrder.DESC,
 }
+
+
+_counts: OrderedDict[Any, tuple[dt.datetime, int]] = OrderedDict()
+
+
+def _total_matching(session: Session, filtered: Select[Any], key: Any) -> int:
+    """How many rows match, from the last minute's answer where there is one."""
+    now = dt.datetime.now(dt.UTC)
+    cached = _counts.get(key)
+    if cached is not None:
+        expires, total = cached
+        if expires > now:
+            _counts.move_to_end(key)
+            return total
+        del _counts[key]
+
+    total = session.scalar(select(func.count()).select_from(filtered.subquery())) or 0
+    _counts[key] = (now + COUNT_TTL, total)
+    while len(_counts) > COUNT_CACHE_SIZE:
+        _counts.popitem(last=False)
+    return total
+
+
+def forget_totals() -> None:
+    """Drop every remembered total. For tests, and for anything that has just
+    changed the catalog and wants the next answer to be the new one."""
+    _counts.clear()
 
 
 @router.get("/titles", response_model=Page[TitleCard], summary="Search and filter titles")
@@ -140,7 +186,13 @@ def list_titles(
         runtime_max=runtime_max,
     )
 
-    total = session.scalar(select(func.count()).select_from(filtered.subquery())) or 0
+    total = _total_matching(
+        session,
+        filtered,
+        # Everything that changes which rows match. Not the sort, the page or
+        # the page size: those change the order and the slice, never the count.
+        (q, sources, available, type, genres, year_min, year_max, score_min, runtime_max),
+    )
     ordered = (
         _apply_sort(filtered, sort or _default_sort(q), order, query=q)
         .limit(page_size)

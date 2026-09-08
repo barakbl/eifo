@@ -8,53 +8,38 @@ process exit code reports whether anything failed.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
-
 from eifo_core.enums import FetchPhase, FetchStatus
-from eifo_core.models import Title
 from eifo_core.settings import Settings
 from eifo_core.types import utcnow
 from eifo_fetcher import attempts
+from eifo_fetcher.credentials import api_client
 from eifo_fetcher.enrich import (
     EnrichResultTally,
     enrich_titles,
-    mislabelled_names,
-    recompute_all_aggregates,
 )
 from eifo_fetcher.enrichers import discover_enrichers
 from eifo_fetcher.enrichers.imdb import ImdbDatasetLoader
-from eifo_fetcher.enrichers.seret_index import (
-    IndexResult,
-    SeretIndexer,
-    SeretLookup,
-    wake_titles_newly_covered,
-)
+from eifo_fetcher.enrichers.seret_index import IndexResult, SeretIndexer
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.images import ImageFetcher, ImageResult
 from eifo_fetcher.ingest import IngestClient, IngestError
-from eifo_fetcher.pipeline import (
-    SyncResult,
-    clear_backfill_requests,
-    deactivate_missing_sources,
-    register_declared_sources,
-    sync_source,
-)
+from eifo_fetcher.pipeline import SyncResult, sync_source
 from eifo_fetcher.prefetch import FetchUnit, Prefetcher
-from eifo_fetcher.providers import declared_providers, register_declared_providers
+from eifo_fetcher.providers import (
+    refresh_declared_providers,
+)
 from eifo_fetcher.registry import (
     declared_sources,
     discover_plugins,
     enabled_sources,
     plugins_for,
-    source_overrides,
 )
-from eifo_fetcher.runs import capture_log, close_run, new_capture, open_run
+from eifo_fetcher.runs import capture_log, new_capture
 from eifo_fetcher.sources.base import FetchContext, SourcePlugin
 from eifo_fetcher.tmdb import IMAGE_HOST, TmdbClient
 
@@ -73,7 +58,52 @@ SERET_INDEX_RUN_KEY = "seret-index"
 #: The enricher that reads what the crawl writes.
 SERET_ENRICHER_KEY = "seret"
 
+#: Mislabelled names asked about in one repair, when nobody says how many.
+#:
+#: Its own number rather than the enrich batch size: this is a one-off fixing a
+#: backlog of a few thousand, not a nightly pass pacing itself over a catalog,
+#: and the endpoint that answers it caps at a thousand anyway.
+MISLABELLED_BATCH = 1000
+
 logger = logging.getLogger("eifo.fetch.runner")
+
+
+@contextmanager
+def phase_client(
+    settings: Settings, phase: FetchPhase, *, api: IngestClient | None = None
+) -> Iterator[IngestClient]:
+    """A client for one phase, with the housekeeping every phase wants done.
+
+    Three things, in this order and for three separate reasons:
+
+    * **The attempt is noted for the whole of it**, including the construction
+      of the client, because the commonest failure of all - no token, and none
+      mintable - happens before there is a client to fail with and would
+      otherwise be the one failure that left no trace anywhere.
+    * **The previous attempt is posted**, now that there is something to post it
+      to. Late, and deliberately: the fetcher that could not reach the server
+      had nowhere to put it at the time.
+    * **What the plugins declare is declared.** The thing that reads that table
+      is a title page being rendered, and a page is rendered between runs rather
+      than during one - so hanging it off the one phase that happens to write
+      ratings left an upgraded deployment crediting its scores by database key
+      until the next nightly had finished.
+
+    Wanted by every phase, so it is here rather than in the CLI: the daemon runs
+    the same phases without going through a command line.
+
+    Args:
+        api: a connection to borrow instead of opening one, left open on the
+            way out. For a caller that has already asked the API a question and
+            is now going to act on the answer - the daemon's backfill poll,
+            which is a cheap GET every thirty seconds and must not do any of
+            the housekeeping above until it finds there is work.
+    """
+    with attempts.attempted(settings, phase), ExitStack() as stack:
+        client = api if api is not None else stack.enter_context(api_client(settings))
+        _report_previous_attempt(settings, client)
+        refresh_declared_providers(client, settings)
+        yield client
 
 
 @dataclass(slots=True)
@@ -97,29 +127,35 @@ class SyncReport:
 
 
 def sync_all(
-    session_factory: sessionmaker[Session],
     settings: Settings,
     *,
     http: HttpClient,
+    api: IngestClient,
     only: list[str] | None = None,
     plugins: list[SourcePlugin] | None = None,
 ) -> SyncReport:
-    """Sync every enabled source, or just the ones named in ``only``."""
-    plugins = plugins if plugins is not None else discover_plugins()
-    # Read per run rather than held: the daemon is long-lived, and a source
-    # switched off at midnight should be off tonight without a restart.
-    with session_factory() as session:
-        overrides = source_overrides(session)
-    available = enabled_sources(plugins, settings, overrides=overrides)
+    """Sync every enabled source, or just the ones named in ``only``.
 
-    # Every plugin gets a row, switched on or not. Without this a source only
-    # existed once it had synced, so one that was off could not be seen - let
-    # alone switched on - from the operator's source list.
-    with session_factory() as session:
-        added = register_declared_sources(session, declared_sources(plugins), enabled=available)
-        session.commit()
-    if added:
-        logger.info("sources now known: %s", ", ".join(sorted(added)))
+    Takes no ``session_factory``: this phase opens no database. It asks the API
+    what is switched on, reads the catalogs, and ships the listings - which is
+    what lets it run on a machine the catalog is not on.
+    """
+    plugins = plugins if plugins is not None else discover_plugins()
+    declared = declared_sources(plugins)
+
+    # One exchange: every plugin gets a row whether or not it is switched on,
+    # and the answer carries the operator's overrides. Asked per run rather
+    # than held, because the daemon is long-lived and a source switched off at
+    # midnight should be off tonight without a restart.
+    #
+    # Retiring only on a full run: a sync of one source says nothing about the
+    # ones it was not asked to touch.
+    registry = api.register_sources(
+        declared,
+        enabled=enabled_sources(plugins, settings, overrides={}),
+        retire_missing=not only,
+    )
+    available = enabled_sources(plugins, settings, overrides=registry.get("overrides") or {})
 
     if only:
         unknown = sorted(set(only) - set(available))
@@ -162,17 +198,16 @@ def sync_all(
                 prefetcher.concurrency,
             )
             for unit in units:
-                with session_factory() as session:
-                    logger.info("syncing %s", unit.info.key)
-                    result = sync_source(
-                        session,
-                        unit.plugin,
-                        unit.info,
-                        unit.ctx,
-                        tmdb=tmdb,
-                        items=prefetcher.items(unit),
-                        capture=unit.capture,
-                    )
+                logger.info("syncing %s", unit.info.key)
+                result = sync_source(
+                    api,
+                    unit.plugin,
+                    unit.info,
+                    unit.ctx,
+                    tmdb=tmdb,
+                    items=prefetcher.items(unit),
+                    capture=unit.capture,
+                )
                 # Whatever is left of this source's stream is nobody's business
                 # now. Said out loud because a sync that stopped early leaves a
                 # reader parked on a queue, and every later source from the same
@@ -194,33 +229,26 @@ def sync_all(
     # it here rather than in the daemon means a hand-run `eifo-fetch sync`
     # answers the ask too, instead of leaving one queued behind work just done.
     if wanted:
-        with session_factory() as session:
-            clear_backfill_requests(session, wanted)
-            session.commit()
+        api.clear_backfills(wanted)
 
-    # Only prune when syncing everything: a targeted run says nothing about the
-    # sources it was not asked to touch.
-    if not only:
-        with session_factory() as session:
-            # Against what the plugins declare, not what is switched on. Off and
-            # gone are different claims, and this used to make them the same
-            # one: turning a source off badged it "no longer tracked" on the
-            # next full run, which is untrue of a plugin sitting right there,
-            # and the badge outlived being switched back on because only a sync
-            # clears it.
-            report.retired_sources = deactivate_missing_sources(session, declared_sources(plugins))
-            session.commit()
-        if report.retired_sources:
-            logger.info("retired sources (data kept): %s", ", ".join(report.retired_sources))
+    # Retiring happened in the registry exchange above, against what the
+    # plugins declare rather than what is switched on: off and gone are
+    # different claims, and conflating them badged a live plugin "no longer
+    # tracked" on the next full run.
+    report.retired_sources = list(registry.get("retired") or [])
+    if report.retired_sources:
+        logger.info("retired sources (data kept): %s", ", ".join(report.retired_sources))
+    for key in registry.get("added") or []:
+        logger.info("source now known: %s", key)
 
     return report
 
 
 def enrich_all(
-    session_factory: sessionmaker[Session],
     settings: Settings,
     *,
     http: HttpClient,
+    api: IngestClient,
     force: bool = False,
     limit: int | None = None,
     skip_imdb: bool = False,
@@ -230,6 +258,12 @@ def enrich_all(
 
     IMDb goes last because it depends on ``imdb_id`` values the TMDB enricher
     fills in, and it runs as one bulk join rather than per title.
+
+    Takes no ``session_factory``: like sync, this phase opens no database. What
+    is due, what a finding means and when a title next falls due are all
+    properties of the catalog, so they are asked for and reported rather than
+    decided here - which is what lets an enrich run on a machine the catalog is
+    not on.
 
     Args:
         skip: enricher keys to leave out of this run only, without touching the
@@ -245,77 +279,37 @@ def enrich_all(
     # Before the per-title pass, so pages read tonight are scored tonight
     # rather than waiting for tomorrow's run. Bounded by [seret] batch_size,
     # which is sized to disappear into a nightly run.
-    if _seret_is_on(session_factory, settings, skipped):
-        index_seret(session_factory, settings, http=http)
+    if _seret_is_on(api, settings, skipped):
+        index_seret(settings, http=http, api=api)
 
-    with session_factory() as session:
-        # Loaded here, where there is a session, and handed to the enricher:
-        # enrichers are pure readers and have no database access of their own.
-        # One query for the whole run rather than one per title per name.
-        lookup = SeretLookup.load(session)
-        available = discover_enrichers(settings, seret_lookup=lookup)
-        enrichers = [e for e in available if e.key not in skipped]
+    # Loaded once for the whole run and handed to the enricher: enrichers are
+    # pure readers with no catalog access of their own, and the index is
+    # thousands of rows against a batch of a few hundred titles.
+    lookup = api.seret_lookup()
+    available = discover_enrichers(settings, seret_lookup=lookup)
+    enrichers = [e for e in available if e.key not in skipped]
 
-        # From everything installed, not from tonight's selection: a provider
-        # skipped for this run still has scores in the catalog, and they still
-        # have to be credited on the page.
-        register_declared_providers(
-            session,
-            declared_providers([*available, ImdbDatasetLoader]),
-            images_dir=Path(settings.images_dir),
-        )
-        session.commit()
+    # What credits each score is declared by phase_client, on the way in to any
+    # phase - not here. It used to be here, on the reasoning that the enrich is
+    # what produces ratings; that reasoning stopped holding when the table began
+    # to be read by a title page rendered between runs rather than during one.
+    # Declaring in both places is one redundant request per enrich, which is
+    # exactly the sort of thing a log of every call makes obvious.
 
-        unknown = sorted(skipped - {e.key for e in available} - {IMDB_RUN_KEY, SERET_INDEX_RUN_KEY})
-        if unknown:
-            # Said out loud: a typo that silently skips nothing would look like
-            # the flag not working, on a run that takes hours.
-            logger.warning("nothing to skip called: %s", ", ".join(unknown))
+    unknown = sorted(skipped - {e.key for e in available} - {IMDB_RUN_KEY, SERET_INDEX_RUN_KEY})
+    if unknown:
+        # Said out loud: a typo that silently skips nothing would look like the
+        # flag not working, on a run that takes hours.
+        logger.warning("nothing to skip called: %s", ", ".join(unknown))
 
-        logger.info("enriching with: %s", ", ".join(e.key for e in enrichers) or "nothing")
-        logger.info("seret page index holds %d titles", len(lookup))
+    logger.info("enriching with: %s", ", ".join(e.key for e in enrichers) or "nothing")
+    logger.info("seret page index holds %d titles", len(lookup))
 
-        ctx = FetchContext(source_key="enrich", http=http, settings=settings)
-        tally = enrich_titles(session, enrichers, ctx, settings, force=force, limit=limit)
+    ctx = FetchContext(source_key="enrich", http=http, settings=settings)
+    tally = enrich_titles(api, enrichers, ctx, settings, force=force, limit=limit)
 
     if not skip_imdb:
-        # Its own row: the bulk pass downloads tens of megabytes and rewrites
-        # thousands of ratings, and used to run entirely after the enrich row
-        # had been written - so its tally was never persisted and a failure in
-        # it left nothing behind at all.
-        with session_factory() as session:
-            run = open_run(session, phase=FetchPhase.ENRICH, source_key=IMDB_RUN_KEY)
-            with capture_log() as captured:
-                try:
-                    imdb = ImdbDatasetLoader(http).run(session)
-                except Exception as exc:
-                    logger.exception("imdb dataset pass failed")
-                    session.rollback()
-                    failure: str | None = f"fatal: {type(exc).__name__}: {exc}"
-                else:
-                    failure = None
-                    tally.by_enricher["imdb"] = imdb.created + imdb.updated
-
-            if failure is not None:
-                close_run(
-                    session,
-                    run,
-                    status=FetchStatus.FAILED,
-                    stats={"errors": [failure]},
-                    log=captured.text(),
-                )
-            else:
-                close_run(
-                    session,
-                    run,
-                    status=FetchStatus.OK,
-                    stats=imdb.as_stats(),
-                    log=captured.text(),
-                )
-
-        # IMDb writes ratings directly, so aggregates need recomputing after it.
-        with session_factory() as session:
-            tally.aggregates_computed += recompute_all_aggregates(session, settings)
+        _imdb_pass(http, api, tally)
 
     logger.info(
         "enrich: %d titles, %d ratings, %d aggregates",
@@ -326,11 +320,61 @@ def enrich_all(
     return tally
 
 
-def _seret_is_on(
-    session_factory: sessionmaker[Session],
-    settings: Settings,
-    skipped: set[str],
-) -> bool:
+def _imdb_pass(http: HttpClient, api: IngestClient, tally: EnrichResultTally) -> None:
+    """The bulk join over IMDb's dataset, on its own row.
+
+    Its own row because the pass downloads tens of megabytes and rewrites
+    thousands of ratings, and used to run entirely after the enrich row had
+    been written - so its tally was never persisted and a failure in it left
+    nothing behind at all.
+
+    A failure here is recorded and swallowed. It is one provider among several
+    and it runs last; losing it should not throw away the ratings every other
+    provider has just supplied, nor turn a good enrich into a failed one.
+    """
+    started_at = utcnow()
+    try:
+        run_id = api.open_run(FetchPhase.ENRICH, started_at=started_at, source_key=IMDB_RUN_KEY)
+    except IngestError as exc:
+        logger.warning("could not open a run for the IMDb pass: %s", exc)
+        return
+
+    with capture_log() as captured:
+        try:
+            imdb = ImdbDatasetLoader(http).run(api)
+        except Exception as exc:
+            logger.exception("imdb dataset pass failed")
+            tally.errors.append(f"imdb: {type(exc).__name__}: {exc}")
+            _close_quietly(
+                api,
+                run_id,
+                status=FetchStatus.FAILED,
+                stats={"errors": [f"fatal: {type(exc).__name__}: {exc}"]},
+                log=captured.text(),
+            )
+            return
+        tally.by_enricher[IMDB_RUN_KEY] = imdb.written
+        tally.errors.extend(imdb.rejected)
+
+    _close_quietly(
+        api,
+        run_id,
+        status=FetchStatus.FAILED if imdb.rejected else FetchStatus.OK,
+        stats=imdb.as_stats(),
+        log=captured.text(),
+    )
+
+    # IMDb writes ratings without going through the per-title path, so nothing
+    # has rescored the titles it touched. One pass over the catalog afterwards
+    # rather than one per title during it is the whole reason it is a bulk pass.
+    try:
+        tally.aggregates_computed += api.rescore()
+    except IngestError as exc:
+        logger.warning("could not rescore after the IMDb pass: %s", exc)
+        tally.errors.append(f"imdb: could not rescore afterwards: {exc}")
+
+
+def _seret_is_on(api: IngestClient, settings: Settings, skipped: set[str]) -> bool:
     """Whether tonight's enrich should crawl part of Seret's sitemap.
 
     Three ways it should not, and all three are about not spending somebody
@@ -340,6 +384,12 @@ def _seret_is_on(
     an ``imdb_id`` - a fresh install should not crawl 8,900 pages to enrich
     nothing.
 
+    The catalog's size is asked for rather than counted: this process has no
+    database. A server that will not answer is treated as a reason not to crawl
+    - the enrich that follows will fail on its own and say why, and starting a
+    patient crawl whose results have nowhere to go would only waste somebody
+    else's bandwidth first.
+
     ``eifo-fetch seret index`` is unconditional: somebody typing that has said
     what they want, including on an empty database.
     """
@@ -348,77 +398,78 @@ def _seret_is_on(
     if not any(e.key == SERET_ENRICHER_KEY for e in discover_enrichers(settings)):
         return False
 
-    with session_factory() as session:
-        if session.scalar(select(Title.id).limit(1)) is None:
-            logger.info("no titles in the catalog yet; not crawling Seret's sitemap")
-            return False
+    try:
+        status = api.seret_status()
+    except IngestError as exc:
+        logger.warning("could not ask whether a Seret crawl is worth it: %s", exc)
+        return False
+    if not status.get("catalog_titles"):
+        logger.info("no titles in the catalog yet; not crawling Seret's sitemap")
+        return False
     return True
 
 
 def index_seret(
-    session_factory: sessionmaker[Session],
     settings: Settings,
     *,
     http: HttpClient,
+    api: IngestClient,
     limit: int | None = None,
     rate_limit_rps: float | None = None,
     force: bool = False,
 ) -> IndexResult:
-    """Crawl seret.co.il's sitemap and refresh the local page index.
+    """Crawl seret.co.il's sitemap and refresh the stored page index.
 
     A bulk pass beside the IMDb one, and run from the same place: catalog-wide
-    rather than per title, owning its session, writing directly, and carrying
-    its own row in ``fetch_runs`` so a crawl that fails leaves something behind
-    to look at.
+    rather than per title, sending what it read in batches, and carrying its own
+    row in ``fetch_runs`` so a crawl that fails leaves something behind to look
+    at.
 
     ``[seret] batch_size`` bounds it to about ten minutes, so a first index
     fills itself in over a month of nightly runs instead of holding the site
     for five hours the night somebody upgrades. ``eifo-fetch seret index
     --limit 9000`` is the same pass, told not to hold back.
     """
-    with session_factory() as session:
-        run = open_run(session, phase=FetchPhase.ENRICH, source_key=SERET_INDEX_RUN_KEY)
-        ctx = FetchContext(source_key=SERET_INDEX_RUN_KEY, http=http, settings=settings)
-        with capture_log() as captured:
-            try:
-                result = SeretIndexer(ctx, rate_limit_rps=rate_limit_rps).run(
-                    session, limit=limit, force=force
-                )
-            except Exception as exc:
-                # Reported, not raised: this runs inside the nightly enrich, and
-                # Seret being down is not a reason to lose the ratings every
-                # other provider was about to supply.
-                logger.exception("seret index crawl failed")
-                session.rollback()
-                failed = IndexResult(errors=[f"fatal: {type(exc).__name__}: {exc}"], error_count=1)
-                close_run(
-                    session,
-                    run,
-                    status=FetchStatus.FAILED,
-                    stats=failed.as_stats(),
-                    log=captured.text(),
-                )
-                return failed
+    started_at = utcnow()
+    run_id = api.open_run(FetchPhase.ENRICH, started_at=started_at, source_key=SERET_INDEX_RUN_KEY)
+    ctx = FetchContext(source_key=SERET_INDEX_RUN_KEY, http=http, settings=settings)
 
-            # A title waiting out a month's backoff for a page this crawl has
-            # just read should not go on waiting for it. Moves due dates only;
-            # the next ordinary enrich does the scoring.
-            result.woken = wake_titles_newly_covered(session, result.newly_scorable)
-            session.commit()
+    with capture_log() as captured:
+        try:
+            result = SeretIndexer(ctx, rate_limit_rps=rate_limit_rps).run(
+                api, limit=limit, force=force
+            )
+        except Exception as exc:
+            # Reported, not raised: this runs inside the nightly enrich, and
+            # Seret being down is not a reason to lose the ratings every other
+            # provider was about to supply.
+            logger.exception("seret index crawl failed")
+            failed = IndexResult(errors=[f"fatal: {type(exc).__name__}: {exc}"], error_count=1)
+            _close_quietly(
+                api,
+                run_id,
+                status=FetchStatus.FAILED,
+                stats=failed.as_stats(),
+                log=captured.text(),
+            )
+            return failed
 
-        close_run(
-            session,
-            run,
-            # Errors on individual pages are ordinary over a crawl this wide -
-            # withdrawn ids, the odd timeout - and are counted in the stats
-            # rather than failing the run. A crawl that could not read the
-            # sitemap at all returned above and never reaches here.
-            status=FetchStatus.OK,
-            stats=result.as_stats(),
-            log=captured.text(),
-        )
+    _close_quietly(
+        api,
+        run_id,
+        # Errors on individual pages are ordinary over a crawl this wide -
+        # withdrawn ids, the odd timeout - and are counted in the stats rather
+        # than failing the run. A crawl that could not read the sitemap at all
+        # returned above and never reaches here.
+        status=FetchStatus.OK,
+        stats=result.as_stats(),
+        log=captured.text(),
+    )
 
     if result.woken:
+        # A title waiting out a month's backoff for a page this crawl has just
+        # read should not go on waiting for it. The catalog moves the due dates
+        # as the pages land; the next ordinary enrich does the scoring.
         logger.info(
             "seret: %d title(s) that had been parked will be scored on the next enrich",
             result.woken,
@@ -432,10 +483,10 @@ def index_seret(
 
 
 def repair_names(
-    session_factory: sessionmaker[Session],
     settings: Settings,
     *,
     http: HttpClient,
+    api: IngestClient,
     limit: int | None = None,
 ) -> EnrichResultTally:
     """Re-ask TMDB for the English name of every title stored under another script.
@@ -453,15 +504,16 @@ def repair_names(
         logger.warning("the TMDB enricher is switched off; nothing can be repaired")
         return EnrichResultTally()
 
-    with session_factory() as session:
-        targets = mislabelled_names(session, limit=limit)
-        if not targets:
-            logger.info("every English name is already in Latin script")
-            return EnrichResultTally()
+    # Which names are in the wrong script is a question about the catalog, so
+    # it is asked rather than worked out here.
+    targets = api.mislabelled(limit=limit if limit is not None else MISLABELLED_BATCH)
+    if not targets:
+        logger.info("every English name is already in Latin script")
+        return EnrichResultTally()
 
-        logger.info("re-asking TMDB about %d mislabelled names", len(targets))
-        ctx = FetchContext(source_key="repair-names", http=http, settings=settings)
-        tally = enrich_titles(session, enrichers, ctx, settings, titles=targets)
+    logger.info("re-asking TMDB about %d mislabelled names", len(targets))
+    ctx = FetchContext(source_key="repair-names", http=http, settings=settings)
+    tally = enrich_titles(api, enrichers, ctx, settings, titles=targets)
 
     logger.info(
         "repair-names: %d titles seen, %d corrected", tally.titles_seen, tally.metadata_updated
@@ -479,11 +531,10 @@ def fetch_images(
 ) -> ImageResult:
     """Download artwork for titles that still lack it, and post it to the API.
 
-    Takes no ``session_factory``: this phase no longer opens the database at
-    all. Where every other phase writes rows itself, this one asks the API what
-    is outstanding, sends back what it downloaded, and reports the run over the
-    same connection - which is what makes it the phase that can be run from a
-    machine the catalog is not on.
+    Takes no ``session_factory``, and neither does anything else here now: it
+    asks the API what is outstanding, sends back what it downloaded, and reports
+    the run over the same connection. This was the first phase to work that way
+    and is no longer the only one.
     """
     started_at = utcnow()
     # Most artwork comes from TMDB's image CDN, which was being asked for one
@@ -491,8 +542,6 @@ def fetch_images(
     # website. Anything hosted elsewhere keeps the polite default.
     http.rate_limiter.set_host_rate(IMAGE_HOST, settings.tmdb.rate_limit_rps)
     fetcher = ImageFetcher(http, api)
-
-    _report_previous_attempt(settings, api)
 
     # FetchPhase.IMAGES existed and had never once been written: poster
     # downloads reported themselves only to a log line that scrolled away.
@@ -503,7 +552,6 @@ def fetch_images(
         except Exception as exc:
             logger.exception("artwork download failed")
             _close_quietly(
-                settings,
                 api,
                 run_id,
                 status=FetchStatus.FAILED,
@@ -512,7 +560,6 @@ def fetch_images(
             )
             raise
     _close_quietly(
-        settings,
         api,
         run_id,
         status=FetchStatus.FAILED if result.failed else FetchStatus.OK,
@@ -529,7 +576,6 @@ def fetch_images(
 
 
 def _close_quietly(
-    settings: Settings,
     api: IngestClient,
     run_id: int,
     *,

@@ -244,13 +244,13 @@ def close_abandoned_runs(session: Session) -> int:
     running any ``eifo-fetch`` command on the server while a remote fetcher was
     working.
 
-    So age decides for those, on the same threshold the API sweeps by: a run
-    open for a day is not a run still going, whoever started it.
+    So age decides, on the same threshold the API sweeps by: a run open for a
+    day is not a run still going, whoever started it.
 
-    Only for those. Every other phase still opens the database directly, so it
-    can only be running on the machine holding the lock, and waiting a day to
-    say a sync died would be a worse answer than the one this gave before - a
-    dead source would sit there reading "running" until tomorrow.
+    Age decides for every phase now. Sync and enrich write through the API as
+    artwork does, so none of them is confined to the machine with the lock any
+    more, and the local-only exception this used to carve out would mark a
+    remote sync crashed the moment anybody typed a command on the server.
 
     Returns:
         How many were marked, which is normally zero.

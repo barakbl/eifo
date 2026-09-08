@@ -1,21 +1,26 @@
-"""Writing down what a plugin says about the scores it produces.
+"""Saying what a plugin declares about the scores it produces.
 
-The point of this module is that nothing downstream has to be taught a
-provider: the API renders whatever is in ``rating_providers`` and the client
-renders whatever the API sends. So the tests that matter are about the handover
-- that a declaration reaches the table, that a mark reaches the images root
-under a name that changes when the mark does, and that a provider having a
-quiet night never costs a catalog full of scores their attribution.
+This side collects the declarations and hands them over; what the catalog makes
+of them is tested where the catalog is (``eifo-core``'s ``test_providers``).
+The tests that matter here are about the collecting and the handover - that
+every built-in provider describes itself, that a mark travels as bytes because
+the plugin is not necessarily on the machine with the images root, and that a
+missing file is a chip without a logo rather than a failed enrich.
 """
 
 from __future__ import annotations
 
+from base64 import b64decode
 from pathlib import Path
+from typing import Any
 
+import httpx
+import pytest
+from live import LiveApi
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from eifo_core.enums import RatingProvider
+from eifo_core.enums import FetchPhase, RatingProvider
 from eifo_core.models import RatingProviderInfo
 from eifo_core.settings import Settings
 from eifo_fetcher.enrichers.base import ProviderInfo
@@ -24,12 +29,19 @@ from eifo_fetcher.enrichers.rt import RottenTomatoesEnricher
 from eifo_fetcher.enrichers.seret import SeretEnricher
 from eifo_fetcher.enrichers.tmdb_meta import TmdbMetadataEnricher
 from eifo_fetcher.http import HttpClient
+from eifo_fetcher.ingest import IngestClient
 from eifo_fetcher.providers import (
     declared_providers,
+    provider_to_wire,
     refresh_declared_providers,
-    register_declared_providers,
 )
-from eifo_fetcher.runner import enrich_all
+from eifo_fetcher.runner import enrich_all, phase_client
+
+
+@pytest.fixture
+def session_factory(live_api: LiveApi) -> sessionmaker[Session]:
+    """The catalog the API writes the declarations to."""
+    return live_api.session_factory
 
 
 def info(provider: RatingProvider, **overrides: object) -> ProviderInfo:
@@ -47,114 +59,6 @@ def info(provider: RatingProvider, **overrides: object) -> ProviderInfo:
 class _Plugin:
     def __init__(self, *infos: ProviderInfo) -> None:
         self.provider_info = infos
-
-
-def test_a_declaration_reaches_the_table(session: Session, tmp_path: Path) -> None:
-    register_declared_providers(session, [info(RatingProvider.RT_CRITICS)], images_dir=tmp_path)
-    session.commit()
-
-    row = session.get(RatingProviderInfo, RatingProvider.RT_CRITICS)
-    assert row is not None
-    assert row.label == "Tomatometer"
-    assert row.group_key == "rt"
-    assert row.group_name == "Rotten Tomatoes"
-
-
-def test_a_mark_is_published_under_a_name_that_names_its_contents(
-    session: Session, tmp_path: Path
-) -> None:
-    # The images root is served immutable, so a redrawn logo has to arrive at a
-    # new URL or every browser that saw the old one shows it for a year.
-    icon = tmp_path / "rt.svg"
-    icon.write_text("<svg>one</svg>")
-    images = tmp_path / "images"
-
-    register_declared_providers(
-        session, [info(RatingProvider.RT_CRITICS, icon=icon)], images_dir=images
-    )
-    session.commit()
-    row = session.get(RatingProviderInfo, RatingProvider.RT_CRITICS)
-    assert row is not None and row.logo_path is not None
-    # Read out now: the row is the same object after the second pass, so its
-    # attribute is not a record of what it used to say.
-    first = row.logo_path
-    assert (images / first).read_text() == "<svg>one</svg>"
-
-    icon.write_text("<svg>two</svg>")
-    register_declared_providers(
-        session, [info(RatingProvider.RT_CRITICS, icon=icon)], images_dir=images
-    )
-    session.commit()
-    assert row.logo_path != first
-    assert (images / row.logo_path).read_text() == "<svg>two</svg>"
-    # And the one nothing points at any more is gone, rather than accumulating
-    # one file per redraw forever.
-    assert not (images / first).exists()
-
-
-def test_publishing_the_same_mark_twice_changes_nothing(session: Session, tmp_path: Path) -> None:
-    icon = tmp_path / "rt.svg"
-    icon.write_text("<svg/>")
-    images = tmp_path / "images"
-    declaration = [info(RatingProvider.RT_CRITICS, icon=icon)]
-
-    assert register_declared_providers(session, declaration, images_dir=images) == ["rt_critics"]
-    session.commit()
-    # This runs on every enrich; a second identical pass must not touch a row.
-    assert register_declared_providers(session, declaration, images_dir=images) == []
-
-
-def test_a_plugin_that_ships_no_mark_still_gets_a_row(session: Session, tmp_path: Path) -> None:
-    register_declared_providers(session, [info(RatingProvider.EDB)], images_dir=tmp_path)
-    session.commit()
-
-    row = session.get(RatingProviderInfo, RatingProvider.EDB)
-    assert row is not None and row.logo_path is None
-
-
-def test_a_mark_that_is_not_there_is_not_a_failed_enrich(session: Session, tmp_path: Path) -> None:
-    # An enrich about to write ten thousand ratings does not stop over a
-    # missing logo. The chip says the provider's name, as every chip did
-    # before marks existed.
-    register_declared_providers(
-        session,
-        [info(RatingProvider.RT_CRITICS, icon=tmp_path / "nothing-here.svg")],
-        images_dir=tmp_path / "images",
-    )
-    session.commit()
-
-    row = session.get(RatingProviderInfo, RatingProvider.RT_CRITICS)
-    assert row is not None and row.logo_path is None
-
-
-def test_a_changed_declaration_is_carried_forward(session: Session, tmp_path: Path) -> None:
-    register_declared_providers(session, [info(RatingProvider.RT_CRITICS)], images_dir=tmp_path)
-    session.commit()
-
-    changed = register_declared_providers(
-        session,
-        [info(RatingProvider.RT_CRITICS, label="Critics", position=3)],
-        images_dir=tmp_path,
-    )
-    session.commit()
-
-    assert changed == ["rt_critics"]
-    row = session.get(RatingProviderInfo, RatingProvider.RT_CRITICS)
-    assert row is not None
-    assert (row.label, row.position) == ("Critics", 3)
-
-
-def test_nothing_is_ever_removed(session: Session, tmp_path: Path) -> None:
-    # `--skip rt` is a decision about tonight. The catalog still holds
-    # thousands of RT scores, and a row deleted because a plugin was quiet
-    # would take the name off every one of them.
-    register_declared_providers(session, [info(RatingProvider.RT_CRITICS)], images_dir=tmp_path)
-    session.commit()
-
-    register_declared_providers(session, [info(RatingProvider.EDB)], images_dir=tmp_path)
-    session.commit()
-
-    assert session.get(RatingProviderInfo, RatingProvider.RT_CRITICS) is not None
 
 
 def test_the_first_declaration_of_a_provider_wins() -> None:
@@ -222,21 +126,59 @@ def test_two_figures_from_one_service_are_one_group() -> None:
         assert [i.position for i in plugin.provider_info] == [0, 1]
 
 
+class TestSendingAMark:
+    """The bytes travel; the path does not.
+
+    A mark is a file that ships with the plugin, and the plugin may be on a
+    laptop while the images root is on a server. Sending a path would name a
+    file the far end cannot see, and the failure would be a chip quietly
+    missing its logo - which looks like a design decision rather than a bug.
+    """
+
+    def test_the_mark_travels_with_the_declaration(self, tmp_path: Path) -> None:
+        icon = tmp_path / "rt.svg"
+        icon.write_text("<svg>one</svg>")
+
+        sent = provider_to_wire(info(RatingProvider.RT_CRITICS, icon=icon))
+
+        assert sent["logo"] is not None
+        assert b64decode(sent["logo"]) == b"<svg>one</svg>"
+        assert sent["logo_suffix"] == ".svg", "the far end serves this as a static file"
+
+    def test_a_plugin_that_ships_no_mark_sends_none(self) -> None:
+        sent = provider_to_wire(info(RatingProvider.EDB))
+
+        assert sent["logo"] is None
+
+    def test_a_mark_that_is_not_there_is_not_a_failed_enrich(self, tmp_path: Path) -> None:
+        """The chip says the provider's name, as every chip did before marks existed."""
+        sent = provider_to_wire(info(RatingProvider.RT_CRITICS, icon=tmp_path / "nothing.svg"))
+
+        assert sent["logo"] is None
+        assert sent["provider"] == RatingProvider.RT_CRITICS.value
+
+
 def test_an_enrich_writes_what_the_installed_plugins_declare(
+    live_api: LiveApi,
     session_factory: sessionmaker[Session],
     settings: Settings,
     http: HttpClient,
 ) -> None:
     """The wiring, end to end, on an empty catalog.
 
-    Registration hangs off the enrich rather than off a command of its own, so
-    that a deployment which upgrades and then runs its usual nightly comes up
-    with logos and names without anybody being told to run anything. This is
-    the test that would notice the call being dropped: everything downstream
+    Registration hangs off opening a phase rather than off a command of its own,
+    so that a deployment which upgrades and then runs its usual nightly comes up
+    with logos and names without anybody being told to run anything. This is the
+    test that would notice the call being dropped: everything downstream
     degrades quietly to provider keys, which looks like a data problem rather
     than a missing line.
+
+    Through ``phase_client`` because that is where it happens now. It used to be
+    inside ``enrich_all`` as well, which meant every enrich declared the same
+    seven providers twice - visible the moment there was a log of every call.
     """
-    enrich_all(session_factory, settings, http=http, limit=0, skip_imdb=True)
+    with phase_client(settings, FetchPhase.ENRICH, api=live_api.api):
+        enrich_all(settings, http=http, api=live_api.api, limit=0, skip_imdb=True)
 
     with session_factory() as session:
         rows = {row.provider: row for row in session.scalars(select(RatingProviderInfo)).all()}
@@ -249,7 +191,7 @@ def test_an_enrich_writes_what_the_installed_plugins_declare(
 
 
 def test_any_fetcher_command_brings_the_table_up_to_date(
-    session_factory: sessionmaker[Session], settings: Settings
+    live_api: LiveApi, session_factory: sessionmaker[Session], settings: Settings
 ) -> None:
     """Not just the enrich.
 
@@ -257,7 +199,7 @@ def test_any_fetcher_command_brings_the_table_up_to_date(
     the enrich alone left a deployment that upgraded on Tuesday crediting its
     scores by database key until Wednesday's nightly finished.
     """
-    changed = refresh_declared_providers(session_factory, settings)
+    changed = refresh_declared_providers(live_api.api, settings)
 
     assert "rt_critics" in changed
     with session_factory() as session:
@@ -266,16 +208,24 @@ def test_any_fetcher_command_brings_the_table_up_to_date(
         assert (settings.images_dir / row.logo_path).is_file()
 
 
-def test_a_database_without_the_table_is_not_an_error(
-    session_factory: sessionmaker[Session], settings: Settings
+def test_a_catalog_that_will_not_take_them_is_not_a_failed_command(
+    settings: Settings, ingest_api: Any
 ) -> None:
-    """A schema stopped short of 0024 still lists its sources.
+    """A refusal here is a caption on a chip, not a reason to abandon a sync.
 
-    `db upgrade` is the fix and says so on its own; refusing every command
-    until somebody runs it would be a poor trade for a logo.
+    It used to be a table this process wrote itself, so the only way it could
+    fail was a schema stopped short of the migration that adds it. Now it is a
+    request, and every way a request can fail applies - so the answer has to be
+    the same one: say so, and get on with the run.
     """
-    with session_factory() as session:
-        RatingProviderInfo.__table__.drop(session.get_bind())
-        session.commit()
 
-    assert refresh_declared_providers(session_factory, settings) == []
+    def refuse(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("nothing listening")
+
+    api = IngestClient(
+        "https://eifo.test",
+        "eifo_pat_x",
+        http=httpx.Client(transport=httpx.MockTransport(refuse)),
+    )
+    with api:
+        assert refresh_declared_providers(api, settings) == []

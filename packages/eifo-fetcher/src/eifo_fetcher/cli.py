@@ -19,7 +19,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_core import __version__ as core_version
-from eifo_core import migrate
+from eifo_core import logs, migrate
+from eifo_core.catalog import register_declared_sources
 from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
 from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.fts import ensure_search_triggers
@@ -34,21 +35,18 @@ from eifo_core.models import (
 )
 from eifo_core.settings import MissingSettingsError, Settings, get_settings
 from eifo_core.tokens import hash_token, new_api_token
-from eifo_fetcher import attempts, rematch, review
+from eifo_fetcher import rematch, review
 from eifo_fetcher.dedupe import (
     apply_merges,
     dangling_references,
     needs_a_human,
     plan_merges,
 )
-from eifo_fetcher.enrich import recompute_all_aggregates
 from eifo_fetcher.enrichers.seret import DEFAULT_RATE_LIMIT_RPS as SERET_DEFAULT_RPS
-from eifo_fetcher.enrichers.seret_index import SERET_KEY, index_status
+from eifo_fetcher.enrichers.seret_index import SERET_KEY
 from eifo_fetcher.http import HttpClient
-from eifo_fetcher.ingest import IngestClient, IngestError
+from eifo_fetcher.ingest import IngestError
 from eifo_fetcher.lock import AlreadyRunningError, single_flight
-from eifo_fetcher.pipeline import register_declared_sources
-from eifo_fetcher.providers import refresh_declared_providers
 from eifo_fetcher.registry import (
     declared_sources,
     discover_plugins,
@@ -59,6 +57,7 @@ from eifo_fetcher.runner import (
     enrich_all,
     fetch_images,
     index_seret,
+    phase_client,
     repair_names,
     sync_all,
 )
@@ -293,15 +292,29 @@ def _use_utf8_for_output() -> None:
             reconfigure(encoding="utf-8")
 
 
+#: What this program's log file is called when ``log_dir`` is configured.
+PROGRAM = "eifo-fetch"
+
+
 def _configure_logging(verbose: bool) -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s %(message)s",
-    )
-    # httpx logs whole request URLs, and TMDB takes its key as a query
-    # parameter - so at INFO the key would be written to every log file and
-    # into anything those files get pasted into.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    """The console, before configuration has been read.
+
+    Before, because failing to read configuration is itself worth logging - and
+    it is the failure a fresh install hits first. Where the output also goes is
+    a question for :func:`_also_log_to_file`, once there is a config to ask.
+    """
+    logs.configure_console(logging.DEBUG if verbose else logging.INFO)
+
+
+def _also_log_to_file(settings: Settings, verbose: bool) -> None:
+    """Write the same lines to ``[log_dir]``, if one is configured.
+
+    Not only for a server. The menu-bar companion starts this program itself
+    and has no console to show, so without a file the record of a nightly run
+    is whatever row it managed to write - which by definition excludes every
+    failure that stopped it writing one.
+    """
+    logs.add_file(settings.log_dir, PROGRAM, logging.DEBUG if verbose else logging.INFO)
 
 
 # -- commands -------------------------------------------------------------
@@ -313,14 +326,15 @@ def _cmd_db(args: argparse.Namespace, settings: Settings) -> int:
         migrate.upgrade(settings.db_url, args.revision)
         logger.info("schema is up to date")
         # This command is what an operator runs having just upgraded, which is
-        # exactly when the installed plugins may have changed. It does not go
-        # through _database - there may have been no schema to open a moment
-        # ago - so it asks for itself.
-        engine = create_engine_from_settings(settings)
+        # exactly when the installed plugins may have changed - so it says what
+        # they now declare. Through the API like everything else, and quietly:
+        # the service is very often not up yet at this point in an upgrade, and
+        # the next phase to run will declare it anyway.
         try:
-            refresh_declared_providers(make_session_factory(engine), settings)
-        finally:
-            engine.dispose()
+            with phase_client(settings, FetchPhase.ENRICH):
+                pass
+        except IngestError as exc:
+            logger.info("not declaring what credits each score yet: %s", exc)
         return EXIT_OK
 
     if args.db_command == "downgrade":
@@ -346,8 +360,15 @@ def _cmd_sync(args: argparse.Namespace, settings: Settings) -> int:
             update={"fetch": settings.fetch.model_copy(update={"concurrency": args.concurrency})}
         )
 
-    with single_flight(settings), _database(settings) as session_factory, HttpClient() as http:
-        report = sync_all(session_factory, settings, http=http, only=args.sources)
+    try:
+        with (
+            single_flight(settings),
+            HttpClient() as http,
+            phase_client(settings, FetchPhase.SYNC) as api,
+        ):
+            report = sync_all(settings, http=http, api=api, only=args.sources)
+    except IngestError as exc:
+        return _refused(exc)
 
     if not report.results:
         logger.warning("no sources were synced; check [sources] in your configuration")
@@ -364,33 +385,33 @@ def _cmd_images(args: argparse.Namespace, settings: Settings) -> int:
     try:
         with (
             single_flight(settings),
-            attempts.attempted(settings, FetchPhase.IMAGES),
             HttpClient() as http,
-            IngestClient.from_settings(settings) as api,
+            phase_client(settings, FetchPhase.IMAGES) as api,
         ):
             result = fetch_images(settings, http=http, api=api, force=args.force, limit=args.limit)
     except IngestError as exc:
-        # A refusal from the API is an operator problem with an operator
-        # answer, and the answer is in the message. A traceback would bury it.
-        # The attempt is kept on this machine so the next run that does reach
-        # the server says this one happened, rather than leaving the night
-        # looking like one where nothing was scheduled.
-        logger.error("%s", exc)
-        return EXIT_FATAL
+        return _refused(exc)
     return EXIT_PARTIAL if result.failed else EXIT_OK
 
 
 def _cmd_enrich(args: argparse.Namespace, settings: Settings) -> int:
-    with single_flight(settings), _database(settings) as session_factory, HttpClient() as http:
-        tally = enrich_all(
-            session_factory,
-            settings,
-            http=http,
-            force=args.force,
-            limit=args.limit,
-            skip_imdb=args.skip_imdb,
-            skip=args.skip,
-        )
+    try:
+        with (
+            single_flight(settings),
+            HttpClient() as http,
+            phase_client(settings, FetchPhase.ENRICH) as api,
+        ):
+            tally = enrich_all(
+                settings,
+                http=http,
+                api=api,
+                force=args.force,
+                limit=args.limit,
+                skip_imdb=args.skip_imdb,
+                skip=args.skip,
+            )
+    except IngestError as exc:
+        return _refused(exc)
     return EXIT_PARTIAL if tally.errors else EXIT_OK
 
 
@@ -403,12 +424,11 @@ def _cmd_rescore(_args: argparse.Namespace, settings: Settings) -> int:
     and leaves a fruitless attempt recorded against every title the change was
     not even about.
     """
-    with (
-        single_flight(settings),
-        _database(settings) as session_factory,
-        session_factory() as session,
-    ):
-        computed = recompute_all_aggregates(session, settings)
+    try:
+        with single_flight(settings), phase_client(settings, FetchPhase.ENRICH) as api:
+            computed = api.rescore()
+    except IngestError as exc:
+        return _refused(exc)
 
     print(f"rescored {computed} title(s)")
     return EXIT_OK
@@ -426,15 +446,22 @@ def _seret_index(args: argparse.Namespace, settings: Settings) -> int:
         logger.error("the Seret rate must be greater than 0; see [enrich.rate_limits]")
         return EXIT_FATAL
 
-    with single_flight(settings), _database(settings) as session_factory, HttpClient() as http:
-        result = index_seret(
-            session_factory,
-            settings,
-            http=http,
-            limit=args.limit,
-            rate_limit_rps=args.rps,
-            force=args.force,
-        )
+    try:
+        with (
+            single_flight(settings),
+            HttpClient() as http,
+            phase_client(settings, FetchPhase.ENRICH) as api,
+        ):
+            result = index_seret(
+                settings,
+                http=http,
+                api=api,
+                limit=args.limit,
+                rate_limit_rps=args.rps,
+                force=args.force,
+            )
+    except IngestError as exc:
+        return _refused(exc)
 
     _print_table(
         ("metric", "count"),
@@ -461,8 +488,11 @@ def _seret_index(args: argparse.Namespace, settings: Settings) -> int:
 
 
 def _seret_status(settings: Settings) -> int:
-    with _database(settings) as session_factory, session_factory() as session:
-        counts = index_status(session)
+    try:
+        with phase_client(settings, FetchPhase.ENRICH) as api:
+            counts = api.seret_status()
+    except IngestError as exc:
+        return _refused(exc)
 
     if not counts["pages"]:
         print("The Seret page index is empty. Build it with: eifo-fetch seret index")
@@ -484,8 +514,15 @@ def _seret_status(settings: Settings) -> int:
 
 
 def _cmd_repair_names(args: argparse.Namespace, settings: Settings) -> int:
-    with single_flight(settings), _database(settings) as session_factory, HttpClient() as http:
-        tally = repair_names(session_factory, settings, http=http, limit=args.limit)
+    try:
+        with (
+            single_flight(settings),
+            HttpClient() as http,
+            phase_client(settings, FetchPhase.ENRICH) as api,
+        ):
+            tally = repair_names(settings, http=http, api=api, limit=args.limit)
+    except IngestError as exc:
+        return _refused(exc)
     return EXIT_PARTIAL if tally.errors else EXIT_OK
 
 
@@ -813,14 +850,34 @@ def _cmd_daemon(args: argparse.Namespace, settings: Settings) -> int:
 # -- helpers --------------------------------------------------------------
 
 
+def _refused(exc: IngestError) -> int:
+    """Report a refusal from the API as an answer rather than a traceback.
+
+    It is nearly always an operator problem with an operator answer, and the
+    answer is in the message: a token that has been revoked, a service that is
+    not up, a catalog this machine cannot reach. A stack trace would bury the
+    one line worth reading.
+
+    The attempt is kept on this machine either way, so the next run that does
+    reach the server says this one happened - rather than leaving the night
+    looking like one where nothing was scheduled.
+    """
+    logger.error("%s", exc)
+    return EXIT_FATAL
+
+
 @contextmanager
 def _database(settings: Settings) -> Iterator[sessionmaker[Session]]:
-    """A session factory for one command, refusing an unmigrated database.
+    """A session factory for the commands that are still local.
 
-    This is the process that writes titles, so it is the one that must not write
-    into a search index nothing is updating: a rebuild of ``titles`` drops the
-    FTS triggers silently, and every title written after that would be invisible
-    to search with no sign anything was wrong.
+    Fewer of them than there were. Sync, enrich and artwork all write through
+    the API now; what is left here is the operator's own toolkit - reviewing
+    matches, folding duplicates, issuing tokens - which is about a catalog
+    somebody is sitting in front of.
+
+    It refuses an unmigrated database, and it makes sure the search triggers are
+    there: a rebuild of ``titles`` drops them silently, and every title written
+    afterwards would be invisible to search with no sign anything was wrong.
     """
     engine = create_engine_from_settings(settings)
     try:
@@ -829,12 +886,6 @@ def _database(settings: Settings) -> Iterator[sessionmaker[Session]]:
         session_factory = make_session_factory(engine)
         with session_factory() as session:
             close_abandoned_runs(session)
-        # Beside the two above, and for the same reason: things that must be
-        # true of the database for this build, made true once per command
-        # rather than hoped for. What each ratings provider is called and what
-        # its mark looks like is read by the API on every title page, so it
-        # cannot wait for the one phase that happens to write it.
-        refresh_declared_providers(session_factory, settings)
         yield session_factory
     finally:
         engine.dispose()
@@ -944,6 +995,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         settings = get_settings()
+        _also_log_to_file(settings, args.verbose)
         return _COMMANDS[args.command](args, settings)
     except MissingSettingsError as exc:
         logger.error("%s", exc)

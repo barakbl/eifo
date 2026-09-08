@@ -13,6 +13,7 @@ up as a changed ``matched_by`` histogram in a single ``fetch_runs`` row.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import re
 import unicodedata
@@ -20,17 +21,49 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from rapidfuzz import fuzz
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from eifo_core.enums import MatchDecision, TitleKind
+from eifo_core.items import RawItem, TmdbTitle, plausible_year
 from eifo_core.models import Availability, MatchReview, Source, Title, TmdbAlias
 from eifo_core.naming import is_hebrew, latin_script, split_by_script
-from eifo_fetcher.sources.base import RawItem, plausible_year
-from eifo_fetcher.tmdb import TmdbClient, TmdbTitle
+from eifo_core.types import utcnow
+
+
+class TmdbUnavailableError(Exception):
+    """A resolver that cannot answer this one without help.
+
+    Not a failure. It is how the API side says "the sender has not looked this
+    listing up yet": there is no TMDB key here, and searching from here would
+    put the network on the machine least able to afford it. The caller catches
+    it, asks the fetcher to resolve that listing, and offers it again.
+
+    It has to be its own type because the search below swallows exceptions - a
+    ratings site being down should cost one lookup, not a run - and a deferral
+    caught by that would be logged as a failure and quietly turned into a
+    guess.
+    """
+
+
+class TmdbSearch(Protocol):
+    """Something that can ask TMDB what it knows about a name.
+
+    A protocol rather than the client itself, because core does not make
+    network calls and must not learn how to. Two things satisfy it and they sit
+    on opposite sides of the wire: the fetcher passes its real HTTP client when
+    it matches locally, and the API passes a resolver backed by the hits the
+    fetcher already looked up - which is what keeps the search where the
+    network is while the deciding stays where the catalog is.
+    """
+
+    def search(
+        self, kind: TitleKind, query: str, *, year: int | None = None
+    ) -> Sequence[TmdbTitle]: ...
+
 
 logger = logging.getLogger("eifo.fetch.match")
 
@@ -284,6 +317,230 @@ def fallback_name(item: RawItem) -> str:
     return item.name
 
 
+#: How long a shared fold survives before it is rebuilt regardless.
+#:
+#: The stamp below catches everything it can see, and the one thing it cannot
+#: is a writer whose timestamp predates our own last write but whose commit
+#: lands after it - a concurrent enrich renaming a title, most plausibly. That
+#: window is narrow and this closes it: a name can be stale for at most this
+#: long, whatever else happens.
+FOLD_MAX_AGE = dt.timedelta(seconds=30)
+
+
+@dataclass(slots=True)
+class _Stamp:
+    """What the titles table looked like when a fold was taken.
+
+    Three numbers, one cheap query - 5ms against 339ms to rebuild the fold on
+    the deployed catalog. ``count`` and ``newest`` catch anything inserted or
+    deleted; ``touched`` catches anything edited, because every write to a
+    title moves its ``updated_at``.
+    """
+
+    count: int
+    newest: int | None
+    touched: dt.datetime | None
+
+    @classmethod
+    def of(cls, session: Session) -> _Stamp:
+        count, newest, touched = session.execute(
+            select(func.count(Title.id), func.max(Title.id), func.max(Title.updated_at))
+        ).one()
+        return cls(count=count, newest=newest, touched=touched)
+
+    def saw(self, title: Title) -> None:
+        """Record a write we made ourselves, so it does not read as somebody else's.
+
+        A fold that already holds this title is still current, and without this
+        every chunk would invalidate its own cache the moment it created a
+        title or filled in a poster URL.
+        """
+        self.newest = title.id if self.newest is None else max(self.newest, title.id)
+        if title.updated_at is not None:
+            self.touched = (
+                title.updated_at if self.touched is None else max(self.touched, title.updated_at)
+            )
+
+
+class FoldedTitles:
+    """A folded catalog that outlives the request that built it.
+
+    Rebuilding it costs 339ms on the deployed server and a sync does it thirty
+    times, which is most of what a chunk spends. Nothing about the fold belongs
+    to one request, so it is kept and checked instead: :class:`_Stamp` says
+    whether the titles table has moved since, and moving is the only thing that
+    can make a fold wrong.
+
+    Held per process. Two workers keep two of these, which costs the memory
+    twice and is otherwise nobody's business.
+
+    Not locked. A sync offers its chunks one after another, so in practice one
+    request touches this at a time; if two ever did, the worst of it is a fold
+    built twice or an entry replaced twice, because every write here is a list
+    append or a slot assignment. Nothing reads a half-written candidate, and a
+    fold that loses a race is still a fold of the catalog it was stamped
+    against.
+    """
+
+    def __init__(self) -> None:
+        self.by_kind: dict[TitleKind, list[_Candidate]] = {}
+        self.stamp: _Stamp | None = None
+        self.taken_at: dt.datetime | None = None
+
+    def usable(self, session: Session, *, now: dt.datetime) -> bool:
+        """Whether what is held still describes the catalog."""
+        if self.stamp is None or self.taken_at is None:
+            return False
+        if now - self.taken_at > FOLD_MAX_AGE:
+            return False
+        return _Stamp.of(session) == self.stamp
+
+    def start(self, session: Session, *, now: dt.datetime) -> None:
+        """Begin a fresh fold, stamped as of now."""
+        self.by_kind = {}
+        self.stamp = _Stamp.of(session)
+        self.taken_at = now
+
+    def forget(self) -> None:
+        """Drop it. For tests, and for anything that would rather not guess."""
+        self.by_kind = {}
+        self.stamp = None
+        self.taken_at = None
+
+
+class KnownTitles:
+    """Every stored title of a kind, read once and kept current after that.
+
+    The fuzzy comparison has to look at the whole catalog of a kind, because
+    the question it answers - is anything here nearly this name - has no
+    narrower query. A sync matches listings one at a time, and each match was
+    reading the catalog again: a chunk of 200 listings read 39,000 rows two
+    hundred times, hydrating every one into an ORM object. That is what took
+    the Oracle box down on 2026-09-07, and it was slow everywhere else too.
+
+    Passing one of these to every matcher in a chunk makes it one read. The
+    cost is that a title created by something *other* than the matchers
+    sharing it would go unseen, so it is scoped to a single chunk and handed
+    in explicitly rather than cached somewhere longer-lived.
+
+    Kept current rather than invalidated: a matcher that creates a title adds
+    it here, because a sync creates titles constantly and dropping the cache
+    on each one would put us straight back to reading per listing.
+
+    Each name is normalised once, when the title first enters the cache. The
+    comparison needs normalised text on both sides, and computing it inside
+    the comparison meant every stored name was folded again for every listing
+    - 300,000 calls to :func:`normalise` for a chunk of 50, three quarters of
+    all the time matching took. The strings compared are the same either way.
+
+    Four columns are read rather than whole rows. The comparison looks at a
+    year and two names and never at anything else, and hydrating 8,803 ORM
+    objects to read four fields off them costs 1.44s on the deployed server
+    against 0.13s for the columns alone - per chunk, so about a minute of a
+    sync spent building objects to ignore. The winner is fetched as a real
+    row afterwards, by id, which is one lookup and usually already in the
+    session.
+    """
+
+    def __init__(self, session: Session, *, shared: FoldedTitles | None = None) -> None:
+        self._session = session
+        # Its own fold by default, which is what a lone matcher and every test
+        # gets. A caller working through chunk after chunk hands in one that
+        # outlives the request; see :class:`FoldedTitles`.
+        held = shared or FoldedTitles()
+        if shared is None or not held.usable(session, now=utcnow()):
+            held.start(session, now=utcnow())
+        self._held = held
+
+    @property
+    def _by_kind(self) -> dict[TitleKind, list[_Candidate]]:
+        return self._held.by_kind
+
+    def _noticed(self, title: Title) -> None:
+        """Tell the stamp about a write we just made."""
+        if self._held.stamp is not None:
+            self._held.stamp.saw(title)
+
+    def of_kind(self, kind: TitleKind) -> list[_Candidate]:
+        """Every title of one kind, folded ready to compare."""
+        cached = self._by_kind.get(kind)
+        if cached is None:
+            rows = self._session.execute(
+                select(Title.id, Title.year, Title.name_he, Title.name_en).where(Title.type == kind)
+            ).all()
+            cached = [
+                _Candidate(
+                    title_id=title_id,
+                    year=year,
+                    he=normalise(name_he) if name_he else None,
+                    en=normalise(name_en) if name_en else None,
+                )
+                for title_id, year, name_he, name_en in rows
+            ]
+            self._by_kind[kind] = cached
+        return cached
+
+    def add(self, title: Title) -> None:
+        """Note a title that has just been created, so the next match sees it."""
+        if self._held.stamp is not None:
+            self._held.stamp.count += 1
+        self._noticed(title)
+        cached = self._by_kind.get(title.type)
+        if cached is not None:
+            cached.append(_fold(title))
+
+    def refresh(self, title: Title) -> None:
+        """Re-fold a title whose names or year have just changed.
+
+        Names are folded when a title enters the cache, which is right for a
+        catalog nothing is editing - and a sync edits it. ``adopt_tmdb_hit``
+        fills in a name a title was missing, and without this the rest of the
+        chunk would go on comparing against the gap: a later listing that would
+        have matched on the newly filled name would miss it and create a
+        second title for the same work.
+        """
+        self._noticed(title)
+        cached = self._by_kind.get(title.type)
+        if cached is None:
+            return
+        fresh = _fold(title)
+        for index, candidate in enumerate(cached):
+            if candidate.title_id == title.id:
+                cached[index] = fresh
+                return
+        cached.append(fresh)
+
+    def title(self, title_id: int) -> Title | None:
+        """The full row for a candidate the comparison settled on."""
+        return self._session.get(Title, title_id)
+
+
+def _fold(title: Title) -> _Candidate:
+    """A title's year and folded names - the only three things compared."""
+    return _Candidate(
+        title_id=title.id,
+        year=title.year,
+        he=normalise(title.name_he) if title.name_he else None,
+        en=normalise(title.name_en) if title.name_en else None,
+    )
+
+
+@dataclass(slots=True)
+class _Candidate:
+    """A stored title's year and folded names - what the comparison reads.
+
+    ``he`` and ``en`` are ``None`` when the title carries no such name at all,
+    which is the case the comparison skips. A name that is present but folds
+    away to nothing is an empty string rather than ``None``, because that is a
+    name we hold and the comparison should say what it says about it.
+    """
+
+    title_id: int
+    year: int | None
+    he: str | None
+    en: str | None
+
+
 class TitleMatcher:
     """Resolves :class:`RawItem` values to :class:`Title` rows."""
 
@@ -291,12 +548,16 @@ class TitleMatcher:
         self,
         session: Session,
         *,
-        tmdb: TmdbClient | None = None,
+        tmdb: TmdbSearch | None = None,
         stats: MatchStats | None = None,
+        known: KnownTitles | None = None,
     ) -> None:
         self._session = session
         self._tmdb = tmdb
         self.stats = stats or MatchStats()
+        # Its own by default, so a lone matcher behaves exactly as before. A
+        # caller matching many items in a row shares one across all of them.
+        self._known = known or KnownTitles(session)
 
     def match(self, item: RawItem) -> MatchResult:
         """Resolve one item, creating or parking it when nothing matches."""
@@ -533,6 +794,8 @@ class TitleMatcher:
 
     def _adopt_tmdb_hit(self, title: Title, hit: TmdbTitle) -> None:
         adopt_tmdb_hit(self._session, title, hit)
+        # It may have just gained the name the next listing will be compared on.
+        self._known.refresh(title)
 
     def _search_tmdb(self, item: RawItem) -> TmdbTitle | None:
         """Best TMDB candidate for an item, or None if none is convincing.
@@ -550,6 +813,10 @@ class TitleMatcher:
             for year in _search_years(item.year):
                 try:
                     candidates = self._tmdb.search(item.kind, query, year=year)
+                except TmdbUnavailableError:
+                    # Not a failure: the resolver is saying it has not been
+                    # given this one yet. Let the caller hear it.
+                    raise
                 except Exception:
                     logger.exception("TMDB search failed for %r", query)
                     return None
@@ -588,22 +855,49 @@ class TitleMatcher:
         """
         hebrew, english = names_of(item)
         wanted = kind or item.kind
-        candidates = self._session.scalars(select(Title).where(Title.type == wanted)).all()
+        candidates = self._known.of_kind(wanted)
 
-        best: Title | None = None
+        # Folded once for the whole sweep rather than inside it. The stored
+        # side is folded once when it enters the cache; see :class:`_Candidate`.
+        query_he = normalise(hebrew) if hebrew else None
+        query_en = normalise(english) if english else None
+        if query_he is None and query_en is None:
+            return None, 0.0
+
+        year = item.year
+        ratio = fuzz.ratio
+        best_id: int | None = None
         best_score = 0.0
-        for candidate in candidates:
-            if not years_match(item.year, candidate.year, tolerance=year_tolerance):
-                continue
-            pairs = ((hebrew, candidate.name_he), (english, candidate.name_en))
-            for left, right in pairs:
-                if not left or not right:
-                    continue
-                score = similarity(left, right)
-                if score > best_score:
-                    best, best_score = candidate, score
+        # The acceptable span, worked out once rather than as a subtraction and
+        # an abs() per candidate. That guard runs for every stored title of the
+        # kind, for every listing - 4.9 million calls to abs() for one chunk of
+        # 200, which measured as an eighth of the whole sweep.
+        bounded = year is not None
+        earliest = latest = 0
+        if year is not None:
+            earliest, latest = year - year_tolerance, year + year_tolerance
 
-        return best, best_score
+        for candidate in candidates:
+            other = candidate.year
+            # Inlined rather than calling years_match: this runs tens of
+            # thousands of times per listing and the call was costing more
+            # than the comparison it guards. Same rule - a missing year on
+            # either side is not evidence of a mismatch.
+            if bounded and other is not None and not earliest <= other <= latest:
+                continue
+
+            if query_he is not None and candidate.he is not None:
+                score = ratio(query_he, candidate.he, score_cutoff=best_score)
+                if score > best_score:
+                    best_id, best_score = candidate.title_id, score
+            if query_en is not None and candidate.en is not None:
+                score = ratio(query_en, candidate.en, score_cutoff=best_score)
+                if score > best_score:
+                    best_id, best_score = candidate.title_id, score
+
+        if best_id is None:
+            return None, best_score
+        return self._known.title(best_id), best_score
 
     def _review_candidate(self, item: RawItem) -> tuple[Title | None, float]:
         """The closest title worth a human's attention, looking wider than matching.
@@ -653,6 +947,7 @@ class TitleMatcher:
         )
         self._session.add(title)
         self._session.flush()
+        self._known.add(title)
         return title
 
     def _create_from_tmdb(self, item: RawItem, hit: TmdbTitle) -> Title:
@@ -686,6 +981,7 @@ class TitleMatcher:
         )
         self._session.add(title)
         self._session.flush()
+        self._known.add(title)
         return title
 
     def _park_for_review(

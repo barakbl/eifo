@@ -68,6 +68,17 @@ pub fn open_url(url: &str) {
     }
 }
 
+/// Reveal a file or folder in the Finder.
+///
+/// `NSWorkspace` rather than a `file://` URL through `open_url`: a URL built
+/// from a path has to be percent-encoded correctly or it silently opens
+/// nothing, and this app has no business owning that encoding.
+pub fn reveal(path: &std::path::Path) {
+    let string = NSString::from_str(&path.to_string_lossy());
+    NSWorkspace::sharedWorkspace()
+        .selectFile_inFileViewerRootedAtPath(Some(&string), &NSString::from_str(""));
+}
+
 /// The standard About panel, filled in with this app's own details.
 ///
 /// `orderFrontStandardAboutPanelWithOptions:` rather than a window of our own:

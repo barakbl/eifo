@@ -14,8 +14,10 @@ import datetime as dt
 import io
 import json
 import tarfile
+import threading
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,6 +26,7 @@ from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from eifo_api.routers import ingest
 from eifo_api.security import CSRF_HEADER
 from eifo_core import ingest as wire
 from eifo_core.enums import FetchPhase, FetchStatus, TitleKind
@@ -719,3 +722,56 @@ class TestARunNobodyCameBackFrom:
 
         with session_factory() as session:
             assert session.get(FetchRun, other_id).status is FetchStatus.RUNNING  # type: ignore[union-attr]
+
+
+class TestTheServerKeepsAnsweringWhileABatchIsFiled:
+    """The third of the three, and the same reasoning as the other two.
+
+    Streaming the archive belongs on the event loop. Unpacking gzip and tar
+    over a batch of images, decoding each one and writing the renditions does
+    not: on the loop it serves nothing else until the batch is done.
+    """
+
+    def test_another_request_is_served_while_a_batch_is_still_filing(
+        self,
+        client: TestClient,
+        operator: str,
+        titles: list[int],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        filing = threading.Event()
+        release = threading.Event()
+        real = ingest._file_posters
+
+        def blocking(*args: Any, **kwargs: Any) -> Any:
+            filing.set()
+            # Bounded, so a regression fails this test rather than hanging the
+            # whole suite.
+            release.wait(timeout=30)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(ingest, "_file_posters", blocking)
+
+        answers: list[Any] = []
+        batch = threading.Thread(
+            target=lambda: answers.append(
+                client.post(POSTERS, content=good_batch(titles[0]), headers={CSRF_HEADER: operator})
+            )
+        )
+        probed: list[Any] = []
+        probe = threading.Thread(target=lambda: probed.append(client.get("/api/v1/meta")))
+
+        batch.start()
+        try:
+            assert filing.wait(timeout=10), "the batch never reached the filing"
+            probe.start()
+            probe.join(timeout=10)
+            served = not probe.is_alive()
+        finally:
+            release.set()
+            probe.join(timeout=15)
+            batch.join(timeout=15)
+
+        assert served, "the event loop was blocked: nothing was served while a batch filed"
+        assert probed[0].status_code == 200
+        assert answers[0].status_code == 200

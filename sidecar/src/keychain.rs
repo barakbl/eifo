@@ -23,8 +23,17 @@ use security_framework::passwords::{
 /// How the entry appears in Keychain Access, so somebody looking for it - or
 /// wanting to revoke it by hand - can find it under a name that means
 /// something.
+#[cfg(not(test))]
 const SERVICE: &str = "Eifo";
 const ACCOUNT: &str = "api-token";
+
+/// Tests get their own entry. The live test below round-trips through the real
+/// Keychain, and pointing it at the real service name means running it writes
+/// junk over whatever token the developer is actually using - and if the delete
+/// is refused at the Keychain prompt, leaves it there, so the app finds a token
+/// that is present, malformed, and 401s on every call.
+#[cfg(test)]
+const SERVICE: &str = "Eifo (test)";
 
 /// What an Eifo token looks like. Checked before storing, so a mis-paste is
 /// refused at the moment it can still be explained rather than becoming a

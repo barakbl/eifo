@@ -18,6 +18,13 @@ pub const DEFAULT_NIGHTLY: &str = "03:00";
 /// port 3436 because that is `EIFO` on an old phone keypad (3-4-3-6).
 pub const DEFAULT_BASE_URL: &str = "http://localhost:3436";
 
+/// Hosts that mean "the machine this app is running on".
+///
+/// What separates a companion that manages a server from one that only watches
+/// it. Everything else is somebody else's machine: this app cannot start a
+/// process there, cannot stop one, and must not offer to.
+const LOOPBACK_HOSTS: [&str; 4] = ["localhost", "127.0.0.1", "::1", "[::1]"];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// The Eifo checkout: the directory holding `packages/`, `data/` and `.venv/`.
@@ -140,6 +147,29 @@ impl Config {
         self.app_dir.join("data/.eifo-fetch.lock")
     }
 
+    /// Where both programs write their logs, matching `log_dir` in the config
+    /// file this checkout ships.
+    ///
+    /// Not read from that file: this app would then need a TOML parser and a
+    /// second definition of a setting that already has one. The default is the
+    /// one the shipped configuration sets, and a person who moves it can still
+    /// reach their logs the way they moved them to.
+    pub fn log_dir(&self) -> PathBuf {
+        self.app_dir.join("data/logs")
+    }
+
+    /// The console output of a process this app started.
+    ///
+    /// Beside the programs' own log files rather than inside them: these hold
+    /// what escaped Python's logging - a traceback from a process that died
+    /// before it configured anything, uvicorn's startup banner, an import
+    /// error - which is exactly the output that goes missing when a supervisor
+    /// sends it to /dev/null, and exactly what is wanted when a process will
+    /// not start.
+    pub fn console_log(&self, program: &str) -> PathBuf {
+        self.log_dir().join(format!("{program}.console.log"))
+    }
+
     /// Host and port parsed out of `base_url`, for the server's own arguments.
     pub fn host_port(&self) -> (String, u16) {
         let rest = self
@@ -154,6 +184,20 @@ impl Config {
         (host, port)
     }
 
+    /// Whether the catalog this app watches is on somebody else's machine.
+    ///
+    /// The whole of the server half of the menu turns on this. A remote catalog
+    /// is one this app can poll and fill - the fetcher still runs here, reads
+    /// the services from here, and posts what it found over the wire - but not
+    /// one it can start, stop or restart, because those are operations on a
+    /// process it cannot see. Offering them anyway would be four controls that
+    /// either do nothing or, worse, start a second server on *this* machine
+    /// that nobody asked for and nothing is looking at.
+    pub fn is_remote(&self) -> bool {
+        let (host, _) = self.host_port();
+        !LOOPBACK_HOSTS.contains(&host.as_str())
+    }
+
     /// Whether this directory looks like an Eifo checkout at all.
     ///
     /// Checked before the directory is accepted, so a wrong choice is reported
@@ -164,6 +208,14 @@ impl Config {
     }
 
     /// What is missing, if anything, for this config to be workable.
+    ///
+    /// Two of these depend on where the catalog is. A checkout that fills a
+    /// remote catalog needs the fetcher and nothing else: it never starts a
+    /// server here, so `uvicorn` is not its business, and it never opens a
+    /// database here, so a missing `data/eifo.db` is the ordinary state of a
+    /// machine that only reads services and posts what it found. Reporting
+    /// either as a problem would be telling somebody to fix something that is
+    /// not broken.
     pub fn problems(&self) -> Vec<String> {
         let mut found = Vec::new();
         if !Self::looks_like_eifo(&self.app_dir) {
@@ -172,14 +224,16 @@ impl Config {
                 self.app_dir.display()
             ));
         }
-        if !self.uvicorn().exists() {
-            found.push("no .venv/bin/uvicorn - run `uv sync` in the checkout".into());
-        }
         if !self.fetcher().exists() {
             found.push("no .venv/bin/eifo-fetch - run `uv sync` in the checkout".into());
         }
-        if !self.database().exists() {
-            found.push("no data/eifo.db - run `eifo-fetch db upgrade`".into());
+        if !self.is_remote() {
+            if !self.uvicorn().exists() {
+                found.push("no .venv/bin/uvicorn - run `uv sync` in the checkout".into());
+            }
+            if !self.database().exists() {
+                found.push("no data/eifo.db - run `eifo-fetch db upgrade`".into());
+            }
         }
         found
     }
@@ -226,6 +280,57 @@ mod tests {
         let config: Config =
             serde_json::from_str(r#"{"app_dir":"/tmp"}"#).expect("minimal config parses");
         assert!(config.start_server_on_open);
+    }
+
+    #[test]
+    fn a_loopback_catalog_is_this_machine() {
+        for url in [
+            "http://localhost:3436",
+            "http://127.0.0.1:3436",
+            "http://localhost",
+        ] {
+            let mut config = Config::new(PathBuf::from("/tmp"));
+            config.base_url = url.into();
+            assert!(!config.is_remote(), "{url} is this machine");
+        }
+    }
+
+    #[test]
+    fn anything_else_is_somebody_elses_machine() {
+        for url in [
+            "https://151-145-94-93.nip.io",
+            "http://192.168.1.9:3436",
+            "https://eifo.example.com",
+        ] {
+            let mut config = Config::new(PathBuf::from("/tmp"));
+            config.base_url = url.into();
+            assert!(config.is_remote(), "{url} is not this machine");
+        }
+    }
+
+    #[test]
+    fn a_remote_catalog_needs_no_server_and_no_database_here() {
+        // Neither is this checkout's business when the catalog is elsewhere:
+        // it never starts a server here and never opens a database here, so
+        // reporting both as problems is telling somebody to fix what is not
+        // broken. The fetcher is still required - it is the whole job.
+        let dir = std::env::temp_dir().join("eifo-remote-problems");
+        let _ = fs::create_dir_all(dir.join("packages/eifo-api"));
+        let _ = fs::create_dir_all(dir.join("packages/eifo-fetcher"));
+        let _ = fs::create_dir_all(dir.join(".venv/bin"));
+        let _ = fs::write(dir.join(".venv/bin/eifo-fetch"), "");
+
+        let mut config = Config::new(dir.clone());
+        config.base_url = "https://eifo.example.com".into();
+
+        assert_eq!(config.problems(), Vec::<String>::new());
+
+        config.base_url = "http://localhost:3436".into();
+        let local = config.problems();
+        assert!(local.iter().any(|p| p.contains("uvicorn")), "{local:?}");
+        assert!(local.iter().any(|p| p.contains("eifo.db")), "{local:?}");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

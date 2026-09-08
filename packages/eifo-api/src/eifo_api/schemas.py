@@ -22,6 +22,7 @@ from eifo_core.enums import (
     SourceKind,
     TitleKind,
 )
+from eifo_core.ingest import MAX_IMDB_WRITE_CHUNK, MAX_SERET_WRITE_CHUNK
 from eifo_core.models import (
     DISPLAY_NAME_MAX_LENGTH,
     HANDLE_MAX_LENGTH,
@@ -39,6 +40,10 @@ HANDLE_MIN_LENGTH = 3
 #: run said and trims it to 64KB; this is that with room to spare, so a sender
 #: that trims correctly is never refused and one that does not is.
 MAX_RUN_LOG_CHARS = 200_000
+
+#: A provider's mark, base64-encoded. These are small SVGs and PNGs; anything
+#: near this is not a mark.
+MAX_LOGO_CHARS = 400_000
 
 #: Cap on one bulk ruling. Big enough for "dismiss every Sing Along on this
 #: page", small enough that a mistake is reviewable and one request is one
@@ -510,6 +515,276 @@ class RunClose(BaseModel):
     #: because a cap that only one side enforces is a cap on well-behaved
     #: senders.
     log: str | None = Field(default=None, max_length=MAX_RUN_LOG_CHARS)
+
+
+class DeclaredSource(BaseModel):
+    """One service a plugin says it can populate."""
+
+    source_key: str = Field(max_length=50)
+    name: str = Field(max_length=200)
+    kind: SourceKind
+    website_url: str = Field(max_length=1000)
+    logo_path: str | None = Field(default=None, max_length=500)
+    default_enabled: bool = True
+
+
+class SourceDeclaration(BaseModel):
+    """Everything this fetcher's plugins can do, and what it means to run."""
+
+    sources: list[DeclaredSource] = Field(default_factory=list)
+    #: Keys the fetcher's own configuration switches on. An administrator's
+    #: override still wins, and comes back in the answer.
+    enabled: list[str] = Field(default_factory=list)
+    #: Retire rows for services no plugin declares any more. Off for a partial
+    #: run: a fetcher syncing one source is not evidence the others are gone.
+    retire_missing: bool = False
+
+
+class SourceRegistry(BaseModel):
+    """What changed, and which switches an administrator has thrown."""
+
+    added: list[str] = Field(default_factory=list)
+    retired: list[str] = Field(default_factory=list)
+    #: Only the sources carrying an explicit answer. Absent means the
+    #: configuration file still decides.
+    overrides: dict[str, bool] = Field(default_factory=dict)
+
+
+class BackfillsDone(BaseModel):
+    keys: list[str] = Field(default_factory=list)
+
+
+class SyncStart(BaseModel):
+    """A fetcher announcing which source it is about to read.
+
+    Carries the source's identity as well as its key, because the plugin is the
+    thing that knows what a service is called and where it lives, and the API
+    cannot ask it. A service added in an upgrade becomes visible to the operator
+    the first time a sync mentions it.
+    """
+
+    source_key: str = Field(max_length=50)
+    name: str = Field(max_length=200)
+    kind: SourceKind
+    website_url: str = Field(max_length=1000)
+    logo_path: str | None = Field(default=None, max_length=500)
+    default_enabled: bool = True
+    #: The fetcher's clock. The work began on its machine, which is no longer
+    #: guaranteed to be this one.
+    started_at: dt.datetime | None = None
+
+
+class SyncBegun(BaseModel):
+    """Where to send the listings."""
+
+    run_id: int
+    source_id: int
+    started_at: dt.datetime
+
+
+class SyncChunkOut(BaseModel):
+    """What one chunk achieved, and what it could not do alone."""
+
+    stored: int
+    #: Listings nothing local claimed and no TMDB hit arrived for. Handed back
+    #: for the sender to look up and offer again - which is what keeps the
+    #: TMDB key, and the calls, on the machine with the network.
+    needs_tmdb: list[dict[str, Any]] = Field(default_factory=list)
+    #: Per listing, by its index in the chunk, so the sender is told which one.
+    rejected: list[dict[str, Any]] = Field(default_factory=list)
+    matched_by: dict[str, int] = Field(default_factory=dict)
+
+
+class SyncFinish(BaseModel):
+    """A fetcher saying it has no more listings for this run."""
+
+    status: FetchStatus = FetchStatus.OK
+    errors: list[str] = Field(default_factory=list)
+    #: What the fetcher said while reading. Appended to what the API said while
+    #: writing, so one row holds the whole story in order.
+    log: str | None = Field(default=None, max_length=MAX_RUN_LOG_CHARS)
+
+
+class SyncOutcome(BaseModel):
+    """The run, as it will appear in the Runs panel."""
+
+    source_key: str
+    status: FetchStatus
+    items_seen: int = 0
+    availability_created: int = 0
+    availability_updated: int = 0
+    titles_created: int = 0
+    retired: int = 0
+    reviews_expired: int = 0
+    errors: list[str] = Field(default_factory=list)
+    matched_by: dict[str, int] = Field(default_factory=dict)
+
+
+class TitleDue(BaseModel):
+    """A title an enricher should look up, as the enricher will see it."""
+
+    id: int
+    kind: TitleKind
+    name_he: str | None = None
+    name_en: str | None = None
+    year: int | None = None
+    tmdb_id: int | None = None
+    imdb_id: str | None = None
+
+
+class DeclaredRatingProvider(BaseModel):
+    """One figure a provider reports, as its plugin declares it."""
+
+    provider: RatingProvider
+    label: str = Field(max_length=100)
+    group_key: str = Field(max_length=50)
+    group_name: str = Field(max_length=100)
+    website_url: str | None = Field(default=None, max_length=1000)
+    position: int = 0
+    #: The mark, base64-encoded. The file ships with the plugin, which is not
+    #: necessarily on this machine.
+    logo: str | None = Field(default=None, max_length=MAX_LOGO_CHARS)
+    logo_suffix: str = Field(default="", max_length=8)
+
+
+class ProviderDeclaration(BaseModel):
+    providers: list[DeclaredRatingProvider] = Field(default_factory=list)
+
+
+class ProvidersOut(BaseModel):
+    """Which providers' details actually changed - normally none."""
+
+    changed: list[str] = Field(default_factory=list)
+
+
+class SeretEntryOut(BaseModel):
+    """One page of the Seret index, as the lookup needs it."""
+
+    kind: TitleKind
+    seret_id: int
+    name_he: str | None = None
+    name_en: str | None = None
+    year: int | None = None
+    imdb_id: str | None = None
+    viewers_score: float | None = None
+    #: How many people that score is an average of. The enricher reports it
+    #: with the rating, so a score from eleven votes can be told from one from
+    #: eleven thousand.
+    viewers_votes: int | None = None
+    critics_score: float | None = None
+    url: str | None = None
+    #: When this page was last read. The crawl uses it to decide what is stale,
+    #: which it cannot work out from its own side.
+    indexed_at: dt.datetime | None = None
+    unreadable: bool = False
+
+
+class SeretPage(SeretEntryOut):
+    """One page a crawl read, readable or not."""
+
+
+class SeretPages(BaseModel):
+    pages: list[SeretPage] = Field(default_factory=list, max_length=MAX_SERET_WRITE_CHUNK)
+
+
+class SeretIndexOut(BaseModel):
+    created: int
+    updated: int
+    #: Pages that can score a title now and could not before this batch - ones
+    #: never read, and ones whose film has been released and rated since we
+    #: last looked. Only these are worth waking anything for.
+    newly_scorable: int = 0
+    #: Titles that had no Seret page and now have one, put back in the queue.
+    woken: int = 0
+
+
+class SeretStatus(BaseModel):
+    """What the index holds, and whether it is worth crawling for.
+
+    Two questions in one answer because they are asked together and neither can
+    be answered from the fetcher's side. ``eifo-fetch seret status`` prints the
+    counts; the nightly enrich reads ``catalog_titles`` to decide whether to
+    crawl at all, which is the same guard the IMDb pass makes - a fresh install
+    should not ask somebody's site for 8,900 pages in order to enrich nothing.
+    """
+
+    pages: int = 0
+    movies: int = 0
+    series: int = 0
+    with_imdb_id: int = 0
+    with_viewer_score: int = 0
+    with_critic_score: int = 0
+    unreadable: int = 0
+    #: Titles in the catalog, which is what decides whether a crawl has a
+    #: purpose. Not part of the index, and here anyway: it is the other half of
+    #: the only question anybody asks this endpoint.
+    catalog_titles: int = 0
+
+
+class WantedImdb(BaseModel):
+    """A title the IMDb bulk pass should watch for in the dataset."""
+
+    title_id: int
+    imdb_id: str
+
+
+class ImdbRating(BaseModel):
+    title_id: int
+    score_raw: float
+    vote_count: int | None = None
+    #: Where the score can be read in full. Sent rather than built here: the
+    #: fetcher is holding the ``imdb_id`` the row was matched by, and the API
+    #: would have to look it up again to say the same thing.
+    url: str | None = Field(default=None, max_length=1000)
+
+
+class ImdbRatings(BaseModel):
+    ratings: list[ImdbRating] = Field(default_factory=list, max_length=MAX_IMDB_WRITE_CHUNK)
+
+
+class RescoreOut(BaseModel):
+    """How many aggregates a rescore rebuilt."""
+
+    aggregates_computed: int
+
+
+class EnrichStart(BaseModel):
+    started_at: dt.datetime | None = None
+
+
+class EnrichBegun(BaseModel):
+    run_id: int
+    started_at: dt.datetime
+
+
+class EnrichChunkOut(BaseModel):
+    """What one batch of findings achieved."""
+
+    titles_seen: int
+    ratings_written: int
+    #: Per title, by its index in the batch. A score outside its provider's
+    #: scale is a parser bug, and storing it would quietly skew the aggregate.
+    rejected: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class EnrichFinish(BaseModel):
+    status: FetchStatus = FetchStatus.OK
+    errors: list[str] = Field(default_factory=list)
+    #: What only the sender knows about the run - which providers it asked, and
+    #: how much each turned up. Merged into what this side counted rather than
+    #: replacing it, and never allowed to overwrite it: the totals here are what
+    #: was actually written, and a sender must not be able to say otherwise.
+    stats: dict[str, Any] = Field(default_factory=dict)
+    log: str | None = Field(default=None, max_length=MAX_RUN_LOG_CHARS)
+
+
+class EnrichOutcomeOut(BaseModel):
+    status: FetchStatus
+    titles_seen: int = 0
+    ratings_written: int = 0
+    metadata_updated: int = 0
+    aggregates_computed: int = 0
+    errors: list[str] = Field(default_factory=list)
 
 
 class PendingPoster(BaseModel):

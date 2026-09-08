@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -52,6 +53,7 @@ from eifo_api.schemas import (
 from eifo_core import ingest as wire
 from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.models import FetchRun, Title
+from eifo_core.settings import Settings
 from eifo_core.types import utcnow
 
 logger = logging.getLogger("eifo.api.ingest")
@@ -131,18 +133,31 @@ async def store_posters(
     rest of the batch alone and comes back on the next work list, because its
     ``poster_path`` was never set - which is the same recovery an interrupted
     run gets, and means a bad image can never wedge the pipeline.
+
+    Streaming the body is the only part that belongs on the event loop.
+    Unpacking is gzip and tar over a batch of images and filing them is that
+    many writes, which on the loop would stop the server serving anything at
+    all until the batch was done - the same way a sync chunk used to.
     """
     with tempfile.TemporaryDirectory(prefix="eifo-ingest-") as work:
         staging = Path(work)
         body = await _spooled(request, staging / "upload.tar.gz")
-        manifest = _unpack(body, staging / "unpacked")
-        stored, rejected = _file_posters(
-            session, manifest, staging / "unpacked", Path(settings.images_dir)
+        stored, rejected = await run_in_threadpool(
+            _unpack_and_file, session, settings, body, staging / "unpacked"
         )
-        session.commit()
 
     logger.info("stored artwork for %d titles, rejected %d", stored, len(rejected))
     return IngestResult(stored=stored, rejected=rejected)
+
+
+def _unpack_and_file(
+    session: Session, settings: Settings, body: Path, unpacked: Path
+) -> tuple[int, list[RejectedPoster]]:
+    """Unpack the archive and file what it holds. Runs in a worker thread."""
+    manifest = _unpack(body, unpacked)
+    stored, rejected = _file_posters(session, manifest, unpacked, Path(settings.images_dir))
+    session.commit()
+    return stored, rejected
 
 
 async def _spooled(request: Request, destination: Path) -> Path:

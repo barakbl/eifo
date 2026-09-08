@@ -16,18 +16,27 @@ import logging
 import os
 
 from eifo_api.app import create_app
+from eifo_core import logs
+from eifo_core.settings import get_settings
 
 #: Overridable, because a container's log shipper may want DEBUG and a laptop
 #: does not. Anything Python's logging accepts by name.
 LOG_LEVEL = os.environ.get("EIFO_LOG_LEVEL", "INFO").upper()
 
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format="%(asctime)s %(levelname)-7s %(name)s %(message)s",
-)
-# It logs the full request URL, and OAuth exchanges carry secrets in those.
-logging.getLogger("httpx").setLevel(logging.WARNING)
+logs.configure_console(LOG_LEVEL)
 
-app = create_app()
+#: What the file is called when ``log_dir`` is configured.
+PROGRAM = "eifo-api"
+
+_settings = get_settings()
+_log_file = logs.add_file(_settings.log_dir, PROGRAM, LOG_LEVEL)
+if _log_file is not None:
+    # Uvicorn's own loggers do not propagate to the root, so the access log -
+    # which is the record of every request and the status it got - would be the
+    # one thing missing from the file. Attached rather than reconfigured: the
+    # console output stays exactly as uvicorn arranged it.
+    logs.attach_to(logging.getLogger(), "uvicorn", "uvicorn.access", "uvicorn.error")
+
+app = create_app(_settings)
 
 __all__ = ["app"]

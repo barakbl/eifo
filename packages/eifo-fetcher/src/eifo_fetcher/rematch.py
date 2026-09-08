@@ -34,9 +34,9 @@ from dataclasses import dataclass, field
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from eifo_core.match import _search_years, adopt_tmdb_hit, confident_tmdb_choice
 from eifo_core.models import EnrichAttempt, Title
 from eifo_fetcher.dedupe import MergePlan, MergeTally, apply_merges
-from eifo_fetcher.match import _search_years, adopt_tmdb_hit, confident_tmdb_choice
 from eifo_fetcher.review import not_a_title
 from eifo_fetcher.tmdb import TmdbClient, TmdbTitle
 

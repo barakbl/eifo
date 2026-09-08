@@ -21,18 +21,13 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
 from eifo_core.enums import FetchPhase
-from eifo_core.fts import ensure_search_triggers
 from eifo_core.settings import Settings
-from eifo_fetcher import attempts
+from eifo_fetcher.credentials import api_client
 from eifo_fetcher.heartbeat import ping
 from eifo_fetcher.http import HttpClient
-from eifo_fetcher.ingest import IngestClient
 from eifo_fetcher.lock import AlreadyRunningError, single_flight
-from eifo_fetcher.pipeline import requested_backfills
-from eifo_fetcher.runner import enrich_all, fetch_images, sync_all
-from eifo_fetcher.runs import close_abandoned_runs
+from eifo_fetcher.runner import enrich_all, fetch_images, phase_client, sync_all
 
 logger = logging.getLogger("eifo.fetch.daemon")
 
@@ -41,14 +36,15 @@ logger = logging.getLogger("eifo.fetch.daemon")
 #: suspended laptop and every busy Pi as a missed night.
 MISFIRE_GRACE_SECONDS = 3600
 
-#: Phase names in dependency order, each with the function that runs it.
-PHASES = ("sync", "enrich", "images")
+#: The phases, in dependency order: enrichment needs the titles sync creates,
+#: artwork needs the URLs enrichment fills in.
+PHASES = (FetchPhase.SYNC, FetchPhase.ENRICH, FetchPhase.IMAGES)
 
 #: How often to look for a source somebody has just switched on.
 #:
 #: Short, because this is somebody sitting in front of the Manage tab having
 #: just flipped a switch, and cheap, because with nothing pending it is one
-#: indexed read of a table with a dozen rows in it.
+#: request answered by an indexed read of a table with a dozen rows in it.
 BACKFILL_POLL_SECONDS = 30
 
 
@@ -61,8 +57,13 @@ def _parse_time(value: str) -> tuple[int, int]:
         raise ValueError(f"invalid schedule time {value!r}; expected HH:MM") from exc
 
 
-def _run_phase(settings: Settings, phase: str) -> bool:
-    """Run one phase with its own engine, so a failure cannot poison the next.
+def _run_phase(settings: Settings, phase: FetchPhase) -> bool:
+    """Run one phase with its own client, so a failure cannot poison the next.
+
+    It opens no database. Every phase writes through the API now, which is what
+    lets the daemon run on a machine the catalog is not on - the case the whole
+    of this refactor is for, and one that used to be impossible here because
+    this function reached for an engine before it did anything else.
 
     Returns:
         Whether it got through without raising. A phase that fails does not stop
@@ -70,37 +71,27 @@ def _run_phase(settings: Settings, phase: str) -> bool:
         artwork still has yesterday's URLs, so there is more to gain from
         carrying on than from standing still.
     """
-    engine = create_engine_from_settings(settings)
     try:
-        require_schema(engine, settings.db_url)
-        ensure_search_triggers(engine)
-        session_factory = make_session_factory(engine)
-        # We hold the fetcher lock, so anything still marked running belongs to
-        # a process that is gone. Said now rather than left to look live.
-        with session_factory() as session:
-            close_abandoned_runs(session)
-        with HttpClient() as http:
-            if phase == "sync":
-                sync_all(session_factory, settings, http=http)
-            elif phase == "enrich":
-                enrich_all(session_factory, settings, http=http)
+        with HttpClient() as http, phase_client(settings, phase) as api:
+            if phase is FetchPhase.SYNC:
+                sync_all(settings, http=http, api=api)
+            elif phase is FetchPhase.ENRICH:
+                enrich_all(settings, http=http, api=api)
             else:
-                with (
-                    attempts.attempted(settings, FetchPhase.IMAGES),
-                    IngestClient.from_settings(settings) as api,
-                ):
-                    fetch_images(settings, http=http, api=api)
+                fetch_images(settings, http=http, api=api)
         return True
     except Exception:
         # A scheduled run must never take the daemon down with it.
-        logger.exception("scheduled %s failed", phase)
+        logger.exception("scheduled %s failed", phase.value)
         return False
-    finally:
-        engine.dispose()
 
 
 def run_backfills(settings: Settings) -> bool:
     """Pull the catalogue of any source an operator has just switched on.
+
+    Which sources those are is asked of the API rather than read from a table:
+    this process has no database, and the ask was made in the Manage tab on the
+    machine that does.
 
     Sync only. Enrichment and artwork are the nightly chain's business and cost
     far more than the titles do - what the operator asked to see is the service
@@ -110,34 +101,39 @@ def run_backfills(settings: Settings) -> bool:
         Whether anything ran without error. Nothing pending is a success: there
         was nothing to get wrong.
     """
-    engine = create_engine_from_settings(settings)
     try:
-        require_schema(engine, settings.db_url)
-        session_factory = make_session_factory(engine)
-        with session_factory() as session:
-            wanted = requested_backfills(session)
-        if not wanted:
-            return True
+        # A bare client, not phase_client: this runs every thirty seconds and
+        # nearly always finds nothing, and the per-phase housekeeping - posting
+        # the previous attempt, re-declaring what credits every score - is work
+        # for a run that is about to happen rather than for a question.
+        with api_client(settings) as api:
+            wanted = api.requested_backfills()
+            if not wanted:
+                return True
 
-        # The nightly chain and this share one lock: a backfill must not run
-        # beside a full sync, and if the nightly run has the lock it will pick
-        # these up itself in a few hours anyway - the ask keeps until then.
-        try:
-            with single_flight(settings):
-                logger.info("backfilling on request: %s", ", ".join(wanted))
-                with HttpClient() as http:
+            # The nightly chain and this share one lock: a backfill must not
+            # run beside a full sync, and if the nightly run has the lock it
+            # will pick these up itself in a few hours anyway - the ask keeps
+            # until then.
+            try:
+                with (
+                    single_flight(settings),
+                    phase_client(settings, FetchPhase.SYNC, api=api),
+                    HttpClient() as http,
+                ):
+                    logger.info("backfilling on request: %s", ", ".join(wanted))
                     # sync_all clears the asks it answered, so a fetcher killed
                     # partway leaves them standing and the next tick retries.
-                    sync_all(session_factory, settings, http=http, only=wanted)
-        except AlreadyRunningError:
-            logger.info("backfill deferred, another fetcher holds the lock: %s", ", ".join(wanted))
+                    sync_all(settings, http=http, api=api, only=wanted)
+            except AlreadyRunningError:
+                logger.info(
+                    "backfill deferred, another fetcher holds the lock: %s", ", ".join(wanted)
+                )
         return True
     except Exception:
         # Same rule as a scheduled phase: never take the daemon down.
         logger.exception("requested backfill failed")
         return False
-    finally:
-        engine.dispose()
 
 
 def run_nightly(settings: Settings) -> bool:
@@ -153,7 +149,7 @@ def run_nightly(settings: Settings) -> bool:
             ping(settings, "start")
             ok = True
             for phase in PHASES:
-                logger.info("running %s", phase)
+                logger.info("running %s", phase.value)
                 ok &= _run_phase(settings, phase)
             ping(settings, "" if ok else "fail")
             return ok
@@ -194,7 +190,7 @@ def run_daemon(settings: Settings) -> int:
     )
     logger.info(
         "scheduled %s nightly at %02d:%02d UTC, requested backfills every %ds",
-        " -> ".join(PHASES),
+        " -> ".join(phase.value for phase in PHASES),
         hour,
         minute,
         BACKFILL_POLL_SECONDS,

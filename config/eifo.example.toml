@@ -8,6 +8,17 @@ db_url = "sqlite:///data/eifo.db"
 images_dir = "data/images"
 public_origin = "http://localhost:3436"
 
+# Where both programs also write their output, one rotating file each:
+# data/logs/eifo-api.log and data/logs/eifo-fetch.log. Unset means the console
+# only, which is right for a terminal and wrong for everything else - the
+# menu-bar companion starts both of them itself and has no console to show, so
+# without this the record of a nightly run is whatever row it managed to write,
+# which excludes every failure that stopped it writing one.
+#
+# Rotates at 5MB and keeps five older files, so it is bounded without anybody
+# remembering it is there. Watch one with: tail -f data/logs/eifo-fetch.log
+log_dir = "data/logs"
+
 # Where the fetcher sends downloaded artwork. The artwork phase writes through
 # the API rather than to the disk, so it can run on one machine and fill the
 # catalog on another. Left unset it talks to the API on this machine, which is

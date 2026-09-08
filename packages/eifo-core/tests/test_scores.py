@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from eifo_core.enums import RatingProvider as P
+from eifo_core.scores import RatingInput, aggregate, format_score, normalise
 from eifo_core.settings import ScoresConfig, ScoreWeights
-from eifo_fetcher.scores import RatingInput, aggregate, format_score, normalise
 
 
 def config(**overrides: object) -> ScoresConfig:

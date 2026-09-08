@@ -1,6 +1,13 @@
-"""The sync pipeline: fetch, match, upsert, sweep, record.
+"""The sync pipeline: fetch, resolve, ship.
 
-Two rules here exist to keep the catalog honest when a scraper misbehaves:
+What is left of it. Reading a service's catalog is still here - that is the
+part that needs plugins, an HTTP client and somebody's connection - but nothing
+after that is. The listings go to ``/api/v1/ingest/sync``, which matches them
+against the catalog, writes the rows, sweeps what has stopped being offered and
+judges whether to believe the run at all.
+
+The two rules that keep a misbehaving scraper from emptying a catalog are still
+enforced, and still on every run; they simply live where the catalog does now:
 
 * **Two strikes** - availability is only retired after an item has been missing
   from two consecutive *successful* syncs, so one flaky run never expires a
@@ -8,31 +15,30 @@ Two rules here exist to keep the catalog honest when a scraper misbehaves:
 * **The volume guard** - a sync returning far less than the previous successful
   run is treated as a broken parser, not as mass removal: the run is recorded as
   ``aborted_suspicious`` and no sweep happens.
+
+**TMDB stays on this side.** The API answers a chunk by naming the listings it
+could not place from the catalog alone; only those are looked up here, and
+offered again with the hit attached. Resolving everything up front would be one
+request instead of two and thousands of needless lookups a night, since most
+listings are already bound to a title by the source's own reference.
 """
 
 from __future__ import annotations
 
-import datetime as dt
 import logging
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
-
-from eifo_core.enums import FetchPhase, FetchStatus, OfferType
-from eifo_core.models import Availability, FetchRun, MatchReview, Source, Title
-from eifo_core.offers import Offer, WriteCache, record_offer
+from eifo_core import ingest as wire
+from eifo_core.enums import FetchStatus
+from eifo_core.items import RawItem, SourceInfo, TmdbTitle
 from eifo_core.types import utcnow
-from eifo_fetcher.match import MatchMethod, MatchStats, TitleMatcher
-from eifo_fetcher.people import apply_credits
-from eifo_fetcher.progress import ProgressTicker, tally
-from eifo_fetcher.runs import RunLogCapture, capturing, close_run, new_capture, open_run
+from eifo_fetcher.ingest import IngestClient, IngestError
+from eifo_fetcher.progress import ProgressTicker
+from eifo_fetcher.runs import RunLogCapture, capturing, new_capture
 from eifo_fetcher.sources.base import (
     FetchContext,
-    RawItem,
-    SourceInfo,
     SourcePlugin,
     TooManyErrorsError,
 )
@@ -40,22 +46,12 @@ from eifo_fetcher.tmdb import TmdbClient
 
 logger = logging.getLogger("eifo.fetch.pipeline")
 
-#: Consecutive successful syncs an item may be missing from before retirement.
-MISS_LIMIT = 2
-#: A sync returning less than this share of the previous run is assumed broken.
-VOLUME_GUARD_RATIO = 0.20
-#: Below this many items the ratio is noise, so the guard stays out of the way.
-VOLUME_GUARD_MIN_ITEMS = 50
-#: Items ingested between commits.
-#:
-#: SQLite allows one writer at a time. Matching makes network calls, so holding
-#: a single transaction for a whole source would keep the write lock for minutes
-#: and lock out anything else touching the database - including the next phase
-#: of the same run. Committing as we go keeps each lock short.
-COMMIT_EVERY = 200
+#: Listings per request. The API commits a chunk as one transaction, so this is
+#: also how much work an interrupted run leaves behind.
+CHUNK_SIZE = wire.SYNC_CHUNK_SIZE
 
 
-@dataclass(slots=True)
+@dataclass
 class SyncResult:
     """What one source's sync did."""
 
@@ -87,9 +83,25 @@ class SyncResult:
             "error_count": len(self.errors),
         }
 
+    @classmethod
+    def of(cls, payload: dict[str, Any]) -> SyncResult:
+        """The outcome the API reported, as this side's result type."""
+        return cls(
+            source_key=str(payload["source_key"]),
+            status=FetchStatus(payload["status"]),
+            items_seen=int(payload.get("items_seen", 0)),
+            availability_created=int(payload.get("availability_created", 0)),
+            availability_updated=int(payload.get("availability_updated", 0)),
+            titles_created=int(payload.get("titles_created", 0)),
+            retired=int(payload.get("retired", 0)),
+            reviews_expired=int(payload.get("reviews_expired", 0)),
+            errors=list(payload.get("errors") or []),
+            matched_by=dict(payload.get("matched_by") or {}),
+        )
+
 
 def sync_source(
-    session: Session,
+    api: IngestClient,
     plugin: SourcePlugin,
     info: SourceInfo,
     ctx: FetchContext,
@@ -97,397 +109,159 @@ def sync_source(
     tmdb: TmdbClient | None = None,
     items: Iterable[RawItem] | None = None,
     capture: RunLogCapture | None = None,
+    chunk_size: int = CHUNK_SIZE,
 ) -> SyncResult:
-    """Sync one source end to end and record a ``fetch_runs`` row.
+    """Read one source end to end and ship it, chunk by chunk.
 
     Args:
-        tmdb: enables the matcher's TMDB lookup; without it the matcher falls
-            back to external ids and local fuzzy comparison only.
-        items: pre-fetched items, from :class:`~eifo_fetcher.prefetch.Prefetcher`
-            or from a test; normally the plugin is asked to fetch them here.
+        tmdb: used only for the listings the API could not place. Without one
+            the matcher on the far side falls back to external ids and local
+            fuzzy comparison, exactly as it does without a key today.
+        items: pre-fetched listings, from the prefetcher or from a test.
         capture: a log capture already collecting for this source. The
             prefetcher opens one before it starts reading, which is how lines
             logged during the fetch reach the row for the source that logged
             them rather than whichever row happened to be open at the time.
     """
     started_at = utcnow()
-    source = upsert_source(session, info)
-    session.flush()
+    run_id = api.begin_sync(info, started_at=started_at)
 
-    # Opened before any work, so a sync that dies mid-flight leaves a row
-    # saying it started rather than no row at all.
-    run = open_run(session, phase=FetchPhase.SYNC, source_key=info.key, started_at=started_at)
-    result = SyncResult(source_key=info.key, status=FetchStatus.OK)
-    matcher = TitleMatcher(session, tmdb=tmdb, stats=MatchStats())
-
-    fatal: str | None = None
-    # Everything this source says goes into its own row. "mako returned nothing"
-    # used to be answerable only by running it again and watching.
+    # Everything this source says goes into its own row. "mako returned
+    # nothing" used to be answerable only by running it again and watching.
     captured = capture if capture is not None else new_capture()
+    status = FetchStatus.OK
+    fatal: str | None = None
+
     with capturing(captured):
         try:
             stream = items if items is not None else plugin.fetch(ctx)
-            _ingest(session, stream, source, matcher, result, ctx, started_at)
+            _ship(api, run_id, stream, info, ctx, tmdb, chunk_size)
         except TooManyErrorsError as exc:
             logger.error("%s", exc)
-            result.status = FetchStatus.FAILED
+            status = FetchStatus.FAILED
             fatal = f"{type(exc).__name__}: {exc}"
-            session.rollback()
         except Exception as exc:
             logger.exception("source %r failed", info.key)
-            result.status = FetchStatus.FAILED
+            status = FetchStatus.FAILED
             # Whatever ended the run goes into the row. Without this a failed
             # sync records errors: [] - it says that it failed and nothing
             # about why, which is the one question anyone reading it will have.
             fatal = f"{type(exc).__name__}: {exc}"
-            # A failure mid-flush leaves the session needing a rollback; without
-            # one even recording the failure would raise, turning a bad source
-            # into a crashed run.
-            session.rollback()
 
-        result.errors = list(ctx.errors)
-        if fatal is not None:
-            result.errors.append(f"fatal: {fatal}")
-        result.matched_by = matcher.stats.as_dict()
+    errors = list(ctx.errors)
+    if fatal is not None:
+        errors.append(f"fatal: {fatal}")
 
-        if result.status is FetchStatus.OK and _looks_truncated(
-            session, info.key, result.items_seen
-        ):
-            result.status = FetchStatus.ABORTED_SUSPICIOUS
-            logger.error(
-                "%s returned %d items, far below its previous run; assuming a broken "
-                "parser and skipping the sweep",
-                info.key,
-                result.items_seen,
-            )
+    try:
+        outcome = api.finish_sync(run_id, status=status, errors=errors, log=captured.text())
+    except IngestError as exc:
+        # The work is done and mostly stored; only the verdict is missing. The
+        # run stays open, which is what an unfinished run should look like, and
+        # the server closes it once it is old enough to be certainly dead.
+        logger.warning("%s: could not finish the run: %s", info.key, exc)
+        return SyncResult(
+            source_key=info.key, status=FetchStatus.FAILED, errors=[*errors, str(exc)]
+        )
 
-        # Only a run we believe swept: a failure would retire a live catalog.
-        if result.status is FetchStatus.OK:
-            result.retired = sweep_source(session, source, run_started_at=started_at)
-            # A park is rewritten every time a sync sees the item again, so one
-            # older than this run is an item the source has stopped listing.
-            # Nobody should be asked about a listing that is gone.
-            result.reviews_expired = expire_reviews(session, info.key, before=started_at)
-
-    # Outside the capture: the log is what the run said, and this is the run
-    # being written down.
-    close_run(session, run, status=result.status, stats=result.as_stats(), log=captured.text())
-    return result
+    return SyncResult.of(outcome)
 
 
-def _ingest(
-    session: Session,
+def _ship(
+    api: IngestClient,
+    run_id: int,
     items: Iterable[RawItem],
-    source: Source,
-    matcher: TitleMatcher,
-    result: SyncResult,
+    info: SourceInfo,
     ctx: FetchContext,
-    run_started_at: dt.datetime,
+    tmdb: TmdbClient | None,
+    chunk_size: int,
 ) -> None:
-    titles_before = _title_count(session)
+    """Send the stream in chunks, resolving whatever the API hands back."""
     ticker = ProgressTicker()
-
-    # Rows added but not yet flushed are invisible to a SELECT, so a title seen
-    # twice in one stream would be inserted twice and break the unique
-    # constraint. Sources repeat themselves routinely - paginated APIs return a
-    # title again when the underlying result set shifts between pages, and two
-    # listings can resolve to the same canonical title.
-    written: dict[tuple[int, int, OfferType], Availability] = {}
+    seen = 0
+    chunk: list[RawItem] = []
 
     for item in items:
-        # Between items rather than after a successful match, and so counted
-        # over what has been done rather than what is about to be. Both of these
-        # used to sit at the bottom of the loop, past a `continue` that an
-        # unmatched item takes - so a run working through a long stretch of
-        # parked listings neither committed nor said anything. Parking a listing
-        # is a write like any other, which made that a write lock held open for
-        # as long as the stretch lasted, on a run that looked hung.
-        if result.items_seen and result.items_seen % COMMIT_EVERY == 0:
-            # Release the write lock regularly. A partially ingested source is
-            # safe: the run is recorded as failed, so nothing sweeps, and the
-            # next run upserts the rest.
-            session.commit()
-        if ticker.due(result.items_seen):
-            # A catalog of twenty thousand listings is twenty minutes in which
-            # the only thing telling this apart from a hang is that it keeps
-            # saying where it has got to.
-            logger.info("%s: %s", source.key, _progress(result, matcher, ctx))
+        chunk.append(item)
+        seen += 1
+        if len(chunk) >= chunk_size:
+            _send(api, run_id, chunk, info, tmdb)
+            chunk = []
+            if ticker.due(seen):
+                # A catalog of twenty thousand listings is twenty minutes in
+                # which the only thing telling this apart from a hang is that
+                # it keeps saying where it has got to.
+                logger.info("%s: %d listing(s) sent", info.key, seen)
 
-        result.items_seen += 1
-        match = matcher.match(item)
-        if match.title is None:
-            continue
-        # Remember where artwork can be fetched from; the images phase downloads
-        # it later so a slow CDN never holds up a catalog sync.
-        if item.poster_url and not match.title.poster_source_url:
-            match.title.poster_source_url = item.poster_url
-        # A catalogue that knows who made a film is often the only thing that
-        # does: TMDB carries little Israeli cinema. Filling gaps only, as
-        # enrichment does, so a scrape never displaces a canonical answer.
-        if item.origin_countries and not match.title.origin_countries:
-            match.title.origin_countries = item.origin_countries
-        if item.credits:
-            apply_credits(session, match.title, item.credits, source=source.key)
-        created = upsert_availability(
-            session,
-            title=match.title,
-            source=source,
-            item=item,
-            seen_at=run_started_at,
-            written=written,
-        )
-        if created:
-            result.availability_created += 1
-        else:
-            result.availability_updated += 1
-
-    session.flush()
-    result.titles_created = _title_count(session) - titles_before
+    if chunk:
+        _send(api, run_id, chunk, info, tmdb)
+    logger.info("%s: %d listing(s) sent in total", info.key, seen)
 
 
-def _progress(result: SyncResult, matcher: TitleMatcher, ctx: FetchContext) -> str:
-    """One line saying how far into a source's catalog this run is, and to what.
+def _send(
+    api: IngestClient,
+    run_id: int,
+    chunk: list[RawItem],
+    info: SourceInfo,
+    tmdb: TmdbClient | None,
+) -> None:
+    """One chunk, and the second pass for whatever it could not place."""
+    answer = api.offer(run_id, [{"item": wire.item_to_wire(item)} for item in chunk])
+    _report(info.key, answer)
 
-    The counts are the ones somebody watching would ask for: is it finding
-    anything new, is it finding anything at all, and is it going wrong. Zeroes
-    are left out - on a settled catalog most of these are zero every night, and
-    printing them crowds out the numbers that are not.
+    pending = answer.get("needs_tmdb") or []
+    if not pending:
+        return
+    if tmdb is None:
+        # No key configured. The far side will fall back to fuzzy matching,
+        # which is what a keyless install has always done.
+        logger.debug("%s: %d listing(s) need TMDB and no key is set", info.key, len(pending))
+
+    resolved = [_resolve(entry, tmdb) for entry in pending]
+    second = api.offer(run_id, resolved)
+    _report(info.key, second)
+
+
+def _resolve(entry: dict[str, Any], tmdb: TmdbClient | None) -> dict[str, Any]:
+    """Look one listing up, and pair the hit with it.
+
+    A listing nothing is found for is still sent back, and marked as having been
+    looked for. That flag is the whole handshake: without it "I found nothing"
+    reads as "I have not looked", and the far side defers the same listing for
+    ever rather than falling through to fuzzy matching, parking or creating.
     """
-    counts = matcher.stats.counts
-    return "{} listings in - {}".format(
-        f"{result.items_seen:,}",
-        tally(
-            new_titles=counts.get(MatchMethod.CREATED.value, 0),
-            new_offers=result.availability_created,
-            already_listed=result.availability_updated,
-            parked_for_review=counts.get(MatchMethod.REVIEW.value, 0),
-            errors=ctx.error_count,
-        ),
-    )
-
-
-def upsert_source(session: Session, info: SourceInfo) -> Source:
-    """Create or refresh the source row, reactivating it if it had been retired."""
-    source = session.scalar(select(Source).where(Source.key == info.key))
-    if source is None:
-        source = Source(
-            key=info.key,
-            name=info.name,
-            kind=info.kind,
-            website_url=info.website_url,
-            logo_path=info.logo_path,
-        )
-        session.add(source)
-        return source
-
-    source.name = info.name
-    source.kind = info.kind
-    source.website_url = info.website_url
-    if info.logo_path:
-        source.logo_path = info.logo_path
-    if not source.active:
-        source.active = True
-        source.deactivated_at = None
-    return source
-
-
-def upsert_availability(
-    session: Session,
-    *,
-    title: Title,
-    source: Source,
-    item: RawItem,
-    seen_at: dt.datetime,
-    written: WriteCache | None = None,
-) -> bool:
-    """Record that a title is offered right now. Returns True if newly created.
-
-    A thin translation from a source listing to the offer it implies; the write
-    itself is :func:`eifo_core.offers.record_offer`, which the API also calls
-    when a reviewer attaches a parked listing to a title.
-    """
-    return record_offer(
-        session,
-        title=title,
-        source=source,
-        offer=Offer(
-            offer_type=item.offer_type,
-            deep_link_url=item.deep_link_url,
-            source_ref=item.source_ref,
-            price_minor=item.price_minor,
-            price_currency=item.price_currency,
-        ),
-        seen_at=seen_at,
-        written=written,
-    )
-
-
-def sweep_source(session: Session, source: Source, *, run_started_at: dt.datetime) -> int:
-    """Strike, then retire, availability this run did not see.
-
-    Returns the number of rows retired by this sweep.
-    """
-    stale = session.scalars(
-        select(Availability).where(
-            Availability.source_id == source.id,
-            Availability.is_current.is_(True),
-            Availability.last_seen < run_started_at,
-        )
-    ).all()
-
-    retired = 0
-    now = utcnow()
-    for availability in stale:
-        availability.miss_count += 1
-        if availability.miss_count >= MISS_LIMIT:
-            availability.is_current = False
-            availability.gone_since = now
-            retired += 1
-
-    session.flush()
-    return retired
-
-
-def expire_reviews(session: Session, source_key: str, *, before: dt.datetime) -> int:
-    """Drop parked items a source has stopped listing.
-
-    A park is deleted and rewritten every time a sync sees the item again, so
-    one older than this run is an item the source no longer carries. Asking
-    somebody about a listing that is gone wastes the only scarce thing in the
-    review queue, which is their attention. If it comes back, so does the park.
-    """
-    stale = session.scalars(
-        select(MatchReview).where(
-            MatchReview.source_key == source_key,
-            MatchReview.resolved_at.is_(None),
-            MatchReview.created_at < before,
-        )
-    ).all()
-    for review in stale:
-        session.delete(review)
-    removed = len(stale)
-    if removed:
-        logger.info("%s: %d parked item(s) are no longer listed", source_key, removed)
-    return removed
-
-
-def _looks_truncated(session: Session, source_key: str, items_seen: int) -> bool:
-    """Whether this run is too small to believe, given the previous one."""
-    previous = session.scalar(
-        select(FetchRun)
-        .where(
-            FetchRun.source_key == source_key,
-            FetchRun.phase == FetchPhase.SYNC,
-            FetchRun.status == FetchStatus.OK,
-        )
-        .order_by(FetchRun.started_at.desc())
-        .limit(1)
-    )
-    if previous is None:
-        return False
-
-    baseline = int(previous.stats.get("items_seen", 0))
-    if baseline < VOLUME_GUARD_MIN_ITEMS:
-        return False
-    return items_seen < baseline * VOLUME_GUARD_RATIO
-
-
-def _title_count(session: Session) -> int:
-    return session.scalar(select(func.count()).select_from(Title)) or 0
-
-
-def register_declared_sources(
-    session: Session,
-    declared: Mapping[str, SourceInfo],
-    *,
-    enabled: Iterable[str],
-) -> list[str]:
-    """Give every plugin a row, whether or not it is switched on.
-
-    Returns the keys newly written.
-
-    A source used to exist only once it had synced, which made the operator's
-    source list a list of sources that had already run. A service switched off -
-    or one added in an upgrade - was invisible on the one screen whose job is
-    showing services, so the toggle that would have switched it on was not there
-    to press. The database is the only thing the fetcher and the API share, so
-    what the fetcher knows about has to be written down for the API to see it.
-
-    A row created for a source that is not switched on starts inactive, which is
-    what it is: declared, known, not currently collected.
-    """
-    stored = {
-        source.key: source
-        for source in session.scalars(select(Source).where(Source.key.in_(list(declared)))).all()
+    listing = {key: value for key, value in entry.items() if key != "index"}
+    hit = _search(listing, tmdb) if tmdb is not None else None
+    return {
+        "item": listing,
+        "tmdb": None if hit is None else wire.tmdb_to_wire(hit),
+        "resolved": True,
     }
-    switched_on = set(enabled)
-    written: list[str] = []
 
-    for key, info in declared.items():
-        existing = stored.get(key)
-        if existing is not None:
-            # A plugin that changes its own default has to be able to say so:
-            # the API reads this column and cannot ask the plugin directly.
-            existing.default_enabled = info.default_enabled
-            continue
-        session.add(
-            Source(
-                key=key,
-                name=info.name,
-                kind=info.kind,
-                website_url=info.website_url,
-                logo_path=info.logo_path,
-                default_enabled=info.default_enabled,
-                active=key in switched_on,
-                deactivated_at=None if key in switched_on else utcnow(),
-            )
+
+def _search(listing: dict[str, Any], tmdb: TmdbClient) -> TmdbTitle | None:
+    try:
+        item = wire.item_from_wire(listing)
+    except wire.WireError:  # pragma: no cover - it came from us
+        return None
+    for query in filter(None, (item.name, item.name_alt)):
+        try:
+            for candidate in tmdb.search(item.kind, query, year=item.year):
+                return candidate
+        except Exception:
+            logger.exception("TMDB search failed for %r", query)
+            return None
+    return None
+
+
+def _report(source_key: str, answer: dict[str, Any]) -> None:
+    """Say what the far side made of a chunk, and complain about what it would not take."""
+    for rejection in answer.get("rejected") or []:
+        logger.warning(
+            "%s: listing %s was not stored: %s",
+            source_key,
+            rejection.get("index"),
+            rejection.get("reason"),
         )
-        written.append(key)
-
-    session.flush()
-    return written
-
-
-def requested_backfills(session: Session) -> list[str]:
-    """Source keys an operator has asked to have pulled in full, oldest first."""
-    return list(
-        session.scalars(
-            select(Source.key)
-            .where(Source.backfill_requested_at.is_not(None))
-            .order_by(Source.backfill_requested_at)
-        ).all()
-    )
-
-
-def clear_backfill_requests(session: Session, keys: Iterable[str]) -> None:
-    """Mark an operator's asks as answered.
-
-    Cleared after the sync rather than before it, so a fetcher that dies partway
-    leaves the ask standing and the next tick tries again. The cost of running
-    one twice is a repeated sync; the cost of clearing one too early is a source
-    that was asked for and never arrives.
-    """
-    for source in session.scalars(select(Source).where(Source.key.in_(list(keys)))).all():
-        source.backfill_requested_at = None
-    session.flush()
-
-
-def deactivate_missing_sources(session: Session, active_keys: Iterable[str]) -> list[str]:
-    """Retire sources that configuration or plugins no longer provide.
-
-    Their titles and availability history stay untouched - the UI badges them as
-    "no longer tracked" rather than pretending they never existed.
-    """
-    keep = set(active_keys)
-    retired: list[str] = []
-    now = utcnow()
-    for source in session.scalars(select(Source).where(Source.active.is_(True))).all():
-        if source.key not in keep:
-            source.active = False
-            source.deactivated_at = now
-            retired.append(source.key)
-    session.flush()
-    return retired
 
 
 def iter_with_error_capture(

@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
 from typing import Any
 
 from eifo_core.enums import TitleKind
+from eifo_core.items import MEDIA_PATH as _MEDIA_PATH
+from eifo_core.items import TmdbTitle
 from eifo_fetcher.http import HttpClient
 
 BASE_URL = "https://api.themoviedb.org/3"
@@ -41,24 +42,9 @@ MAX_PAGE = 500
 
 logger = logging.getLogger("eifo.fetch.tmdb")
 
-_MEDIA_PATH = {TitleKind.MOVIE: "movie", TitleKind.SERIES: "tv"}
-
-
-@dataclass(frozen=True, slots=True)
-class TmdbTitle:
-    """A search or discover result, normalised across the movie/tv split."""
-
-    tmdb_id: int
-    kind: TitleKind
-    name: str
-    original_name: str | None
-    year: int | None
-    overview: str | None
-    poster_path: str | None
-
-    @property
-    def media_type(self) -> str:
-        return _MEDIA_PATH[self.kind]
+# TmdbTitle is re-exported: it crosses the wire now, so it lives in core, but
+# every caller here reaches for it beside the client that returns it.
+__all__ = ["TmdbClient", "TmdbTitle"]
 
 
 class TmdbClient:

@@ -8,9 +8,15 @@ import time
 from typing import Any
 
 import pytest
+from live import LiveApi
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
+from eifo_core import ingest as wire
+from eifo_core.enriching import (
+    mislabelled_names,
+    titles_due,
+)
 from eifo_core.enums import (
     EnrichOutcome,
     FetchPhase,
@@ -32,20 +38,40 @@ from eifo_core.models import (
 )
 from eifo_core.settings import Settings
 from eifo_core.types import utcnow
-from eifo_fetcher.enrich import (
-    COMMIT_EVERY,
-    apply_rate_limits,
-    enrich_titles,
-    mislabelled_names,
-    recompute_all_aggregates,
-    titles_due,
-)
+from eifo_fetcher.enrich import apply_rate_limits, enrich_titles
 from eifo_fetcher.enrichers import discover_enrichers
 from eifo_fetcher.enrichers.base import Enricher, EnrichResult, Rating, TitleView
 from eifo_fetcher.enrichers.rt import HOST as RT_HOST
 from eifo_fetcher.enrichers.seret import HOST as SERET_HOST
 from eifo_fetcher.http import HttpClient, RateLimiter
+from eifo_fetcher.ingest import IngestClient
 from eifo_fetcher.sources.base import FetchContext, TooManyErrorsError
+
+
+@pytest.fixture
+def session_factory(live_api: LiveApi) -> sessionmaker[Session]:
+    """The catalog the API writes to, which is the only one an enrich touches.
+
+    Overriding the package fixture rather than adding a second name: every
+    assertion below is about what an enrich left in the catalog, and there is
+    now exactly one process that puts it there.
+    """
+    return live_api.session_factory
+
+
+def run_enrich(session: Session, *args: Any, **kwargs: Any) -> Any:
+    """Enrich, then let this session see what the application wrote.
+
+    The catalog is written by the API now, in its own session and its own
+    transaction. A test holding a ``Title`` it loaded beforehand would go on
+    seeing the values it was loaded with, however many rows the run changed
+    underneath it - so the identity map is emptied here, once, rather than in
+    thirty assertions that would each have to remember to.
+    """
+    try:
+        return enrich_titles(*args, **kwargs)
+    finally:
+        session.expire_all()
 
 
 class FakeEnricher(Enricher):
@@ -213,21 +239,22 @@ class TestSchedulingTheNextAttempt:
 
     def _run(
         self,
+        api: IngestClient,
         session: Session,
         settings: Settings,
         http: Any,
         enricher: FakeEnricher,
         **kwargs: Any,
     ) -> None:
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings, **kwargs)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings, **kwargs)
 
     def test_a_rated_title_comes_back_on_the_refresh_schedule(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         title = add_title(session)
         rated = FakeEnricher(EnrichResult(ratings=[Rating(RatingProvider.SERET_VIEWERS, 8.0)]))
 
-        self._run(session, settings, http, rated)
+        self._run(api, session, settings, http, rated)
 
         attempt = session.get(EnrichAttempt, title.id)
         assert attempt is not None
@@ -237,7 +264,7 @@ class TestSchedulingTheNextAttempt:
         assert _days_until(attempt.due_at) == settings.enrich.refresh_days
 
     def test_available_titles_are_refreshed_sooner(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """What people can actually watch is worth keeping fresher."""
         source = Source(
@@ -254,18 +281,18 @@ class TestSchedulingTheNextAttempt:
         session.commit()
         rated = FakeEnricher(EnrichResult(ratings=[Rating(RatingProvider.SERET_VIEWERS, 8.0)]))
 
-        self._run(session, settings, http, rated)
+        self._run(api, session, settings, http, rated)
 
         assert _days_until(_attempt(session, hot).due_at) == settings.enrich.hot_refresh_days
         assert _days_until(_attempt(session, cold).due_at) == settings.enrich.refresh_days
 
     def test_a_title_nobody_rates_is_recorded_as_no_data(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """Known exactly, and simply not carried by any provider - most of this catalog."""
         title = add_title(session, tmdb_id=1234)
 
-        self._run(session, settings, http, FakeEnricher(None))
+        self._run(api, session, settings, http, FakeEnricher(None))
 
         attempt = _attempt(session, title)
         assert attempt.outcome is EnrichOutcome.NO_DATA
@@ -273,29 +300,29 @@ class TestSchedulingTheNextAttempt:
         assert _days_until(attempt.due_at) == settings.enrich.retry_days
 
     def test_a_title_with_no_external_id_is_recorded_as_no_match(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """Nothing to look it up by; matching has to improve before asking again."""
         title = add_title(session, tmdb_id=None, imdb_id=None)
 
-        self._run(session, settings, http, FakeEnricher(None))
+        self._run(api, session, settings, http, FakeEnricher(None))
 
         assert _attempt(session, title).outcome is EnrichOutcome.NO_MATCH
 
     def test_a_provider_failure_is_retried_sooner_than_an_empty_answer(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """A provider being down says nothing about whether the title is rateable."""
         title = add_title(session, tmdb_id=1234)
 
-        self._run(session, settings, http, FakeEnricher(error=RuntimeError("boom")))
+        self._run(api, session, settings, http, FakeEnricher(error=RuntimeError("boom")))
 
         attempt = _attempt(session, title)
         assert attempt.outcome is EnrichOutcome.ERROR
         assert _days_until(attempt.due_at) == settings.enrich.retry_error_days
 
     def test_each_fruitless_attempt_waits_longer(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         title = add_title(session, tmdb_id=1234)
         nothing = FakeEnricher(None)
@@ -303,7 +330,7 @@ class TestSchedulingTheNextAttempt:
         waits = []
         for _ in range(3):
             _attempt_now(session, title)
-            self._run(session, settings, http, nothing)
+            self._run(api, session, settings, http, nothing)
             waits.append(_days_until(_attempt(session, title).due_at))
 
         base = settings.enrich.retry_days
@@ -311,31 +338,31 @@ class TestSchedulingTheNextAttempt:
         assert _attempt(session, title).fruitless == 3
 
     def test_the_wait_stops_doubling_at_the_ceiling(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """Nothing is written off for good: a title TMDB has not rated yet may be rated later."""
         title = add_title(session, tmdb_id=1234)
         add_attempt(session, title, outcome=EnrichOutcome.NO_DATA, fruitless=40, due_at=utcnow())
 
-        self._run(session, settings, http, FakeEnricher(None))
+        self._run(api, session, settings, http, FakeEnricher(None))
 
         assert _days_until(_attempt(session, title).due_at) == settings.enrich.retry_max_days
 
     def test_a_rating_clears_the_backoff(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         title = add_title(session, tmdb_id=1234)
         add_attempt(session, title, outcome=EnrichOutcome.NO_DATA, fruitless=5, due_at=utcnow())
         rated = FakeEnricher(EnrichResult(ratings=[Rating(RatingProvider.SERET_VIEWERS, 8.0)]))
 
-        self._run(session, settings, http, rated)
+        self._run(api, session, settings, http, rated)
 
         attempt = _attempt(session, title)
         assert attempt.outcome is EnrichOutcome.OK
         assert attempt.fruitless == 0
 
     def test_a_run_moves_past_the_titles_the_last_one_could_not_rate(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """The wedge itself.
 
@@ -347,10 +374,10 @@ class TestSchedulingTheNextAttempt:
             add_title(session, name_he=f"סרט {index}", tmdb_id=1000 + index)
         nothing = FakeEnricher(None)
 
-        self._run(session, settings, http, nothing, limit=2)
+        self._run(api, session, settings, http, nothing, limit=2)
         first = [view.id for view in nothing.seen]
         nothing.seen.clear()
-        self._run(session, settings, http, nothing, limit=2)
+        self._run(api, session, settings, http, nothing, limit=2)
         second = [view.id for view in nothing.seen]
 
         assert len(first) == 2
@@ -413,7 +440,7 @@ class TestEnrichTitles:
         return FetchContext(source_key="enrich", http=http, settings=settings)
 
     def test_stores_a_returned_rating(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         add_title(session)
         enricher = FakeEnricher(
@@ -429,7 +456,7 @@ class TestEnrichTitles:
             )
         )
 
-        tally = enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        tally = run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         rating = session.scalars(select(ExternalRating)).one()
         assert rating.provider is RatingProvider.SERET_VIEWERS
@@ -439,45 +466,49 @@ class TestEnrichTitles:
         assert tally.ratings_written == 1
 
     def test_re_enriching_updates_rather_than_duplicates(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         add_title(session)
         first = FakeEnricher(EnrichResult(ratings=[Rating(RatingProvider.SERET_VIEWERS, 7.0)]))
-        enrich_titles(session, [first], self._ctx(http, settings), settings)
+        run_enrich(session, api, [first], self._ctx(http, settings), settings)
 
         second = FakeEnricher(EnrichResult(ratings=[Rating(RatingProvider.SERET_VIEWERS, 9.0)]))
-        enrich_titles(session, [second], self._ctx(http, settings), settings, force=True)
+        run_enrich(session, api, [second], self._ctx(http, settings), settings, force=True)
 
         rating = session.scalars(select(ExternalRating)).one()
         assert rating.score_raw == 9.0
 
     def test_an_out_of_scale_score_is_rejected_not_stored(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """A percentage read as a /10 score would silently skew the aggregate."""
         add_title(session)
         enricher = FakeEnricher(EnrichResult(ratings=[Rating(RatingProvider.SERET_VIEWERS, 89.0)]))
         ctx = self._ctx(http, settings)
 
-        enrich_titles(session, [enricher], ctx, settings)
+        tally = run_enrich(session, api, [enricher], ctx, settings)
 
         assert session.scalars(select(ExternalRating)).all() == []
-        assert ctx.error_count == 1
+        # Refused where the catalog is, and reported back rather than counted
+        # here: this side has no idea what a score is allowed to be, and a
+        # refusal that never crossed back would be a parser bug nobody sees.
+        assert any("outside its 0-10 scale" in entry for entry in tally.errors)
+        assert any("title 1" in entry for entry in tally.errors), "which title, not which index"
 
     def test_a_provider_with_nothing_is_not_an_error(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """Plenty of Israeli titles simply do not exist on foreign sites."""
         add_title(session)
         ctx = self._ctx(http, settings)
 
-        enrich_titles(session, [FakeEnricher(None)], ctx, settings)
+        run_enrich(session, api, [FakeEnricher(None)], ctx, settings)
 
         assert ctx.error_count == 0
         assert session.scalars(select(ExternalRating)).all() == []
 
     def test_one_failing_provider_does_not_stop_the_others(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         add_title(session)
         broken = FakeEnricher(error=RuntimeError("site down"), key="broken")
@@ -486,16 +517,18 @@ class TestEnrichTitles:
         )
         ctx = self._ctx(http, settings)
 
-        enrich_titles(session, [broken, working], ctx, settings)
+        run_enrich(session, api, [broken, working], ctx, settings)
 
         assert len(session.scalars(select(ExternalRating)).all()) == 1
         assert ctx.error_count == 1
 
-    def test_records_a_fetch_run(self, session: Session, settings: Settings, http: Any) -> None:
+    def test_records_a_fetch_run(
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
+    ) -> None:
         add_title(session)
         enricher = FakeEnricher(EnrichResult(ratings=[Rating(RatingProvider.SERET_VIEWERS, 8.0)]))
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         run = session.scalars(select(FetchRun).where(FetchRun.phase == FetchPhase.ENRICH)).one()
         assert run.status is FetchStatus.OK
@@ -507,27 +540,29 @@ class TestMetadataPatch:
     def _ctx(self, http: Any, settings: Settings) -> FetchContext:
         return FetchContext(source_key="enrich", http=http, settings=settings)
 
-    def test_fills_an_empty_field(self, session: Session, settings: Settings, http: Any) -> None:
+    def test_fills_an_empty_field(
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
+    ) -> None:
         add_title(session, name_en=None)
         enricher = FakeEnricher(EnrichResult(metadata_patch={"name_en": "Fauda"}))
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert session.scalars(select(Title)).one().name_en == "Fauda"
 
     def test_never_overwrites_a_known_value(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """A provider's guess must not displace an answer we already trust."""
         add_title(session, name_en="Fauda")
         enricher = FakeEnricher(EnrichResult(metadata_patch={"name_en": "Something Else"}))
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert session.scalars(select(Title)).one().name_en == "Fauda"
 
     def test_ignores_fields_outside_the_allowed_set(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """An enricher has no business writing to bookkeeping columns."""
         title = add_title(session)
@@ -536,14 +571,14 @@ class TestMetadataPatch:
             EnrichResult(metadata_patch={"created_at": "1999-01-01", "poster_path": "x/y.jpg"})
         )
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         stored = session.scalars(select(Title)).one()
         assert stored.created_at == original
         assert stored.poster_path is None
 
     def test_creates_and_attaches_genres(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         add_title(session)
         enricher = FakeEnricher(
@@ -552,7 +587,7 @@ class TestMetadataPatch:
             )
         )
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         genre = session.scalars(select(Genre)).one()
         assert genre.name_en == "Drama"
@@ -560,7 +595,7 @@ class TestMetadataPatch:
         assert session.scalars(select(Title)).one().genres == [genre]
 
     def test_a_genre_listed_twice_is_attached_once(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """TMDB repeats one now and then, and the join table will not have it.
 
@@ -580,12 +615,14 @@ class TestMetadataPatch:
             )
         )
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         stored = session.scalars(select(Title)).one()
         assert sorted(genre.name_en for genre in stored.genres) == ["Comedy", "Drama"]
 
-    def test_the_run_survives_it(self, session: Session, settings: Settings, http: Any) -> None:
+    def test_the_run_survives_it(
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
+    ) -> None:
         """The failure that mattered was not the duplicate; it was the run dying."""
         add_title(session)
         enricher = FakeEnricher(
@@ -597,13 +634,13 @@ class TestMetadataPatch:
             )
         )
 
-        tally = enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        tally = run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert tally.errors == []
         assert session.scalars(select(Title)).one().runtime_minutes == 100
 
     def test_reuses_an_existing_genre(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         session.add(Genre(tmdb_id=18, name_en="Drama"))
         add_title(session)
@@ -611,7 +648,7 @@ class TestMetadataPatch:
             EnrichResult(metadata_patch={"genres": [{"tmdb_id": 18, "name_en": "Drama"}]})
         )
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert len(session.scalars(select(Genre)).all()) == 1
 
@@ -621,75 +658,65 @@ class TestAggregation:
         return FetchContext(source_key="enrich", http=http, settings=settings)
 
     def test_computes_an_aggregate_from_two_providers(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         title = add_title(session)
         add_rating(session, title, provider=RatingProvider.IMDB, score_normalized=80)
         enricher = FakeEnricher(EnrichResult(ratings=[Rating(RatingProvider.TMDB, 6.0)]))
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings, force=True)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings, force=True)
 
         aggregate = session.scalars(select(AggregateScore)).one()
         assert aggregate.score == 75
         assert set(aggregate.components) == {"imdb", "tmdb"}
 
-    def test_recompute_all_rescores_every_rated_title(
-        self, session: Session, settings: Settings
-    ) -> None:
-        """The IMDb bulk pass writes ratings directly, so scores need refreshing."""
-        title = add_title(session)
-        add_rating(session, title, provider=RatingProvider.IMDB, score_normalized=90)
-        add_rating(session, title, provider=RatingProvider.TMDB, score_normalized=70)
-
-        computed = recompute_all_aggregates(session, settings)
-
-        assert computed == 1
-        assert session.scalars(select(AggregateScore)).one().score == 85
-
     def test_a_title_with_no_ratings_gets_no_aggregate_row(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         add_title(session)
 
-        enrich_titles(session, [FakeEnricher(None)], self._ctx(http, settings), settings)
+        run_enrich(session, api, [FakeEnricher(None)], self._ctx(http, settings), settings)
 
         assert session.scalars(select(AggregateScore)).all() == []
 
 
-class TestLockHolding:
-    """SQLite allows one writer, so enrichment must not hold the lock all run."""
+class TestReportingAsItGoes:
+    """Findings are sent in batches, and that is what bounds what a crash loses.
+
+    SQLite allows one writer, so a whole run in one transaction held the write
+    lock for up to twenty-nine minutes against a thirty-second busy timeout, and
+    anything else touching the database waited and then failed. The transaction
+    is on the far side now and the same rule governs it: each batch of findings
+    is one request and one transaction, so a run that dies keeps everything it
+    had already reported.
+    """
 
     def _ctx(self, http: Any, settings: Settings) -> FetchContext:
         return FetchContext(source_key="enrich", http=http, settings=settings)
 
-    def test_commits_during_a_long_batch_rather_than_only_at_the_end(
-        self, session: Session, settings: Settings, http: Any
+    def test_a_long_batch_is_reported_in_several_pieces_not_one(
+        self, live_api: LiveApi, session: Session, settings: Settings, http: Any
     ) -> None:
-        """Every title here means network calls. One transaction for the batch
-        held the write lock for up to twenty-nine minutes against a thirty-second
-        busy timeout, so anything else touching the database waited, then failed."""
-        for index in range(COMMIT_EVERY * 2 + 5):
+        for index in range(wire.ENRICH_CHUNK_SIZE * 2 + 5):
             add_title(session, name_he=f"סרט {index}", tmdb_id=2000 + index)
-        commits = 0
-        original = session.commit
+        sent: list[int] = []
+        original = live_api.api.report
 
-        def counting_commit() -> None:
-            nonlocal commits
-            commits += 1
-            original()
+        def counting_report(run_id: int, entries: list[Any]) -> Any:
+            sent.append(len(entries))
+            return original(run_id, entries)
 
-        session.commit = counting_commit  # type: ignore[method-assign]
+        live_api.api.report = counting_report  # type: ignore[method-assign]
 
-        enrich_titles(session, [FakeEnricher(None)], self._ctx(http, settings), settings)
+        run_enrich(session, live_api.api, [FakeEnricher(None)], self._ctx(http, settings), settings)
 
-        # Opening the run, at least two batch boundaries, and closing it.
-        assert commits > 3
+        assert sent == [wire.ENRICH_CHUNK_SIZE, wire.ENRICH_CHUNK_SIZE, 5]
 
     def test_work_already_done_survives_a_crash_mid_batch(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """A crash used to discard every rating the run had fetched."""
-        for index in range(COMMIT_EVERY + 2):
+        for index in range(wire.ENRICH_CHUNK_SIZE + 2):
             add_title(session, name_he=f"סרט {index}", tmdb_id=3000 + index)
 
         seen = 0
@@ -698,32 +725,32 @@ class TestLockHolding:
             def enrich(self, title: TitleView, ctx: FetchContext) -> EnrichResult | None:
                 nonlocal seen
                 seen += 1
-                if seen > COMMIT_EVERY:
+                if seen > wire.ENRICH_CHUNK_SIZE:
                     raise RuntimeError("provider fell over")
                 return None
 
-        enrich_titles(session, [FailsLate()], self._ctx(http, settings), settings)
+        run_enrich(session, api, [FailsLate()], self._ctx(http, settings), settings)
 
         # The titles from before the failure kept their attempt rows, so the
         # next run starts where this one stopped rather than repeating it.
         recorded = session.scalars(select(EnrichAttempt)).all()
-        assert len(recorded) >= COMMIT_EVERY
+        assert len(recorded) >= wire.ENRICH_CHUNK_SIZE
 
     def test_a_failed_run_records_what_went_wrong(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """A run that says only that it failed leaves the obvious question unanswered."""
         add_title(session)
         exhausted = FakeEnricher(error=TooManyErrorsError("enrich", 25))
 
-        enrich_titles(session, [exhausted], self._ctx(http, settings), settings)
+        run_enrich(session, api, [exhausted], self._ctx(http, settings), settings)
 
         run = session.scalars(select(FetchRun).where(FetchRun.phase == FetchPhase.ENRICH)).one()
         assert run.status is FetchStatus.FAILED
         assert any("TooManyErrorsError" in entry for entry in run.stats["errors"])
 
     def test_a_run_row_exists_while_the_phase_is_still_going(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """So a fetcher killed mid-enrich leaves a trace rather than nothing at all."""
         add_title(session)
@@ -734,7 +761,7 @@ class TestLockHolding:
                 seen.extend(session.scalars(select(FetchRun.status)).all())
                 return None
 
-        enrich_titles(session, [LooksAtTheRun()], self._ctx(http, settings), settings)
+        run_enrich(session, api, [LooksAtTheRun()], self._ctx(http, settings), settings)
 
         assert seen == [FetchStatus.RUNNING]
 
@@ -746,39 +773,41 @@ class TestExternalIdCollisions:
         return FetchContext(source_key="enrich", http=http, settings=settings)
 
     def test_an_id_another_title_owns_is_not_written(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         owner = add_title(session, name_he="חטופות", tmdb_id=479040)
         other = add_title(session, name_he="חטופות", tmdb_id=None)
         enricher = FakeEnricher(EnrichResult(metadata_patch={"tmdb_id": 479040}))
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert other.tmdb_id is None
         assert owner.tmdb_id == 479040
 
-    def test_the_run_carries_on(self, session: Session, settings: Settings, http: Any) -> None:
+    def test_the_run_carries_on(
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
+    ) -> None:
         """It used to raise on the next flush and lose the rest of the batch."""
         add_title(session, name_he="חטופות", tmdb_id=479040)
         add_title(session, name_he="אחר", tmdb_id=None)
         enricher = FakeEnricher(EnrichResult(metadata_patch={"tmdb_id": 479040}))
 
-        tally = enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        tally = run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert tally.titles_seen == 2
 
     def test_a_free_id_is_still_written(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         title = add_title(session, tmdb_id=None)
         enricher = FakeEnricher(EnrichResult(metadata_patch={"tmdb_id": 12345}))
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert title.tmdb_id == 12345
 
     def test_a_series_holding_the_number_does_not_take_a_films_id(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """TMDB numbers films and series separately, and the schema keys them
         as (type, tmdb_id) - so movie 105 is free while series 105 is taken.
@@ -792,32 +821,32 @@ class TestExternalIdCollisions:
         )
         enricher = FakeEnricher(EnrichResult(metadata_patch={"tmdb_id": 105}))
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert film.tmdb_id == 105
 
     def test_the_same_kind_holding_it_still_blocks(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """The guard narrows; it does not go away. Two films cannot share one."""
         owner = add_title(session, type=TitleKind.MOVIE, name_en="Held", tmdb_id=105)
         other = add_title(session, type=TitleKind.MOVIE, name_en="Other", tmdb_id=None)
         enricher = FakeEnricher(EnrichResult(metadata_patch={"tmdb_id": 105}))
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert other.tmdb_id is None
         assert owner.tmdb_id == 105
 
     def test_an_imdb_id_is_global_whatever_the_kind(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """IMDb numbers everything once, so the kind must not narrow that one."""
         add_title(session, type=TitleKind.SERIES, name_en="Held", imdb_id="tt0088763")
         film = add_title(session, type=TitleKind.MOVIE, name_en="Other", imdb_id=None)
         enricher = FakeEnricher(EnrichResult(metadata_patch={"imdb_id": "tt0088763"}))
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert film.imdb_id is None
 
@@ -829,44 +858,44 @@ class TestCorrectingAMislabelledName:
         return FetchContext(source_key="enrich", http=http, settings=settings)
 
     def test_a_wrong_script_english_name_is_replaced(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """Every pass fetched "Spirited Away" and threw it away: the column was not empty."""
         title = add_title(session, name_he=None, name_en="千と千尋の神隠し", tmdb_id=129)
         enricher = FakeEnricher(EnrichResult(metadata_patch={"name_en": "Spirited Away"}))
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert title.name_en == "Spirited Away"
 
     def test_a_real_english_name_is_still_never_overwritten(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         title = add_title(session, name_en="Fauda")
         enricher = FakeEnricher(EnrichResult(metadata_patch={"name_en": "Something Else"}))
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert title.name_en == "Fauda"
 
     def test_one_wrong_answer_is_not_traded_for_another(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         """The replacement has to be in the right script itself."""
         title = add_title(session, name_en="千と千尋の神隠し", tmdb_id=129)
         enricher = FakeEnricher(EnrichResult(metadata_patch={"name_en": "スピリット"}))
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert title.name_en == "千と千尋の神隠し"
 
     def test_hebrew_names_get_the_same_treatment(
-        self, session: Session, settings: Settings, http: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
     ) -> None:
         title = add_title(session, name_he="Fauda", name_en="Fauda")
         enricher = FakeEnricher(EnrichResult(metadata_patch={"name_he": "פאודה"}))
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert title.name_he == "פאודה"
 
@@ -909,6 +938,7 @@ class TestSayingHowFarThroughTheBatchItIs:
 
     def test_it_says_how_much_there_is_before_it_starts(
         self,
+        api: IngestClient,
         session: Session,
         settings: Settings,
         http: Any,
@@ -918,12 +948,15 @@ class TestSayingHowFarThroughTheBatchItIs:
         for index in range(12):
             add_title(session, name_he=f"סדרה {index}")
 
-        enrich_titles(session, [FakeEnricher(EnrichResult())], self._ctx(http, settings), settings)
+        run_enrich(
+            session, api, [FakeEnricher(EnrichResult())], self._ctx(http, settings), settings
+        )
 
         assert "12 title(s) due for enrichment" in self._log(session)
 
     def test_it_reports_its_position_in_the_batch(
         self,
+        api: IngestClient,
         session: Session,
         settings: Settings,
         http: Any,
@@ -932,7 +965,9 @@ class TestSayingHowFarThroughTheBatchItIs:
         for index in range(12):
             add_title(session, name_he=f"סדרה {index}")
 
-        enrich_titles(session, [FakeEnricher(EnrichResult())], self._ctx(http, settings), settings)
+        run_enrich(
+            session, api, [FakeEnricher(EnrichResult())], self._ctx(http, settings), settings
+        )
 
         # Of twelve, not just "10" - the share is the part that says whether to
         # wait, and a bare count never does.
@@ -940,6 +975,7 @@ class TestSayingHowFarThroughTheBatchItIs:
 
     def test_it_says_what_it_is_finding_as_well_as_where_it_is(
         self,
+        api: IngestClient,
         session: Session,
         settings: Settings,
         http: Any,
@@ -957,12 +993,13 @@ class TestSayingHowFarThroughTheBatchItIs:
             )
         )
 
-        enrich_titles(session, [enricher], self._ctx(http, settings), settings)
+        run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         assert "10 ratings" in self._log(session)
 
     def test_a_batch_too_short_to_report_on_still_works(
         self,
+        api: IngestClient,
         session: Session,
         settings: Settings,
         http: Any,
@@ -971,52 +1008,25 @@ class TestSayingHowFarThroughTheBatchItIs:
         """Nothing to say is not the same as something going wrong."""
         add_title(session)
 
-        tally = enrich_titles(
-            session, [FakeEnricher(EnrichResult())], self._ctx(http, settings), settings
+        tally = run_enrich(
+            session, api, [FakeEnricher(EnrichResult())], self._ctx(http, settings), settings
         )
 
         assert tally.titles_seen == 1
         assert "1 title(s) due for enrichment" in self._log(session)
 
     def test_every_title_is_named_for_anybody_watching_it_work(
-        self, session: Session, settings: Settings, http: Any, caplog: Any
+        self, api: IngestClient, session: Session, settings: Settings, http: Any, caplog: Any
     ) -> None:
         """At DEBUG - `eifo-fetch -v`. A batch of five thousand at INFO would
         bury the progress lines and spend the run row's whole log budget on a
         list of titles."""
         add_title(session, name_en="Fauda")
+        enricher = FakeEnricher(EnrichResult(ratings=[Rating(RatingProvider.SERET_VIEWERS, 8.0)]))
 
         with caplog.at_level(logging.DEBUG, logger="eifo.fetch.enrich"):
-            enrich_titles(
-                session, [FakeEnricher(EnrichResult())], self._ctx(http, settings), settings
-            )
+            run_enrich(session, api, [enricher], self._ctx(http, settings), settings)
 
         said = caplog.text
-        assert "enriching 'Fauda'" in said
-        assert "rating(s) written" in said
-
-
-class TestSayingHowFarThroughTheRescoreItIs:
-    def test_it_says_how_many_it_is_about_to_rescore(
-        self,
-        session: Session,
-        settings: Settings,
-        caplog: Any,
-    ) -> None:
-        """The last minutes of an hour-long phase are exactly when somebody is
-        wondering whether to kill it."""
-        title = add_title(session)
-        session.add(
-            ExternalRating(
-                title_id=title.id,
-                provider=RatingProvider.IMDB,
-                score_raw=8.0,
-                score_normalized=80,
-            )
-        )
-        session.commit()
-
-        with caplog.at_level(logging.INFO, logger="eifo.fetch.enrich"):
-            recompute_all_aggregates(session, settings)
-
-        assert "rescoring 1 rated title(s)" in caplog.text
+        assert "enriching 'Fauda' (id 1)" in said
+        assert "finding(s) offered" in said

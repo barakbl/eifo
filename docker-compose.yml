@@ -42,16 +42,23 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    # urlopen raises on any non-2xx, and a members-only install answers /meta
+    # with 401 to anyone not signed in - so the obvious probe reports a healthy
+    # server as unhealthy for the entire life of the deployment.
+    #
+    # The timeout is 20s because it is timing a Python interpreter starting up,
+    # not a request. On a small shared vCPU that alone measures 6-9s, so the
+    # usual 5s can never pass no matter how quickly the server answers.
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - import urllib.request as r; r.urlopen("http://localhost:3436/api/v1/meta")
+        - 'import http.client as c, sys; conn = c.HTTPConnection("localhost", 3436, timeout=5); conn.request("GET", "/api/v1/meta"); sys.exit(0 if conn.getresponse().status in (200, 401) else 1)'
       interval: 30s
-      timeout: 5s
+      timeout: 20s
       retries: 3
-      start_period: 10s
+      start_period: 30s
 
   # Keeps the catalog current: sync, enrich and artwork on the schedule in
   # config/eifo.toml. Drop this service and drive the phases from host cron

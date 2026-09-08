@@ -23,6 +23,7 @@ from typing import Any
 import httpx
 
 from eifo_core.enums import RatingProvider, TitleKind
+from eifo_core.naming import is_hebrew
 from eifo_fetcher.enrichers.base import (
     ICONS_DIR,
     Enricher,
@@ -31,7 +32,6 @@ from eifo_fetcher.enrichers.base import (
     Rating,
     TitleView,
 )
-from eifo_fetcher.match import is_hebrew
 from eifo_fetcher.sources.base import FetchContext
 
 logger = logging.getLogger("eifo.fetch.enrich.rt")

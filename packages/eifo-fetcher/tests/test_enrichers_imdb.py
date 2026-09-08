@@ -1,4 +1,15 @@
-"""The IMDb dataset loader: TSV parsing and the bulk join."""
+"""The IMDb dataset loader: TSV parsing and the bulk join.
+
+The join happens on this side and always did, but for a new reason. It used to
+be here because this is where the download is; it is here now because this is
+the only side that *can* do it - the dataset is over a million rows and the
+catalog is tens of thousands of titles, so the small side crosses the wire and
+the large one stays on the machine that has just downloaded it.
+
+Which means the far end below is the real application: the ids come from it and
+the scores go back to it, and the endpoint is the thing that decides what a
+score is allowed to be.
+"""
 
 from __future__ import annotations
 
@@ -8,9 +19,11 @@ import logging
 from typing import Any
 
 import httpx
+import pytest
 import respx
+from live import LiveApi
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_core.enums import RatingProvider, TitleKind
 from eifo_core.models import ExternalRating, Title
@@ -21,8 +34,15 @@ from eifo_fetcher.enrichers.imdb import (
     parse_ratings,
 )
 from eifo_fetcher.http import HttpClient
+from eifo_fetcher.ingest import IngestClient
 
 HEADER = "tconst\taverageRating\tnumVotes"
+
+
+@pytest.fixture
+def session_factory(live_api: LiveApi) -> sessionmaker[Session]:
+    """The catalog the bulk pass reads its ids from and writes its scores to."""
+    return live_api.session_factory
 
 
 def dataset(*rows: str) -> bytes:
@@ -83,13 +103,15 @@ class TestParseRatings:
 
 class TestBulkJoin:
     @respx.mock
-    def test_creates_ratings_for_matching_titles(self, session: Session, http: HttpClient) -> None:
+    def test_creates_ratings_for_matching_titles(
+        self, api: IngestClient, session: Session, http: HttpClient
+    ) -> None:
         add_title(session, "tt4565380")
         respx.get(DATASET_URL).mock(
             return_value=httpx.Response(200, content=dataset("tt4565380\t8.3\t45123"))
         )
 
-        result = ImdbDatasetLoader(http).run(session)
+        result = ImdbDatasetLoader(http).run(api)
 
         rating = session.scalars(select(ExternalRating)).one()
         assert rating.provider is RatingProvider.IMDB
@@ -97,10 +119,12 @@ class TestBulkJoin:
         assert rating.score_normalized == 83
         assert rating.vote_count == 45123
         assert rating.url == "https://www.imdb.com/title/tt4565380/"
-        assert result.created == 1
+        assert result.written == 1
 
     @respx.mock
-    def test_updates_an_existing_rating(self, session: Session, http: HttpClient) -> None:
+    def test_updates_an_existing_rating(
+        self, api: IngestClient, session: Session, http: HttpClient
+    ) -> None:
         title = add_title(session, "tt4565380")
         session.add(
             ExternalRating(
@@ -116,16 +140,16 @@ class TestBulkJoin:
             return_value=httpx.Response(200, content=dataset("tt4565380\t8.3\t45123"))
         )
 
-        result = ImdbDatasetLoader(http).run(session)
+        result = ImdbDatasetLoader(http).run(api)
 
+        session.expire_all()
         rating = session.scalars(select(ExternalRating)).one()
         assert rating.score_raw == 8.3
-        assert result.updated == 1
-        assert result.created == 0
+        assert result.written == 1
 
     @respx.mock
     def test_ignores_rows_for_titles_we_do_not_hold(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, session: Session, http: HttpClient
     ) -> None:
         add_title(session, "tt4565380")
         respx.get(DATASET_URL).mock(
@@ -134,7 +158,7 @@ class TestBulkJoin:
             )
         )
 
-        result = ImdbDatasetLoader(http).run(session)
+        result = ImdbDatasetLoader(http).run(api)
 
         assert result.rows_read == 2
         assert result.matched == 1
@@ -142,23 +166,25 @@ class TestBulkJoin:
 
     @respx.mock
     def test_titles_without_an_imdb_id_are_skipped(
-        self, session: Session, http: HttpClient
+        self, api: IngestClient, session: Session, http: HttpClient
     ) -> None:
         add_title(session, None)
         respx.get(DATASET_URL).mock(
             return_value=httpx.Response(200, content=dataset("tt4565380\t8.3\t1"))
         )
 
-        result = ImdbDatasetLoader(http).run(session)
+        result = ImdbDatasetLoader(http).run(api)
 
         assert result.matched == 0
 
     @respx.mock
-    def test_no_download_when_nothing_could_match(self, session: Session, http: HttpClient) -> None:
+    def test_no_download_when_nothing_could_match(
+        self, api: IngestClient, session: Session, http: HttpClient
+    ) -> None:
         """Skips tens of megabytes when no title carries an imdb_id."""
         route = respx.get(DATASET_URL).mock(return_value=httpx.Response(200, content=b""))
 
-        result = ImdbDatasetLoader(http).run(session)
+        result = ImdbDatasetLoader(http).run(api)
 
         assert route.call_count == 0
         assert result.rows_read == 0
@@ -170,7 +196,7 @@ class TestSayingItIsStillGoing:
 
     @respx.mock
     def test_it_says_what_it_downloaded_before_joining_it(
-        self, session: Session, http: HttpClient, caplog: Any
+        self, api: IngestClient, session: Session, http: HttpClient, caplog: Any
     ) -> None:
         add_title(session, "tt4565380")
         respx.get(DATASET_URL).mock(
@@ -178,13 +204,13 @@ class TestSayingItIsStillGoing:
         )
 
         with caplog.at_level(logging.INFO, logger="eifo.fetch.enrich.imdb"):
-            ImdbDatasetLoader(http).run(session)
+            ImdbDatasetLoader(http).run(api)
 
         assert "joining it against the catalog" in caplog.text
 
     @respx.mock
     def test_it_reports_as_it_reads(
-        self, session: Session, http: HttpClient, caplog: Any, monkeypatch: Any
+        self, api: IngestClient, session: Session, http: HttpClient, caplog: Any, monkeypatch: Any
     ) -> None:
         """Scaled down, because the real thresholds are a quarter of a million
         rows apart and a test should not have to build that."""
@@ -195,7 +221,7 @@ class TestSayingItIsStillGoing:
         respx.get(DATASET_URL).mock(return_value=httpx.Response(200, content=dataset(*rows)))
 
         with caplog.at_level(logging.INFO, logger="eifo.fetch.enrich.imdb"):
-            result = ImdbDatasetLoader(http).run(session)
+            result = ImdbDatasetLoader(http).run(api)
 
         assert result.rows_read == 12
         assert "imdb: 5 rows read" in caplog.text
@@ -203,7 +229,7 @@ class TestSayingItIsStillGoing:
 
     @respx.mock
     def test_rows_this_catalog_holds_nothing_for_still_count_as_progress(
-        self, session: Session, http: HttpClient, caplog: Any, monkeypatch: Any
+        self, api: IngestClient, session: Session, http: HttpClient, caplog: Any, monkeypatch: Any
     ) -> None:
         """Which is most of the dataset: a million rows about films nobody here
         carries is still a million rows of work being got through."""
@@ -214,6 +240,6 @@ class TestSayingItIsStillGoing:
         respx.get(DATASET_URL).mock(return_value=httpx.Response(200, content=dataset(*rows)))
 
         with caplog.at_level(logging.INFO, logger="eifo.fetch.enrich.imdb"):
-            ImdbDatasetLoader(http).run(session)
+            ImdbDatasetLoader(http).run(api)
 
         assert "imdb: 10 rows read, 0 matched" in caplog.text

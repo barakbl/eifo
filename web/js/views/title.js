@@ -10,7 +10,7 @@ import {
   formatPrice,
   formatVotes,
   languageName,
-  offerState,
+  offersByService,
   personName,
   runtimeBand,
   sourceColorVar,
@@ -406,23 +406,23 @@ function offersSection(title, { t, language }) {
     ]);
   }
 
-  // Current offers first: what you can watch now is the point of the page.
-  const ordered = [...title.availability].sort(
-    (a, b) => Number(b.is_current) - Number(a.is_current),
-  );
+  // One row per service - a shop that both rents and sells is one place you
+  // can watch it - and current offers first, which is the point of the page.
+  const ordered = offersByService(title.availability);
 
   return el("section", { class: "section" }, [
     el("h2", { class: "section__heading", text: t("title.whereToWatch") }),
     el(
       "ul",
       { class: "offers" },
-      ordered.map((offer) => offerRow(offer, { t, language })),
+      ordered.map((service) => offerRow(service, { t, language })),
     ),
   ]);
 }
 
-function offerRow(offer, { t, language }) {
-  const state = offerState(offer);
+function offerRow(service, { t, language }) {
+  const offer = service;
+  const state = service.state;
   const badge =
     state === "untracked"
       ? el("span", { class: "badge badge--untracked", text: t("offer.untracked") })
@@ -436,9 +436,12 @@ function offerRow(offer, { t, language }) {
         : null;
 
   const canWatch = state === "available" && offer.deep_link_url;
-  // What it costs sits with what kind of offer it is, next to the button that
-  // charges it - a rental's price is part of the offer, not a footnote.
-  const price = formatPrice(offer.price_minor, offer.price_currency, language);
+  // What it costs sits with what kind of offer it is - a rental's price is part
+  // of that deal, not a footnote, and a shop that rents and sells quotes two.
+  const deals = service.offers.map((deal) => {
+    const price = formatPrice(deal.price_minor, deal.price_currency, language);
+    return price ? `${t(`offer.${deal.offer_type}`)} ${price}` : t(`offer.${deal.offer_type}`);
+  });
 
   return el(
     "li",
@@ -450,8 +453,7 @@ function offerRow(offer, { t, language }) {
       el("div", {}, [
         el("div", { class: "offer__name", text: offer.source_name }),
         el("div", { class: "offer__note" }, [
-          el("span", { text: t(`offer.${offer.offer_type}`) }),
-          price ? el("span", { class: "offer__price", text: ` · ${price}` }) : null,
+          el("span", { text: deals.join(" · ") }),
           el("span", {
             text: ` · ${t("offer.verified", { date: formatDate(offer.last_seen, language) })}`,
           }),

@@ -12,6 +12,7 @@ import {
   formatWhen,
   languageName,
   offerState,
+  offersByService,
   personName,
   runtimeBand,
   paramsToFilters,
@@ -113,6 +114,115 @@ describe("currentSources", () => {
 
   it("handles a title on nothing", () => {
     assert.deepEqual(currentSources([]), []);
+  });
+});
+
+describe("offersByService", () => {
+  const offer = (over = {}) => ({
+    source_key: "apple_tv_store",
+    source_name: "Apple TV Store",
+    offer_type: "rent",
+    price_minor: null,
+    price_currency: null,
+    deep_link_url: null,
+    last_seen: "2026-09-01T00:00:00Z",
+    is_current: true,
+    source_active: true,
+    ...over,
+  });
+
+  it("puts a shop that rents and sells on one row", () => {
+    // The complaint that prompted this: two rows, same name, same date, and
+    // no price on either to tell them apart.
+    const rows = offersByService([offer({ offer_type: "rent" }), offer({ offer_type: "buy" })]);
+
+    assert.equal(rows.length, 1);
+    assert.deepEqual(
+      rows[0].offers.map((o) => o.offer_type),
+      ["rent", "buy"],
+    );
+  });
+
+  it("keeps different services apart", () => {
+    const rows = offersByService([
+      offer({ source_key: "netflix_il", offer_type: "stream" }),
+      offer({ offer_type: "rent" }),
+      offer({ offer_type: "buy" }),
+    ]);
+
+    assert.deepEqual(
+      rows.map((r) => r.source_key),
+      ["netflix_il", "apple_tv_store"],
+    );
+  });
+
+  it("does not merge a deal that is gone into one that is not", () => {
+    // Otherwise the row would read "Rent · Buy" beside a single badge and
+    // claim something the catalog does not know.
+    const rows = offersByService([
+      offer({ offer_type: "rent" }),
+      offer({ offer_type: "buy", is_current: false }),
+    ]);
+
+    assert.equal(rows.length, 2);
+    assert.deepEqual(
+      rows.map((r) => r.state),
+      ["available", "gone"],
+    );
+  });
+
+  it("orders the deals by what they ask of you", () => {
+    const rows = offersByService([
+      offer({ offer_type: "buy" }),
+      offer({ offer_type: "free" }),
+      offer({ offer_type: "rent" }),
+      offer({ offer_type: "stream" }),
+    ]);
+
+    assert.deepEqual(
+      rows[0].offers.map((o) => o.offer_type),
+      ["free", "stream", "rent", "buy"],
+    );
+  });
+
+  it("dates the row by the freshest sighting of any deal", () => {
+    const rows = offersByService([
+      offer({ offer_type: "rent", last_seen: "2026-09-01T00:00:00Z" }),
+      offer({ offer_type: "buy", last_seen: "2026-09-07T00:00:00Z" }),
+    ]);
+
+    assert.equal(rows[0].last_seen, "2026-09-07T00:00:00Z");
+  });
+
+  it("takes a link from whichever deal has one", () => {
+    const rows = offersByService([
+      offer({ offer_type: "rent", deep_link_url: null }),
+      offer({ offer_type: "buy", deep_link_url: "https://tv.apple.com/x" }),
+    ]);
+
+    assert.equal(rows[0].deep_link_url, "https://tv.apple.com/x");
+  });
+
+  it("has no link when no deal has one", () => {
+    const rows = offersByService([offer({ offer_type: "rent" }), offer({ offer_type: "buy" })]);
+
+    assert.equal(rows[0].deep_link_url, null);
+  });
+
+  it("still shows what is watchable now first", () => {
+    const rows = offersByService([
+      offer({ source_key: "gone_service", offer_type: "stream", is_current: false }),
+      offer({ source_key: "netflix_il", offer_type: "stream" }),
+    ]);
+
+    assert.deepEqual(
+      rows.map((r) => r.source_key),
+      ["netflix_il", "gone_service"],
+    );
+  });
+
+  it("handles a title on nothing", () => {
+    assert.deepEqual(offersByService([]), []);
   });
 });
 

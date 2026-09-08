@@ -192,6 +192,75 @@ class TestPlaceholderYears:
         assert years == [None, None, 2015, 1927, None]
 
 
+class TestWatchLinksThatWentBackToTmdb:
+    """A "Watch" button on a Netflix row that opened themoviedb.org.
+
+    The provider harvester had no per-service link to store, so it stored
+    TMDB's own watch page. ``record_offer`` only ever overwrites a link with a
+    new one and never clears it, so those rows would keep the old value through
+    any number of syncs - which is why this is a migration and not just a change
+    to what the harvester writes.
+    """
+
+    def _links(self, tmp_path: Path, seeded: list[str]) -> list[str | None]:
+        db_url = f"sqlite:///{tmp_path / 'links.db'}"
+        upgrade(db_url, "0025_invited_members_and_api_tokens")
+        engine = create_engine(db_url)
+        try:
+            with engine.begin() as connection:
+                for statement in seeded:
+                    connection.execute(text(statement))
+            upgrade(db_url)
+            with engine.connect() as connection:
+                return [
+                    row[0]
+                    for row in connection.execute(
+                        text("SELECT deep_link_url FROM availability ORDER BY id")
+                    ).all()
+                ]
+        finally:
+            engine.dispose()
+
+    def test_a_tmdb_watch_page_goes_and_a_real_link_stays(self, tmp_path: Path) -> None:
+        now = "'2026-09-08 00:00:00'"
+        links = self._links(
+            tmp_path,
+            [
+                "INSERT INTO titles (id, type, name_he, created_at, updated_at) VALUES "
+                f"(1, 'series', 'חוטים', {now}, {now})",
+                "INSERT INTO sources "
+                "(id, key, name, kind, website_url, active, created_at, updated_at) VALUES "
+                "(1, 'netflix_il', 'Netflix', 'subscription', 'https://www.netflix.com', 1, "
+                f"{now}, {now})",
+                "INSERT INTO availability (id, title_id, source_id, offer_type, deep_link_url, "
+                "first_seen, last_seen, is_current, miss_count) VALUES "
+                "(1, 1, 1, 'stream', "
+                f"'https://www.themoviedb.org/tv/1438/watch?locale=IL', {now}, {now}, 1, 0), "
+                "(2, 1, 1, 'rent', 'https://www.themoviedb.org/movie/9/watch', "
+                f"{now}, {now}, 1, 0), "
+                f"(3, 1, 1, 'buy', 'https://www.freetv.co.il/watch/12345', {now}, {now}, 1, 0), "
+                f"(4, 1, 1, 'free', NULL, {now}, {now}, 1, 0)",
+            ],
+        )
+
+        assert links == [None, None, "https://www.freetv.co.il/watch/12345", None]
+
+    def test_tmdb_as_a_ratings_provider_is_left_alone(self, tmp_path: Path) -> None:
+        """Its site URL is a credit, not a watch link, and lives elsewhere."""
+        db_url = f"sqlite:///{tmp_path / 'providers.db'}"
+        upgrade(db_url)
+        engine = create_engine(db_url)
+        try:
+            with engine.connect() as connection:
+                sites = connection.execute(
+                    text("SELECT website_url FROM rating_providers WHERE provider = 'tmdb'")
+                ).scalar()
+        finally:
+            engine.dispose()
+
+        assert sites == "https://www.themoviedb.org"
+
+
 def test_downgrade_removes_the_schema(tmp_path: Path) -> None:
     db_url = f"sqlite:///{tmp_path / 'reversible.db'}"
     upgrade(db_url)

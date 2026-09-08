@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/barakbl/eifo/compare/v0.14.0...v0.15.0) (2026-09-08)
+
+
+### Features
+
+* a fetcher anywhere, and a server that survives one ([#109](https://github.com/barakbl/eifo/issues/109)) ([2ba0f2b](https://github.com/barakbl/eifo/commit/2ba0f2be8a56ae79e8920f29185fc8051a90b0cc))
+
 ## [0.14.0](https://github.com/barakbl/eifo/compare/v0.13.1...v0.14.0) (2026-09-05)
 
 

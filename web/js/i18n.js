@@ -103,6 +103,7 @@ const STRINGS = {
 
     "auth.signIn": "התחברות",
     "auth.signInWith": "התחברות עם {provider}",
+    "auth.tryAnotherAccount": "ניסיון עם חשבון {provider} אחר",
     "auth.provider.google": "Google",
     "auth.provider.x": "X",
     "auth.signOut": "התנתקות",
@@ -218,6 +219,8 @@ const STRINGS = {
     "members.fromConfig": "מקובץ ההגדרות",
     "members.you": "זה אתם",
     "members.wallTitle": "הקטלוג הזה למשתמשים רשומים",
+    "members.refusedTitle": "הכתובת שלכם אינה ברשימה",
+    "members.refusedBody": "ההתחברות עצמה הצליחה, אבל הקטלוג הזה בהזמנה בלבד והכתובת שלכם לא נוספה אליו. בקשו מבעל האתר להוסיף אותה - התחברות נוספת עם אותו חשבון לא תשנה את זה.",
     "members.wallBody": "התחברו כדי לראות מה זמין לצפייה. אם אין לכם גישה, בקשו מבעל האתר להוסיף את הכתובת שלכם.",
     "tokens.title": "טוקנים ל-API",
     "tokens.explain": "טוקן מאפשר לסקריפט לגשת ל-API בשמכם. הוא מוצג פעם אחת בלבד.",
@@ -415,6 +418,7 @@ const STRINGS = {
 
     "auth.signIn": "Sign in",
     "auth.signInWith": "Sign in with {provider}",
+    "auth.tryAnotherAccount": "Try a different {provider} account",
     "auth.provider.google": "Google",
     "auth.provider.x": "X",
     "auth.signOut": "Sign out",
@@ -533,6 +537,8 @@ const STRINGS = {
     "members.fromConfig": "from config",
     "members.you": "you",
     "members.wallTitle": "This catalog is for members",
+    "members.refusedTitle": "Your address is not on the list",
+    "members.refusedBody": "Signing in worked, but this catalog is invite-only and your address has not been added to it. Ask the owner to add it - signing in again with the same account will not change this.",
     "members.wallBody": "Sign in to see what is streaming. If you do not have access, ask the owner to add your address.",
     "tokens.title": "API tokens",
     "tokens.explain": "A token lets a script use the API as you. It is shown once and never again.",

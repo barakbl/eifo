@@ -258,3 +258,21 @@ export function titleCard(title, language, index = 0, actions = null) {
     actions,
   ]);
 }
+
+
+/**
+ * Which sentences the wall says, given how the last sign-in ended.
+ *
+ * Separated from the rendering so the decision can be tested: which of the two
+ * people is looking at this wall is the whole of it, and getting it wrong is
+ * how a refusal came to read as success.
+ */
+export function wallCopy(outcome) {
+  const refused = outcome === "not_invited";
+  return {
+    refused,
+    title: refused ? "members.refusedTitle" : "members.wallTitle",
+    body: refused ? "members.refusedBody" : "members.wallBody",
+    action: refused ? "auth.tryAnotherAccount" : "auth.signInWith",
+  };
+}

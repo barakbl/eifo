@@ -23,7 +23,7 @@ from eifo_fetcher.enrichers.seret_index import IndexResult
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.ingest import IngestClient
 from eifo_fetcher.lock import single_flight
-from eifo_fetcher.runner import enrich_all, sync_all
+from eifo_fetcher.runner import enrich_all, enrich_options, sync_all, unknown_enrichers
 from eifo_fetcher.sources.base import FetchContext, RawItem, SourceInfo, SourcePlugin
 
 
@@ -923,3 +923,120 @@ class TestSkippingAnEnricherForOneRun:
             self._run(api, settings, http, skip_imdb=True, skip=[])
 
         assert "enriching with: tmdb, seret, rt" in caplog.text
+
+
+class TestNarrowingARunToOneEnricher:
+    """The mirror of skipping, and the one to reach for when the question is
+    about a single provider.
+
+    Naming the one you want is much harder to get wrong than naming the five
+    you do not - and a run narrowed by `skip` silently widens the next time an
+    enricher is added, which is exactly when somebody is checking whether the
+    new one behaves.
+    """
+
+    def _run(
+        self,
+        api: IngestClient,
+        settings: Settings,
+        http: HttpClient,
+        **kwargs: Any,
+    ) -> EnrichResultTally:
+        return enrich_all(settings, http=http, api=api, limit=0, **kwargs)
+
+    def test_only_that_one_runs(
+        self, api: IngestClient, settings: Settings, http: HttpClient, caplog: Any
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
+            self._run(api, settings, http, only=["apple_prices"])
+
+        line = caplog.text.split("enriching with: ")[1].split("\n")[0]
+        assert line == "apple_prices"
+
+    def test_the_imdb_download_is_not_smuggled_in(
+        self, api: IngestClient, settings: Settings, http: HttpClient
+    ) -> None:
+        """Tens of megabytes is not something --only should leave in.
+
+        An `--only apple_prices` that still downloaded the IMDb dataset would
+        be lying about what it had narrowed the run to, expensively.
+        """
+        tally = self._run(api, settings, http, only=["apple_prices"])
+
+        assert "imdb" not in tally.by_enricher
+
+    def test_the_imdb_pass_can_be_the_only_thing_asked_for(
+        self, api: IngestClient, settings: Settings, http: HttpClient, caplog: Any
+    ) -> None:
+        """It is not an enricher, but it is separately runnable and separately
+        able to fail, which is what --only is for."""
+        with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
+            tally = self._run(api, settings, http, only=["imdb"])
+
+        assert "enriching with: nothing" in caplog.text
+        assert "imdb" in tally.by_enricher
+
+    def test_the_case_it_is_typed_in_does_not_matter(
+        self, api: IngestClient, settings: Settings, http: HttpClient, caplog: Any
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
+            self._run(api, settings, http, only=[" Apple_Prices ", "RT"])
+
+        line = caplog.text.split("enriching with: ")[1].split("\n")[0]
+        assert line == "rt, apple_prices"
+
+    def test_a_name_nothing_answers_to_stops_the_run(
+        self, api: IngestClient, settings: Settings, http: HttpClient
+    ) -> None:
+        """Where a bad --skip is a warning, a bad --only is fatal.
+
+        A skip that skips nothing runs everything, which is wasteful. An --only
+        nobody spelled right enriches with nothing at all, and would otherwise
+        report a clean run over the whole catalog.
+        """
+        with pytest.raises(ValueError) as refused:
+            self._run(api, settings, http, only=["rotten"])
+
+        assert "rotten" in str(refused.value)
+        # And says what it would have taken, so the fix does not need a manual.
+        assert "rt" in str(refused.value)
+
+    def test_asking_for_none_of_them_is_not_asking(
+        self, api: IngestClient, settings: Settings, http: HttpClient, caplog: Any
+    ) -> None:
+        """So a caller passing an empty list gets the ordinary run, not silence."""
+        with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
+            self._run(api, settings, http, skip_imdb=True, only=[])
+
+        assert "enriching with: tmdb, seret, rt, apple_prices" in caplog.text
+
+
+class TestWhatIsOnOffer:
+    """What a menu of enrichers is built from.
+
+    The menu-bar app reads this rather than keeping its own copy: a list of
+    providers maintained in both Python and Rust is a list that disagrees with
+    itself the first time one is added.
+    """
+
+    def test_every_enricher_is_offered_with_a_name_to_show(self, settings: Settings) -> None:
+        offered = dict(enrich_options(settings))
+
+        assert offered["apple_prices"] == "Apple TV prices"
+        assert offered["rt"] == "Rotten Tomatoes"
+
+    def test_the_two_passes_that_are_not_enrichers_are_offered_too(
+        self, settings: Settings
+    ) -> None:
+        """Both get a row of their own in the run log, and both can fail alone."""
+        offered = dict(enrich_options(settings))
+
+        assert "imdb" in offered
+        assert "seret-index" in offered
+
+    def test_everything_offered_is_something_only_accepts(self, settings: Settings) -> None:
+        """The list and the flag cannot drift apart while this holds."""
+        assert unknown_enrichers(settings, [key for key, _ in enrich_options(settings)]) == []
+
+    def test_a_name_nothing_answers_to_is_reported(self, settings: Settings) -> None:
+        assert unknown_enrichers(settings, ["rt", "rotten"]) == ["rotten"]

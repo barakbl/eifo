@@ -36,7 +36,7 @@ use tray_icon::{TrayIcon, TrayIconBuilder};
 
 use config::Config;
 use health::Status;
-use procs::Phase;
+use procs::{EnricherOption, Phase};
 use runs::SourceOption;
 use worker::{Command, Snapshot, UpdateView};
 
@@ -96,6 +96,10 @@ fn main() {
     // back into the source it names. A menu event carries an id and nothing
     // else, and the id is built from the key.
     let mut sources: Vec<SourceOption> = Vec::new();
+    // And the same for the rating providers, for the same reason: an id is all
+    // a click carries, and the name to put in "Running refresh of ..." lives
+    // here rather than in the id.
+    let mut enrichers: Vec<EnricherOption> = Vec::new();
 
     // Stop the server, drop the status item, and leave the run loop - the one
     // exit path, shared by Quit and by a finished update that must relaunch.
@@ -115,6 +119,7 @@ fn main() {
         if let Some(snapshot) = drain_updates(&from_worker, &items, tray.as_mut(), &mut shown) {
             update = snapshot.update.clone();
             sources = snapshot.run.sources.clone();
+            enrichers = snapshot.enrichers.clone();
             if snapshot.relaunch {
                 // The worker has built the new bundle and spawned the process
                 // that will open it once we are gone. All that is left is to go.
@@ -205,6 +210,17 @@ fn main() {
                     } else {
                         items.detail.set_text("That folder is not an Eifo checkout");
                     }
+                }
+            } else if let Some(key) = menu::enricher_key(&id.0) {
+                // One provider from the Refresh one rating source submenu.
+                // Matched against the last list rather than trusted from the
+                // id, so an item left behind by a checkout that no longer has
+                // that enricher cannot start a run the fetcher would refuse.
+                if let Some(option) = enrichers.iter().find(|option| option.key == key) {
+                    let _ = to_worker.send(Command::Run(Phase::OneEnricher {
+                        key: option.key.clone(),
+                        name: option.name.clone(),
+                    }));
                 }
             } else if let Some(key) = menu::source_key(&id.0) {
                 // One service from the Sync one submenu. Matched against the

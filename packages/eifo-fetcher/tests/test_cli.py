@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import logging
+import re
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -48,6 +49,7 @@ from eifo_core.tokens import API_TOKEN_PREFIX, hash_token
 from eifo_fetcher import cli
 from eifo_fetcher.cli import EXIT_FATAL, EXIT_OK, EXIT_PARTIAL, build_parser, main
 from eifo_fetcher.lock import single_flight
+from eifo_fetcher.runner import enrich_options
 
 
 @pytest.fixture
@@ -208,6 +210,82 @@ class TestOnlyOneFetcherAtATime:
         with single_flight(self._settings(migrated)):
             assert main(["sources", "list"]) == EXIT_OK
             assert main(["review", "list"]) == EXIT_OK
+
+
+class TestChoosingWhichEnricherRuns:
+    """`enrich --only`, and the listing a menu of them is built from.
+
+    Both refusals here happen before the lock and before the API client, which
+    is the point of testing them: a typo caught early is a sentence somebody
+    can act on, and a typo caught late is a row in the run log for an enrich
+    that enriched nothing.
+    """
+
+    def test_the_listing_is_one_key_and_name_a_line(
+        self, migrated: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Read by the menu-bar app, so the shape is load-bearing."""
+        assert main(["enrich", "--list"]) == EXIT_OK
+
+        lines = capsys.readouterr().out.strip().split("\n")
+        assert ("apple_prices", "Apple TV prices") in [tuple(line.split("\t")) for line in lines]
+        assert all(line.count("\t") == 1 for line in lines)
+
+    def test_listing_them_needs_no_catalog_and_no_lock(self, migrated: Path) -> None:
+        """It answers a question about the installed code. Asking should not
+        wait behind a nightly run that has been going for two hours."""
+        with single_flight(Settings(_env_file=None, db_url=f"sqlite:///{migrated}")):
+            assert main(["enrich", "--list"]) == EXIT_OK
+
+    def test_a_name_nothing_answers_to_is_refused(
+        self, migrated: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.ERROR):
+            assert main(["enrich", "--only", "rotten"]) == EXIT_FATAL
+
+        assert "no enricher called rotten" in caplog.text
+        # What it would have taken, so the fix does not need a manual.
+        assert "rt" in caplog.text
+
+    def test_only_and_skip_together_are_refused(
+        self, migrated: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Two ways of saying the same thing, and no obvious answer for what
+        `--only rt --skip rt` should mean."""
+        with caplog.at_level(logging.ERROR):
+            assert main(["enrich", "--only", "rt", "--skip", "tmdb"]) == EXIT_FATAL
+            assert main(["enrich", "--only", "rt", "--skip-imdb"]) == EXIT_FATAL
+
+
+class TestTheCompletionsKnowTheSameEnrichers:
+    """The shell completions keep their own copy of the enricher list.
+
+    They have to: a completion runs on every keystroke and cannot afford to
+    start a Python to ask. So the copy is checked here instead - it had already
+    drifted twice, offering neither `apple_prices` nor `seret-index`, which is
+    how a completion quietly teaches somebody that a provider does not exist.
+    """
+
+    ROOT = Path(__file__).parents[3] / "completions"
+
+    def _offered(self) -> set[str]:
+        return {key for key, _ in enrich_options(Settings(_env_file=None))}
+
+    def test_fish_offers_every_one_of_them(self) -> None:
+        text = (self.ROOT / "eifo-fetch.fish").read_text()
+        block = text.split("function __eifo_enrichers")[1].split("\nend")[0]
+        # The continuation lines of the printf, which are indented past it -
+        # not the `printf` itself, and not the function's own --description.
+        listed = set(re.findall(r"^ {8}([a-z0-9_-]+) '", block, re.MULTILINE))
+
+        assert listed == self._offered()
+
+    def test_zsh_offers_every_one_of_them(self) -> None:
+        text = (self.ROOT / "_eifo-fetch").read_text()
+        block = text.split("_eifo_enrichers()")[1].split(")")[0]
+        listed = set(re.findall(r"^\s+'([a-z0-9_-]+):", block, re.MULTILINE))
+
+        assert listed == self._offered()
 
 
 class TestTheNightlyCommand:

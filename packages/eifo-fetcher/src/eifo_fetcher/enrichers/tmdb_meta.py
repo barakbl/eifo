@@ -64,6 +64,8 @@ class TmdbMetadataEnricher(Enricher):
         ),
     )
 
+    name = "TMDB metadata"
+
     def __init__(self, client: TmdbClient | None = None) -> None:
         self._client = client
 

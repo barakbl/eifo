@@ -37,6 +37,9 @@ const SETTLE: Duration = Duration::from_secs(6);
 /// Backing off rather than hammering: whatever is wrong at attempt four is not
 /// going to be fixed by attempt forty, and a restart loop hides the cause.
 const BACKOFF: [u64; 4] = [2, 10, 30, 120];
+/// How often to ask the checkout which rating providers it has. Rarely: it
+/// costs a Python start, and the answer changes only when the checkout does.
+const ENRICHERS_EVERY: Duration = Duration::from_secs(30 * 60);
 /// How often to ask a remote catalog which services it tracks. Rarely: the
 /// answer changes when a plugin is installed, not while a run is going.
 const SOURCES_EVERY: Duration = Duration::from_secs(5 * 60);
@@ -105,6 +108,11 @@ pub struct Snapshot {
     pub last_result: Option<String>,
     /// The run log: what this run has done, is doing, and has yet to reach.
     pub run: RunView,
+    /// The rating providers an enrich can be narrowed to, as the fetcher in the
+    /// configured checkout lists them. Empty when it could not be asked, which
+    /// is what takes the submenu down rather than leaving it offering names
+    /// this build may not have.
+    pub enrichers: Vec<procs::EnricherOption>,
     pub server_owned: bool,
     pub server_pid: Option<u32>,
     /// Whether the catalog is on another machine. What decides that the four
@@ -158,6 +166,8 @@ struct Worker {
     /// requests a minute at somebody else's server for one line of a menu.
     remote_sources: Vec<runs::SourceOption>,
     remote_sources_at: Option<Instant>,
+    enrichers: Vec<procs::EnricherOption>,
+    enrichers_at: Option<Instant>,
     /// The API token, read from the Keychain at startup and whenever it
     /// changes. Held rather than fetched per poll: the Keychain is a system
     /// service, and this polls every three seconds while a fetch runs.
@@ -192,6 +202,8 @@ impl Worker {
             run: RunView::default(),
             remote_sources: Vec::new(),
             remote_sources_at: None,
+            enrichers: Vec::new(),
+            enrichers_at: None,
             token: keychain::token(),
             fetching: false,
             seen_a_reading: false,
@@ -431,6 +443,28 @@ impl Worker {
         }
     }
 
+    /// Ask the checkout what its enrich can be narrowed to, rarely.
+    ///
+    /// Rarely because the answer costs a Python start, and because it only
+    /// changes when the checkout does - which, for an app that relaunches
+    /// itself after an update, means at most once a launch. Kept until it
+    /// answers, for the same reason the service list is: a submenu that empties
+    /// while a `uv sync` is halfway through is a worse readout than a slightly
+    /// old one.
+    fn refresh_enrichers(&mut self) {
+        let due = match self.enrichers_at {
+            None => true,
+            Some(at) => at.elapsed() >= ENRICHERS_EVERY,
+        };
+        if !due {
+            return;
+        }
+        if let Some(found) = procs::enricher_options(&self.config) {
+            self.enrichers = found;
+            self.enrichers_at = Some(Instant::now());
+        }
+    }
+
     /// Say why a server control did nothing, for a catalog that is not here.
     fn refuse_remote(&mut self) {
         self.last_result = Some(format!(
@@ -666,6 +700,10 @@ impl Worker {
 
     fn publish(&mut self) {
         let setup_problems = self.config.problems();
+        // Wherever the catalog is, the fetcher runs here - so this is asked of
+        // the checkout on this disk rather than of the API, and asked whether
+        // or not the catalog is remote.
+        self.refresh_enrichers();
         let status = if !setup_problems.is_empty() {
             Status::Unknown
         } else {
@@ -736,6 +774,7 @@ impl Worker {
             fetch_pid,
             last_result: self.last_result.clone(),
             run: self.run.clone(),
+            enrichers: self.enrichers.clone(),
             server_owned: self.server.is_running(),
             server_pid: self.server.pid(),
             server_remote: self.config.is_remote(),

@@ -42,6 +42,7 @@ from eifo_core.models import (
     User,
     UserItem,
 )
+from eifo_core.scores import votes_behind
 
 IMAGES_PREFIX = "/images"
 
@@ -214,6 +215,7 @@ def to_card(title: Title) -> TitleCard:
         poster_url=image_url(title.poster_path),
         score=title.aggregate.score if title.aggregate else None,
         score_israeli=title.aggregate.score_israeli if title.aggregate else None,
+        score_votes=votes_behind(title.aggregate.components) if title.aggregate else None,
         genres=[to_genre(genre) for genre in title.genres],
         availability=[
             to_availability(availability)

@@ -269,9 +269,30 @@ function userSection(title, { t, user, items }) {
   ]);
 }
 
+/**
+ * Why there is no combined score, when there are ratings but no score.
+ *
+ * Returns a translation key, or null when there is nothing to explain. The
+ * page used to render nothing at all in this case - no score, no working, no
+ * reason - which left a title that is rated by two people looking exactly like
+ * one nobody has rated at all. Those are different things and the difference
+ * is the whole point of withholding the number.
+ */
+export function noScoreReasonKey(components, score) {
+  if (score !== null && score !== undefined) return null;
+
+  const rows = Object.values(components ?? {});
+  if (!rows.length) return null;
+
+  const counted = rows.filter((row) => (row.weight ?? 0) > 0);
+  if (counted.length < 2) return "title.noScoreOneRater";
+  return "title.noScoreThinVotes";
+}
+
 function aggregateBlock(title, { t, language }) {
   const { score, score_israeli: israeli, components } = title.aggregate;
-  if (score === null && israeli === null) return null;
+  const unrated = noScoreReasonKey(components, score);
+  if (score === null && israeli === null && !unrated) return null;
 
   const row = el("div", { class: "aggregate section" }, [
     score !== null
@@ -279,7 +300,12 @@ function aggregateBlock(title, { t, language }) {
           scorePill(score, { large: true, label: t("title.aggregate") }),
           el("span", { class: "aggregate__label", text: ` ${t("title.aggregate")}` }),
         ])
-      : null,
+      : unrated
+        ? el("span", { class: "aggregate__unrated" }, [
+            el("span", { class: "badge badge--unrated", text: t("title.noScore") }),
+            el("span", { class: "aggregate__label", text: ` ${t(unrated)}` }),
+          ])
+        : null,
     israeli !== null
       ? el("span", {}, [
           scorePill(israeli, { large: true, label: t("title.aggregateIsraeli") }),

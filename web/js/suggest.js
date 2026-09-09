@@ -82,7 +82,7 @@ export function createSuggest({ input, router, app }) {
       }
     };
 
-    add("suggest.titles", payload.titles, (title) => titleOption(title, language));
+    add("suggest.titles", payload.titles, (title) => titleOption(title, language, t));
     add("suggest.people", payload.people, (person) => personOption(person, language, t));
 
     if (!options.length) {
@@ -168,7 +168,7 @@ export function createSuggest({ input, router, app }) {
   return { node: list, close };
 }
 
-function titleOption(title, language) {
+function titleOption(title, language, t) {
   const name = pick(title.name_he, title.name_en, language);
   const node = el("li", { class: "suggest__option", role: "option", "aria-selected": "false" }, [
     title.poster_url
@@ -178,7 +178,7 @@ function titleOption(title, language) {
     title.year ? el("span", { class: "suggest__meta", text: String(title.year) }) : null,
     // The same pill the cards carry, colour and all: a suggestion is a preview
     // of a result, and choosing between two of them is mostly this number.
-    scorePill(title.score),
+    scorePill(title.score, { votes: title.score_votes, t }),
   ]);
   return { node, id: title.id, route: "title" };
 }

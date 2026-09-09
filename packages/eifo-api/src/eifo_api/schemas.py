@@ -227,6 +227,9 @@ class TitleCard(BaseModel):
     poster_url: str | None = None
     score: int | None = None
     score_israeli: int | None = None
+    #: How many people the score rests on, so a card can say when that is few.
+    #: None when no rater reports a count at all - which is not the same as few.
+    score_votes: int | None = None
     genres: list[GenreOut] = Field(default_factory=list)
     availability: list[AvailabilityOut] = Field(default_factory=list)
 

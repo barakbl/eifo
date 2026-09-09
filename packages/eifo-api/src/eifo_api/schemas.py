@@ -633,6 +633,9 @@ class TitleDue(BaseModel):
     year: int | None = None
     tmdb_id: int | None = None
     imdb_id: str | None = None
+    #: Services currently offering it, so an enricher that speaks for one of
+    #: them can stay quiet about titles it has nothing to say about.
+    offered_by: list[str] = Field(default_factory=list)
 
 
 class DeclaredRatingProvider(BaseModel):

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from eifo_core.enums import RatingProvider, TitleKind
+from eifo_core.enums import OfferType, RatingProvider, TitleKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +38,13 @@ class TitleView:
     year: int | None
     tmdb_id: int | None
     imdb_id: str | None
+    #: Which services currently offer this title.
+    #:
+    #: An enricher that speaks for one service needs to know whether that
+    #: service is even involved: asking Apple about a title nobody says is on
+    #: Apple spends a request from a rate-limited budget to learn nothing, and
+    #: there are twice as many titles as there are Apple ones.
+    offered_by: frozenset[str] = frozenset()
 
     @property
     def display_name(self) -> str:
@@ -105,6 +112,32 @@ class Rating:
             raise ValueError(f"{self.provider} score cannot be negative: {self.score_raw}")
 
 
+@dataclass(frozen=True, slots=True)
+class OfferFact:
+    """What a service itself says about an offer somebody else told us exists.
+
+    The provider harvester learns *that* a title is on Apple TV from JustWatch,
+    which carries neither a price nor a link. Apple publishes both. This is how
+    the second gets attached to the first: not a new offer - the offer is
+    already known - but the two facts about it that the source it came from
+    could not supply.
+
+    Addressed by service and kind of deal rather than by row id, because the
+    fetcher does not have row ids and should not: it says "Apple TV, rental,
+    this price", and the catalog decides which row that is.
+    """
+
+    source_key: str
+    offer_type: OfferType
+    price_minor: int | None = None
+    price_currency: str | None = None
+    deep_link_url: str | None = None
+
+    @property
+    def is_empty(self) -> bool:
+        return self.price_minor is None and not self.deep_link_url
+
+
 @dataclass(slots=True)
 class EnrichResult:
     """What an enricher found.
@@ -115,7 +148,10 @@ class EnrichResult:
 
     ratings: list[Rating] = field(default_factory=list)
     metadata_patch: dict[str, Any] = field(default_factory=dict)
+    #: Prices and links for offers this title already has. Never creates one:
+    #: an enricher knows what a service charges, not what it carries.
+    offers: list[OfferFact] = field(default_factory=list)
 
     @property
     def is_empty(self) -> bool:
-        return not self.ratings and not self.metadata_patch
+        return not self.ratings and not self.metadata_patch and not self.offers

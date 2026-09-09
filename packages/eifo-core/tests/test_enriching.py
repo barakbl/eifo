@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from eifo_core.enriching import (
+    apply_offer_facts,
     apply_patch,
     mislabelled_names,
     outcome_of,
@@ -37,13 +38,14 @@ from eifo_core.enriching import (
     view_of,
 )
 from eifo_core.enums import EnrichOutcome, OfferType, RatingProvider, TitleKind
-from eifo_core.findings import EnrichResult, Rating, TitleView
+from eifo_core.findings import EnrichResult, OfferFact, Rating, TitleView
 from eifo_core.models import (
     AggregateScore,
     Availability,
     EnrichAttempt,
     ExternalRating,
     Genre,
+    Source,
     Title,
 )
 from eifo_core.settings import Settings
@@ -468,6 +470,141 @@ class TestPatchingMetadata:
         self._patch(session, second, genres=[{"tmdb_id": 18, "name_en": "Drama"}])
 
         assert len(session.scalars(select(Genre)).all()) == 1
+
+
+class TestAttachingPricesToOffers:
+    """What a service says about an offer somebody else found.
+
+    The harvester learns *that* a title is on Apple from JustWatch, which
+    carries no price and no link; Apple publishes both. These are the rules for
+    letting the second reach the first without letting it invent anything.
+    """
+
+    def _offer(self, session: Session, title: Title, **overrides: Any) -> Availability:
+        source = session.scalars(select(Source).where(Source.key == "apple_tv_store")).first()
+        if source is None:
+            source = make_source(key="apple_tv_store", name="Apple TV Store")
+            session.add(source)
+            session.flush()
+        values: dict[str, Any] = {
+            "title_id": title.id,
+            "source_id": source.id,
+            "offer_type": OfferType.RENT,
+            "first_seen": utcnow(),
+            "last_seen": utcnow(),
+            "is_current": True,
+            "miss_count": 0,
+        }
+        values.update(overrides)
+        row = Availability(**values)
+        session.add(row)
+        session.flush()
+        return row
+
+    def _attach(self, session: Session, title: Title, *facts: OfferFact) -> int:
+        changed = apply_offer_facts(session, title, EnrichResult(offers=list(facts)))
+        session.commit()
+        return changed
+
+    def test_a_price_and_a_link_reach_the_offer(self, session: Session) -> None:
+        title = add_title(session)
+        row = self._offer(session, title)
+
+        changed = self._attach(
+            session,
+            title,
+            OfferFact("apple_tv_store", OfferType.RENT, 1690, "ILS", "https://tv.apple.com/il/x"),
+        )
+
+        assert changed == 1
+        assert (row.price_minor, row.price_currency) == (1690, "ILS")
+        assert row.deep_link_url == "https://tv.apple.com/il/x"
+
+    def test_it_never_creates_an_offer(self, session: Session) -> None:
+        """An enricher knows what a service charges, not what it carries.
+
+        A price for something nobody is offering is a matching mistake, and
+        writing it would put a title on a service on one provider's say-so.
+        """
+        title = add_title(session)
+
+        changed = self._attach(
+            session,
+            title,
+            OfferFact("apple_tv_store", OfferType.BUY, 3490, "ILS", None),
+        )
+
+        assert changed == 0
+        assert session.scalars(select(Availability)).all() == []
+
+    def test_a_price_already_known_is_not_overwritten(self, session: Session) -> None:
+        """A source that scrapes its own storefront knows better than a search."""
+        title = add_title(session)
+        row = self._offer(session, title, price_minor=1234, price_currency="ILS")
+
+        self._attach(
+            session,
+            title,
+            OfferFact("apple_tv_store", OfferType.RENT, 9900, "ILS", None),
+        )
+
+        assert row.price_minor == 1234
+
+    def test_a_link_already_known_is_not_overwritten(self, session: Session) -> None:
+        title = add_title(session)
+        row = self._offer(session, title, deep_link_url="https://tv.apple.com/il/real")
+
+        self._attach(
+            session,
+            title,
+            OfferFact(
+                "apple_tv_store", OfferType.RENT, None, None, "https://tv.apple.com/il/guess"
+            ),
+        )
+
+        assert row.deep_link_url == "https://tv.apple.com/il/real"
+
+    def test_the_kind_of_deal_has_to_match(self, session: Session) -> None:
+        """A rental price is not what the same shop charges to sell it."""
+        title = add_title(session)
+        row = self._offer(session, title, offer_type=OfferType.RENT)
+
+        changed = self._attach(
+            session,
+            title,
+            OfferFact("apple_tv_store", OfferType.BUY, 3490, "ILS", None),
+        )
+
+        assert changed == 0
+        assert row.price_minor is None
+
+    def test_an_offer_that_has_gone_is_left_alone(self, session: Session) -> None:
+        """Pricing something the service stopped carrying would revive it in
+        every way that shows on the page."""
+        title = add_title(session)
+        row = self._offer(session, title, is_current=False)
+
+        changed = self._attach(
+            session,
+            title,
+            OfferFact("apple_tv_store", OfferType.RENT, 1690, "ILS", None),
+        )
+
+        assert changed == 0
+        assert row.price_minor is None
+
+    def test_a_fact_for_a_different_service_is_ignored(self, session: Session) -> None:
+        title = add_title(session)
+        row = self._offer(session, title)
+
+        changed = self._attach(
+            session,
+            title,
+            OfferFact("netflix_il", OfferType.RENT, 1690, "ILS", None),
+        )
+
+        assert changed == 0
+        assert row.price_minor is None
 
 
 class TestFindingTheMislabelled:

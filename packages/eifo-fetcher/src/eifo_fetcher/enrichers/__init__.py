@@ -32,6 +32,7 @@ __all__ = [
 
 def _builtin_enrichers(seret_lookup: SeretLookup | None = None) -> list[Enricher]:
     # Imported lazily so one broken provider cannot break the whole CLI.
+    from eifo_fetcher.enrichers.apple_prices import ApplePricesEnricher
     from eifo_fetcher.enrichers.rt import RottenTomatoesEnricher
     from eifo_fetcher.enrichers.seret import SeretEnricher
     from eifo_fetcher.enrichers.tmdb_meta import TmdbMetadataEnricher
@@ -41,6 +42,9 @@ def _builtin_enrichers(seret_lookup: SeretLookup | None = None) -> list[Enricher
         TmdbMetadataEnricher(),
         SeretEnricher(seret_lookup),
         RottenTomatoesEnricher(),
+        # Last: it adds nothing to a title, only a price and a link to an offer
+        # somebody else already found, so nothing downstream waits on it.
+        ApplePricesEnricher(),
     ]
 
 

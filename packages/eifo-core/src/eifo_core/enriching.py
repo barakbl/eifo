@@ -34,6 +34,7 @@ from eifo_core.models import (
     EnrichAttempt,
     ExternalRating,
     Genre,
+    Source,
     Title,
     TitleGenre,
 )
@@ -259,6 +260,45 @@ def store_ratings(
     return written
 
 
+def apply_offer_facts(session: Session, title: Title, result: EnrichResult) -> int:
+    """Attach prices and links to offers this title already has.
+
+    Never creates an offer and never revives a retired one. An enricher knows
+    what a service charges, not what it carries - the harvester decides that,
+    and a price arriving for something nobody is offering is a matching mistake
+    rather than news.
+
+    Fills rather than overwrites, on the same principle as ``metadata_patch``:
+    a source that scrapes its own storefront knows its price better than a
+    search API does, so the search only speaks where nothing else has.
+    """
+    if not result.offers:
+        return 0
+
+    rows = session.scalars(
+        select(Availability)
+        .join(Source, Source.id == Availability.source_id)
+        .where(Availability.title_id == title.id, Availability.is_current.is_(True))
+    ).all()
+    by_offer = {(row.source.key, row.offer_type): row for row in rows}
+
+    changed = 0
+    for fact in result.offers:
+        row = by_offer.get((fact.source_key, fact.offer_type))
+        if row is None:
+            continue
+        touched = False
+        if fact.price_minor is not None and row.price_minor is None:
+            row.price_minor = fact.price_minor
+            row.price_currency = fact.price_currency
+            touched = True
+        if fact.deep_link_url and not row.deep_link_url:
+            row.deep_link_url = fact.deep_link_url
+            touched = True
+        changed += int(touched)
+    return changed
+
+
 def apply_patch(session: Session, title: Title, result: EnrichResult, *, source: str) -> bool:
     """Fill empty fields, and correct a name stored in the wrong script."""
     changed = False
@@ -478,4 +518,5 @@ def view_of(title: Title) -> TitleView:
         year=title.year,
         tmdb_id=title.tmdb_id,
         imdb_id=title.imdb_id,
+        offered_by=frozenset(row.source.key for row in title.availability if row.is_current),
     )

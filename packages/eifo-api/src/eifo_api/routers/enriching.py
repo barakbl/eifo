@@ -54,6 +54,7 @@ from eifo_api.schemas import (
 from eifo_core import ingest as wire
 from eifo_core.enriching import (
     RejectionSink,
+    apply_offer_facts,
     apply_patch,
     mislabelled_names,
     outcome_of,
@@ -462,6 +463,11 @@ def _store_findings(
             written += store_ratings(session, title, result.ratings, _reject(rejected, index))
             if apply_patch(session, title, result, source=source):
                 tally.metadata_updated += 1
+            # What a service charges and where its page is, attached to offers
+            # the harvester already found. Counted with the metadata because it
+            # is the same kind of thing: a fact about the title filled in by
+            # somebody who knows it better than whoever first reported it.
+            tally.metadata_updated += apply_offer_facts(session, title, result)
 
         tally.ratings_written += written
         if recompute(session, title, settings):

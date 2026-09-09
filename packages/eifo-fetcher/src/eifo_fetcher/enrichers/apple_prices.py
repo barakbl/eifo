@@ -74,6 +74,7 @@ class ApplePricesEnricher(Enricher):
     """Prices and store links for titles the Apple TV store carries."""
 
     key = "apple_prices"
+    name = "Apple TV prices"
     host = HOST
     # Apple documents roughly twenty calls a minute for this endpoint, so a
     # third of a request a second with a little room. The pipeline applies it

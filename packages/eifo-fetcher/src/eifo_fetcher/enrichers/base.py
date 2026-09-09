@@ -62,10 +62,20 @@ class Enricher(ABC):
     #: overrides it. None leaves the client-wide default in place.
     default_rate_limit_rps: float | None = None
 
+    #: How to say which provider this is where a person is reading - a menu of
+    #: enrichers to pick one from, a sentence about what is running. Optional:
+    #: the key is a serviceable name for anything that does not declare one,
+    #: which is what a third-party enricher gets.
+    name: str = ""
+
     @property
     @abstractmethod
     def key(self) -> str:
         """Short stable name, used in configuration and logs."""
+
+    def called(self) -> str:
+        """What to call it in front of somebody."""
+        return self.name or self.key
 
     @abstractmethod
     def enrich(self, title: TitleView, ctx: FetchContext) -> EnrichResult | None:

@@ -247,6 +247,31 @@ export function offerState(offer) {
  * they were written down in. */
 const OFFER_ORDER = ["free", "stream", "rent", "buy"];
 
+/** Deals that cost money on top of whatever you already pay. */
+const PAID = new Set(["rent", "buy"]);
+
+/**
+ * Where a service belongs in the list, cheapest commitment first.
+ *
+ * The question a viewer is really asking is "can I watch this tonight without
+ * paying for it again", so the list is ordered by how close each row is to
+ * yes. A service they have told us they subscribe to is the closest thing to
+ * yes there is - it costs them nothing further - so it goes first. Then
+ * whatever is free to anyone, then subscriptions they would have to take out,
+ * and last the ones that charge per view however convenient they are.
+ *
+ * Paying again is last even on a service of their own: somebody who uses the
+ * Apple TV store still pays for the rental, and putting that above a
+ * subscription they already have would be telling them to spend money they do
+ * not need to spend.
+ */
+export function offerRank(offer, mine) {
+  if (PAID.has(offer.offer_type)) return 3;
+  if (mine.has(offer.source_key)) return 0;
+  if (offer.offer_type === "free") return 1;
+  return 2;
+}
+
 /**
  * One row per service, not one per deal.
  *
@@ -260,7 +285,8 @@ const OFFER_ORDER = ["free", "stream", "rent", "buy"];
  * title it no longer sells stays two rows. Merging those would put "Rent ·
  * Buy" next to one badge and claim something the catalog does not know.
  */
-export function offersByService(availability) {
+export function offersByService(availability, { mine = [] } = {}) {
+  const subscribed = new Set(mine);
   const groups = new Map();
   for (const offer of availability) {
     const state = offerState(offer);
@@ -288,7 +314,13 @@ export function offersByService(availability) {
       // Whichever deal knows where it goes. They are the same page.
       deep_link_url: group.offers.find((offer) => offer.deep_link_url)?.deep_link_url ?? null,
     }))
-    .sort((a, b) => Number(b.is_current) - Number(a.is_current));
+    .sort(
+      (a, b) =>
+        // What is still watchable comes first whatever it costs: a service that
+        // dropped the title is not an option however cheap it used to be.
+        Number(b.is_current) - Number(a.is_current) ||
+        offerRank(a.offers[0], subscribed) - offerRank(b.offers[0], subscribed),
+    );
 }
 
 /**

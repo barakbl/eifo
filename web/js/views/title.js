@@ -20,7 +20,7 @@ import { el, ratingChip, replace, scorePill, stateBlock } from "../ui.js";
 
 export function createTitleView({ mount, app, router, items }) {
   return async function render(route) {
-    const { t, language, user } = app.get();
+    const { t, language, user, sources } = app.get();
     const id = route.params[0];
 
     replace(mount, el("div", { class: "shell state" }, el("div", { class: "state__mark" })));
@@ -53,13 +53,13 @@ export function createTitleView({ mount, app, router, items }) {
         .catch(() => {});
     }
 
-    replace(mount, buildDetail(title, { t, language, user, items }));
+    replace(mount, buildDetail(title, { t, language, user, items, sources }));
     document.title = `${displayName(title, language)} · ${t("app.name")}`;
     return null;
   };
 }
 
-function buildDetail(title, { t, language, user, items }) {
+function buildDetail(title, { t, language, user, items, sources = [] }) {
   const name = displayName(title, language);
   const alternate = secondaryName(title, language);
 
@@ -88,15 +88,30 @@ function buildDetail(title, { t, language, user, items }) {
           { class: "detail__facts" },
           facts.map((fact) => el("span", { text: fact })),
         ),
+        // The score belongs with the name: it is the second thing anybody wants
+        // after knowing which film this is, and it sat three sections down
+        // under the arithmetic that produced it. The arithmetic stays down
+        // there, where somebody who already believes the number can check it.
+        scoreRow(title, { t }),
         overview ? el("p", { class: "detail__overview", text: overview }) : null,
-        aggregateBlock(title, { t, language }),
+        // Then the whole point of the site. This was the last thing on the
+        // page, below the cast and the ratings, so an app whose name asks
+        // "where?" answered only for somebody who scrolled far enough to
+        // wonder whether it would.
+        offersSection(title, { t, language, mine: myServices(user, sources) }),
         userSection(title, { t, user, items }),
       ]),
       creditsSection(title, { t, language }),
     ]),
     ratingsSection(title, { t, language }),
-    offersSection(title, { t, language }),
+    scoreWorking(title, { t, language }),
   ]);
+}
+
+/** The services this viewer says they already pay for, as source keys. */
+function myServices(user, sources) {
+  const byId = new Map((sources ?? []).map((source) => [source.id, source.key]));
+  return (user?.my_source_ids ?? []).map((id) => byId.get(id)).filter(Boolean);
 }
 
 /* Who made it, and the facts about the thing itself.
@@ -289,12 +304,20 @@ export function noScoreReasonKey(components, score) {
   return "title.noScoreThinVotes";
 }
 
-function aggregateBlock(title, { t, language }) {
+/**
+ * The score itself, which sits with the title.
+ *
+ * Split from the working below because they answer different questions and
+ * belong in different places: "is this any good" is what somebody opening the
+ * page wants, and "how was that arrived at" is what somebody who already
+ * believes the answer might go looking for.
+ */
+function scoreRow(title, { t }) {
   const { score, score_israeli: israeli, components } = title.aggregate;
   const unrated = noScoreReasonKey(components, score);
   if (score === null && israeli === null && !unrated) return null;
 
-  const row = el("div", { class: "aggregate section" }, [
+  return el("div", { class: "aggregate section" }, [
     score !== null
       ? el("span", {}, [
           scorePill(score, { large: true, label: t("title.aggregate") }),
@@ -313,16 +336,19 @@ function aggregateBlock(title, { t, language }) {
         ])
       : null,
   ]);
+}
 
+/** How the score was arrived at, for anybody who wants to check it. */
+function scoreWorking(title, { t, language }) {
+  const { score, components } = title.aggregate;
   const entries = Object.entries(components ?? {});
-  if (!entries.length) return row;
+  if (!entries.length) return null;
 
   // The working is shown rather than asserted: a combined score is only worth
   // trusting if you can see what went into it.
   const pulled = ratersAverage(components, score);
 
-  return el("div", {}, [
-    row,
+  return el("div", { class: "section" }, [
     el("details", { class: "components" }, [
       el("summary", { text: t("title.components") }),
       el("table", { class: "components__table" }, [
@@ -460,7 +486,7 @@ function ratingsSection(title, { t, language }) {
   ]);
 }
 
-function offersSection(title, { t, language }) {
+function offersSection(title, { t, language, mine = [] }) {
   if (!title.availability.length) {
     return el("section", { class: "section" }, [
       el("h2", { class: "section__heading", text: t("title.whereToWatch") }),
@@ -470,7 +496,7 @@ function offersSection(title, { t, language }) {
 
   // One row per service - a shop that both rents and sells is one place you
   // can watch it - and current offers first, which is the point of the page.
-  const ordered = offersByService(title.availability);
+  const ordered = offersByService(title.availability, { mine });
 
   return el("section", { class: "section" }, [
     el("h2", { class: "section__heading", text: t("title.whereToWatch") }),
@@ -498,11 +524,19 @@ function offerRow(service, { t, language }) {
         : null;
 
   const canWatch = state === "available" && offer.deep_link_url;
-  // What it costs sits with what kind of offer it is - a rental's price is part
-  // of that deal, not a footnote, and a shop that rents and sells quotes two.
+  // What each deal is, said as a chip rather than as a word in a sentence.
+  // Sixty per cent of what this catalog lists charges per view and almost none
+  // of it quotes a figure, so "Apple TV Store" beside "Netflix" read as two
+  // equivalent ways to watch tonight when only one of them is. The price stays
+  // on the chip that charges it: a shop that rents for one figure and sells for
+  // another quotes both, and each belongs beside its own deal.
   const deals = service.offers.map((deal) => {
     const price = formatPrice(deal.price_minor, deal.price_currency, language);
-    return price ? `${t(`offer.${deal.offer_type}`)} ${price}` : t(`offer.${deal.offer_type}`);
+    const label = t(`offer.${deal.offer_type}`);
+    return el("span", {
+      class: `deal deal--${deal.offer_type}`,
+      text: price ? `${label} ${price}` : label,
+    });
   });
 
   return el(
@@ -515,9 +549,10 @@ function offerRow(service, { t, language }) {
       el("div", {}, [
         el("div", { class: "offer__name", text: offer.source_name }),
         el("div", { class: "offer__note" }, [
-          el("span", { text: deals.join(" · ") }),
+          el("span", { class: "offer__deals" }, deals),
           el("span", {
-            text: ` · ${t("offer.verified", { date: formatDate(offer.last_seen, language) })}`,
+            class: "offer__seen",
+            text: t("offer.verified", { date: formatDate(offer.last_seen, language) }),
           }),
         ]),
       ]),

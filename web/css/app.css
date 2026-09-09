@@ -1202,6 +1202,52 @@ img {
   font-family: var(--font-data);
 }
 
+/* What a row costs you, as a chip rather than a word in a sentence.
+ *
+ * Sixty per cent of the offers in this catalog charge per view and almost none
+ * quote a price, so "Apple TV Store" sat beside "Netflix" looking like two
+ * equivalent ways to watch tonight. What it costs is the thing a viewer is
+ * sorting on, and it should be visible before it is read: free and
+ * subscription in the quiet colours of something already paid for, rent and
+ * buy in the accent, which is the one that means "this is a decision". */
+.offer__deals {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-inline-end: var(--space-2);
+}
+
+.deal {
+  padding: 0.1rem var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+/* The green the score pills already use for good news: free asks nothing. */
+.deal--free {
+  border-color: var(--score-high);
+  color: var(--score-high);
+}
+
+.deal--stream {
+  border-color: var(--line-strong);
+  color: var(--fg-muted);
+}
+
+.deal--rent,
+.deal--buy {
+  border-color: var(--accent);
+  background: var(--accent-quiet);
+  color: var(--accent);
+}
+
+.offer__seen {
+  color: var(--fg-faint);
+}
+
 /* A price is the one part of the note you decide on, so it carries the weight
    of the surrounding text rather than fading with it. */
 .offer__price {

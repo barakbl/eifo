@@ -226,6 +226,53 @@ describe("offersByService", () => {
   it("handles a title on nothing", () => {
     assert.deepEqual(offersByService([]), []);
   });
+
+  /* The order answers "can I watch this tonight without paying again", so it
+     runs from the closest thing to yes to the furthest. */
+
+  it("puts a service the viewer already pays for first", () => {
+    const rows = offersByService(
+      [offer({ source_key: "apple_tv_store", offer_type: "rent" }),
+       offer({ source_key: "kan", offer_type: "free" }),
+       offer({ source_key: "netflix_il", offer_type: "stream" })],
+      { mine: ["netflix_il"] },
+    );
+
+    assert.deepEqual(rows.map((r) => r.source_key), ["netflix_il", "kan", "apple_tv_store"]);
+  });
+
+  it("falls back to free when none of them is theirs", () => {
+    const rows = offersByService([
+      offer({ source_key: "apple_tv_store", offer_type: "buy" }),
+      offer({ source_key: "disney_plus_il", offer_type: "stream" }),
+      offer({ source_key: "kan", offer_type: "free" }),
+    ]);
+
+    assert.deepEqual(rows.map((r) => r.source_key), ["kan", "disney_plus_il", "apple_tv_store"]);
+  });
+
+  it("keeps paying again last even on a service of their own", () => {
+    // Somebody who uses the Apple TV store still pays for the rental; putting
+    // it above a subscription they already hold would be telling them to spend
+    // money they need not spend.
+    const rows = offersByService(
+      [offer({ source_key: "apple_tv_store", offer_type: "rent" }),
+       offer({ source_key: "disney_plus_il", offer_type: "stream" })],
+      { mine: ["apple_tv_store"] },
+    );
+
+    assert.deepEqual(rows.map((r) => r.source_key), ["disney_plus_il", "apple_tv_store"]);
+  });
+
+  it("still puts what is watchable above what is gone, whatever it costs", () => {
+    const rows = offersByService(
+      [offer({ source_key: "kan", offer_type: "free", is_current: false }),
+       offer({ source_key: "apple_tv_store", offer_type: "buy" })],
+      { mine: [] },
+    );
+
+    assert.deepEqual(rows.map((r) => r.source_key), ["apple_tv_store", "kan"]);
+  });
 });
 
 describe("offerState", () => {

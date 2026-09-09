@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/barakbl/eifo/compare/v0.17.0...v0.18.0) (2026-09-09)
+
+
+### Features
+
+* what Apple charges, and where its page is ([#124](https://github.com/barakbl/eifo/issues/124)) ([49f4f34](https://github.com/barakbl/eifo/commit/49f4f34edf6b6e7fd958aace9c26d3408477ca68))
+
 ## [0.17.0](https://github.com/barakbl/eifo/compare/v0.16.0...v0.17.0) (2026-09-09)
 
 

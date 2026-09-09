@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/barakbl/eifo/compare/v0.15.4...v0.16.0) (2026-09-09)
+
+
+### Features
+
+* a score says how much it is worth, wherever it is shown ([#121](https://github.com/barakbl/eifo/issues/121)) ([34b1f43](https://github.com/barakbl/eifo/commit/34b1f4302f665fe2bd8cde5b05897e891654831f))
+
 ## [0.15.4](https://github.com/barakbl/eifo/compare/v0.15.3...v0.15.4) (2026-09-09)
 
 

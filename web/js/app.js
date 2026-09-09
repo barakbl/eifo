@@ -8,7 +8,7 @@ import { createRouter, parseHash } from "./router.js";
 import { createStore, debounce } from "./store.js";
 import { createSuggest } from "./suggest.js";
 import { QUERY_EVENT } from "./views/home.js";
-import { el, replace, stateBlock } from "./ui.js";
+import { el, wallCopy, replace, stateBlock } from "./ui.js";
 import { createHomeView } from "./views/home.js";
 import { createManageView } from "./views/manage.js";
 import { createMyListView } from "./views/mylist.js";
@@ -207,9 +207,13 @@ async function signOut(router) {
  * The callback cannot render anything itself - it is a redirect - so it says
  * what happened in the URL and the app says it out loud here.
  */
-function loginNotice(t) {
-  const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
-  const outcome = params.get("login");
+/* Which outcome the sign-in round trip came back with, if any. */
+function loginOutcome() {
+  return new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("login");
+}
+
+function loginNotice(t, { silence } = {}) {
+  const outcome = loginOutcome();
   // Three outcomes and three sentences. "Please try again" is actively
   // unhelpful to somebody who was not invited: trying again is the one thing
   // that will never work for them.
@@ -218,7 +222,7 @@ function loginNotice(t) {
     failed: "auth.failed",
     not_invited: "auth.notInvited",
   }[outcome];
-  if (!said) return null;
+  if (!said || outcome === silence) return null;
 
   return el("div", { class: "notice", role: "status" }, [
     el("span", { text: t(said) }),
@@ -236,23 +240,34 @@ function loginNotice(t) {
  *
  * Deliberately not the error state. Nothing went wrong: the catalog is private
  * and they are not signed in, which is a sentence with an action in it rather
- * than a fault to retry. */
+ * than a fault to retry.
+ *
+ * Two walls, because two very different people see it. Somebody who has not
+ * tried yet is being invited to sign in. Somebody who just did, and was turned
+ * away, is not: telling them "sign in to see what is streaming" under a
+ * dismissible notice reads as "you have not signed in yet", which is exactly
+ * how a refusal gets mistaken for success - it did, by somebody who then
+ * reported he was in. So the refusal takes over the wall, says the round trip
+ * worked and the address is still not on the list, and offers the only thing
+ * that could actually change the outcome: a different account.
+ */
 function signInWall() {
   const { t, loginProviders } = app.get();
+  const copy = wallCopy(loginOutcome());
 
   return el("main", { class: "shell members__wall", id: "main" }, [
-    el("div", { class: "state", role: "status" }, [
+    el("div", { class: `state${copy.refused ? " state--refused" : ""}`, role: "status" }, [
       el("div", { class: "state__mark", "aria-hidden": "true" }),
-      el("p", { class: "state__title", text: t("members.wallTitle") }),
-      el("p", { class: "state__body", text: t("members.wallBody") }),
+      el("p", { class: "state__title", text: t(copy.title) }),
+      el("p", { class: "state__body", text: t(copy.body) }),
       el(
         "div",
         { class: "members__wallActions" },
         loginProviders.map((provider) =>
           el("a", {
-            class: "button",
+            class: copy.refused ? "button button--quiet" : "button",
             href: loginUrl(provider),
-            text: t("auth.signInWith", { provider: t(`auth.provider.${provider}`) }),
+            text: t(copy.action, { provider: t(`auth.provider.${provider}`) }),
           }),
         ),
       ),
@@ -357,7 +372,13 @@ async function start() {
   // in. A wall rather than the router's error state, which reads as a fault -
   // this is not broken, it is closed, and the difference is a button.
   if (context?.members_only && !user) {
-    replace(root, buildHeader({ router }), loginNotice(app.get().t), signInWall(), buildFooter(null));
+    replace(
+      root,
+      buildHeader({ router }),
+      loginNotice(app.get().t, { silence: "not_invited" }),
+      signInWall(),
+      buildFooter(null),
+    );
     return;
   }
 

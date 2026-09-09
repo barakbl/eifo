@@ -1248,6 +1248,29 @@ img {
   border: 2px dashed var(--line-strong);
 }
 
+/* A refusal, not an invitation.
+ *
+ * The same wall serves two people: one who has not signed in yet, and one who
+ * just did and was turned away. They were being shown the same neutral panel,
+ * and the second read it as the first - a dismissible line above a headline
+ * saying "sign in to see what is streaming" looks exactly like not having
+ * signed in. So this one stops being a dashed outline waiting to be filled and
+ * becomes a solid statement in the accent colour: something happened, and it
+ * was not what you wanted.
+ *
+ * The title carries the weight rather than the panel, because a red box around
+ * "you are not on the list" reads as a fault in the site instead of a fact
+ * about the list. */
+.state--refused .state__mark {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--accent-quiet);
+}
+
+.state--refused .state__title {
+  color: var(--fg);
+}
+
 .state__title {
   color: var(--fg);
   font-size: var(--text-lg);

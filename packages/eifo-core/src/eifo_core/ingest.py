@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from eifo_core.enums import FetchPhase, OfferType, RatingProvider, TitleKind
-from eifo_core.findings import EnrichResult, Rating, TitleView
+from eifo_core.findings import EnrichResult, OfferFact, Rating, TitleView
 from eifo_core.items import RawItem, TmdbTitle
 
 #: Bumped when a change would make an older fetcher's archive wrong rather than
@@ -434,6 +434,7 @@ def view_to_wire(view: TitleView) -> dict[str, Any]:
         "year": view.year,
         "tmdb_id": view.tmdb_id,
         "imdb_id": view.imdb_id,
+        "offered_by": sorted(view.offered_by),
     }
 
 
@@ -449,6 +450,7 @@ def view_from_wire(payload: Any) -> TitleView:
             year=_optional_int(payload.get("year")),
             tmdb_id=_optional_int(payload.get("tmdb_id")),
             imdb_id=_optional_str(payload.get("imdb_id")),
+            offered_by=frozenset(str(key) for key in payload.get("offered_by") or []),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise WireError(f"not a usable title: {exc}") from exc
@@ -466,6 +468,16 @@ def finding_to_wire(result: EnrichResult) -> dict[str, Any]:
             for rating in result.ratings
         ],
         "metadata_patch": dict(result.metadata_patch),
+        "offers": [
+            {
+                "source_key": offer.source_key,
+                "offer_type": offer.offer_type.value,
+                "price_minor": offer.price_minor,
+                "price_currency": offer.price_currency,
+                "deep_link_url": offer.deep_link_url,
+            }
+            for offer in result.offers
+        ],
     }
 
 
@@ -488,7 +500,22 @@ def finding_from_wire(payload: Any) -> EnrichResult:
     patch = payload.get("metadata_patch") or {}
     if not isinstance(patch, dict):
         raise WireError("metadata_patch is not an object")
-    return EnrichResult(ratings=ratings, metadata_patch=patch)
+
+    try:
+        offers = [
+            OfferFact(
+                source_key=str(entry["source_key"]),
+                offer_type=OfferType(entry["offer_type"]),
+                price_minor=_optional_int(entry.get("price_minor")),
+                price_currency=_optional_str(entry.get("price_currency")),
+                deep_link_url=_optional_str(entry.get("deep_link_url")),
+            )
+            for entry in payload.get("offers") or []
+        ]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WireError(f"not a usable offer: {exc}") from exc
+
+    return EnrichResult(ratings=ratings, metadata_patch=patch, offers=offers)
 
 
 def _optional_str(value: Any) -> str | None:

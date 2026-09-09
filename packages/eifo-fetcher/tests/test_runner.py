@@ -871,7 +871,10 @@ class TestSkippingAnEnricherForOneRun:
         with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
             self._run(api, settings, http, skip_imdb=True)
 
-        assert "enriching with: tmdb, seret, rt" in caplog.text
+        # The whole line, not a prefix of it: asserting a prefix would keep
+        # passing when a fourth enricher joined and say nothing about it.
+        line = caplog.text.split("enriching with: ")[1].split("\n")[0]
+        assert line == "tmdb, seret, rt, apple_prices"
 
     def test_one_can_be_left_out(
         self, api: IngestClient, settings: Settings, http: HttpClient, caplog: Any
@@ -886,7 +889,13 @@ class TestSkippingAnEnricherForOneRun:
         self, api: IngestClient, settings: Settings, http: HttpClient, caplog: Any
     ) -> None:
         with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
-            self._run(api, settings, http, skip_imdb=True, skip=["RT", " tmdb ", "Seret"])
+            self._run(
+                api,
+                settings,
+                http,
+                skip_imdb=True,
+                skip=["RT", " tmdb ", "Seret", "Apple_Prices"],
+            )
 
         assert "enriching with: nothing" in caplog.text
 

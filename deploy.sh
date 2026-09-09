@@ -80,6 +80,18 @@ print(f\"  rescored {changed:,} of {seen:,} titles\")
 '"
 fi
 
+# A container that has just started is not one that is serving: the first check
+# after `up -d` reported 502 on a deployment that was entirely fine, which is
+# the kind of false alarm that teaches you to ignore the check.
+say "Waiting for it to come up"
+for _ in $(seq 1 30); do
+  if "${SSH[@]}" "sudo docker inspect eifo-api-1 --format '{{.State.Health.Status}}'" 2>/dev/null \
+       | grep -q healthy; then
+    break
+  fi
+  sleep 3
+done
+
 say "Checking it answers"
 "${SSH[@]}" "cd $REMOTE && sudo docker ps --format '  {{.Names}}|{{.Status}}'"
 curl -sS -m 20 -o /dev/null -w "  HTTPS: %{http_code} in %{time_total}s\n" https://eifo.barakbloch.com/

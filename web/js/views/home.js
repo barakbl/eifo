@@ -250,6 +250,7 @@ export function createHomeView({ mount, app, router, items }) {
             language,
             index,
             user ? cardActions({ titleId: title.id, items, t }) : null,
+            t,
           ),
         ),
       );

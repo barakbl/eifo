@@ -181,7 +181,7 @@ function entryCard(entry, { t, language, items }) {
         title.year ? el("span", { text: String(title.year) }) : null,
         entry.rating != null
           ? el("span", { class: "mine", text: `★ ${entry.rating}` })
-          : scorePill(title.score),
+          : scorePill(title.score, { votes: title.score_votes, t }),
       ]),
     ]),
     // Quick actions inline, so a list can be worked through without opening

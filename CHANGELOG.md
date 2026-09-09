@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/barakbl/eifo/compare/v0.16.0...v0.17.0) (2026-09-09)
+
+
+### Features
+
+* the page answers "where" before it asks you to scroll ([#123](https://github.com/barakbl/eifo/issues/123)) ([272a868](https://github.com/barakbl/eifo/commit/272a868039fbdbe26cd52cab2fd735a0c7a56dc6))
+
 ## [0.16.0](https://github.com/barakbl/eifo/compare/v0.15.4...v0.16.0) (2026-09-09)
 
 

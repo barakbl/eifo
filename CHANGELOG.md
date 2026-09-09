@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.4](https://github.com/barakbl/eifo/compare/v0.15.3...v0.15.4) (2026-09-09)
+
+
+### Bug Fixes
+
+* a refusal stops looking like a successful sign-in ([#118](https://github.com/barakbl/eifo/issues/118)) ([97d5eab](https://github.com/barakbl/eifo/commit/97d5eab2547f127fd3809e13cba427cb3213567e))
+* a score is only as good as the evidence behind it ([#119](https://github.com/barakbl/eifo/issues/119)) ([ff40cd6](https://github.com/barakbl/eifo/commit/ff40cd6e75070e7ef96cd5d06248267b58ae561e))
+
 ## [0.15.3](https://github.com/barakbl/eifo/compare/v0.15.2...v0.15.3) (2026-09-08)
 
 

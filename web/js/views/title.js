@@ -293,6 +293,8 @@ function aggregateBlock(title, { t, language }) {
 
   // The working is shown rather than asserted: a combined score is only worth
   // trusting if you can see what went into it.
+  const pulled = ratersAverage(components, score);
+
   return el("div", {}, [
     row,
     el("details", { class: "components" }, [
@@ -316,6 +318,15 @@ function aggregateBlock(title, { t, language }) {
           ),
         ),
       ]),
+      pulled
+        ? el("p", {
+            class: "components__pulled",
+            text: t("title.pulledToOrdinary", {
+              mean: pulled.mean,
+              votes: formatVotes(pulled.votes, language) || pulled.votes,
+            }),
+          })
+        : null,
     ]),
   ]);
 }
@@ -340,6 +351,31 @@ function componentRow(provider, detail, title, { t, language }) {
       note ? el("span", { class: "components__note", text: t(note) }) : null,
     ]),
   ]);
+}
+
+/**
+ * What the raters averaged, when that is not what the score says.
+ *
+ * The table above is the working, and the point of showing working is that it
+ * adds up. It stopped adding up when thinly-supported averages began being
+ * pulled towards the ordinary: the rows can say 100 and 100 while the score
+ * says 71, and a reader is entitled to know which part of that they are
+ * looking at rather than concluding the number is broken.
+ *
+ * Computed here rather than stored, because every figure it needs is already
+ * on the page - the same rows the table renders.
+ */
+export function ratersAverage(components, score) {
+  if (score === null || score === undefined) return null;
+
+  const counted = Object.values(components ?? {}).filter((row) => (row.weight ?? 0) > 0);
+  const weight = counted.reduce((total, row) => total + row.weight, 0);
+  if (!counted.length || weight <= 0) return null;
+
+  const mean = Math.round(counted.reduce((t, row) => t + row.normalized * row.weight, 0) / weight);
+  if (mean === score) return null;
+
+  return { mean, votes: counted.reduce((t, row) => t + (row.vote_count ?? 0), 0) };
 }
 
 /**

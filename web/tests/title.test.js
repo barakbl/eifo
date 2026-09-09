@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import { translate } from "../js/i18n.js";
 import { scoreCaption } from "../js/ui.js";
-import { componentNoteKey, providerName } from "../js/views/title.js";
+import { componentNoteKey, providerName, ratersAverage } from "../js/views/title.js";
 
 /* The two decisions behind "how this score was computed".
  *
@@ -115,5 +115,43 @@ describe("scoreCaption", () => {
     const unvoted = { provider_name: "מבקרים", vote_count: null };
     assert.equal(scoreCaption(unvoted, { named: false, language: "he" }), "");
     assert.equal(scoreCaption(unvoted, { named: true, language: "he" }), "מבקרים");
+  });
+});
+
+
+describe("ratersAverage", () => {
+  const row = (normalized, weight, vote_count) => ({ normalized, weight, vote_count });
+
+  it("says nothing when the working already adds up", () => {
+    // Two million votes: the score is what the raters said, so there is
+    // nothing to explain.
+    const components = { imdb: row(80, 3, 2_000_000), tmdb: row(60, 1, 300_000) };
+
+    assert.equal(ratersAverage(components, 75), null);
+  });
+
+  it("says what the raters averaged when the score is not that", () => {
+    // The reported case: both rows read 100, the score reads 71.
+    const components = { tmdb: row(100, 0.5, 10), rt_audience: row(100, 0.5, 10) };
+
+    assert.deepEqual(ratersAverage(components, 71), { mean: 100, votes: 20 });
+  });
+
+  it("counts only the rows that were counted", () => {
+    // An excluded rating carries no weight and belongs to neither figure.
+    const components = { tmdb: row(100, 1, 400), seret_viewers: row(20, 0, 3) };
+
+    assert.equal(ratersAverage(components, 100), null);
+  });
+
+  it("has nothing to say about a title with no score", () => {
+    const components = { tmdb: row(100, 0.5, 1) };
+
+    assert.equal(ratersAverage(components, null), null);
+  });
+
+  it("survives a title with no working at all", () => {
+    assert.equal(ratersAverage(undefined, 70), null);
+    assert.equal(ratersAverage({}, 70), null);
   });
 });

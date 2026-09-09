@@ -1133,6 +1133,15 @@ img {
   font-size: var(--text-xs);
 }
 
+/* The one line that keeps the working honest: the table above is what the
+ * raters said, and this is why the score is not that. Set apart from the rows
+ * because it is about all of them rather than any one. */
+.components__pulled {
+  margin: var(--space-2) 0 0;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
 /* -- availability --------------------------------------------------------- */
 
 .offers {

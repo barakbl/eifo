@@ -14,6 +14,17 @@ rules keep the result honest:
   true and a reader can weigh it themselves - it just stops moving a number
   that is meant to summarise a consensus. Seret's audience score is the one
   provider this is set for by default.
+* **A thinly-supported average is pulled towards the ordinary.** The three
+  rules above are all about the weight one provider carries against another,
+  and weight is only ever relative - so when every provider is thin *and they
+  agree*, halving them all changes nothing. A 10/10 from one voter beside 100%
+  from two produced a catalog-topping 100, and thirteen of the top fifteen
+  titles rested on fewer than fifty votes between them. The mean is therefore
+  moved towards ``prior_score`` in proportion to how little evidence stands
+  behind it, which is the one thing damping cannot do.
+* **No evidence, no number.** Under ``min_total_votes`` there is no aggregate:
+  a score assembled almost entirely from the prior would be a statement about
+  the catalog wearing a particular title's name.
 """
 
 from __future__ import annotations
@@ -108,12 +119,13 @@ def aggregate(ratings: list[RatingInput], config: ScoresConfig) -> Aggregate:
     components = [_component(rating, config) for rating in ratings]
 
     return Aggregate(
-        score=_weighted_mean(components, config.min_providers),
+        score=_weighted_mean(components, config.min_providers, config),
         # The Israeli aggregate is the point of a separate score, so a single
         # local provider is still worth showing.
         score_israeli=_weighted_mean(
             [component for component in components if component.provider.is_israeli],
             minimum=1,
+            config=config,
         ),
         components={component.provider.value: component.as_dict() for component in components},
     )
@@ -160,8 +172,13 @@ def _too_few_votes(rating: RatingInput, config: ScoresConfig) -> bool:
     return rating.vote_count <= floor
 
 
-def _weighted_mean(components: list[Component], minimum: int) -> int | None:
-    """Weighted mean of the components, or None if too few carry any weight."""
+def _weighted_mean(components: list[Component], minimum: int, config: ScoresConfig) -> int | None:
+    """The score these components support, or None if they support none.
+
+    Two steps. The weighted mean says what the providers think; the pull
+    towards the prior says how much of that to believe, which is a question
+    about the number of people behind it rather than about the providers.
+    """
     contributing = [component for component in components if component.weight > 0]
     if len(contributing) < minimum:
         return None
@@ -171,4 +188,32 @@ def _weighted_mean(components: list[Component], minimum: int) -> int | None:
         return None
 
     weighted = sum(component.normalized * component.weight for component in contributing)
-    return round_half_up(weighted / total_weight)
+    mean = weighted / total_weight
+
+    counted = [
+        component.vote_count for component in contributing if component.vote_count is not None
+    ]
+    if not counted:
+        # Nothing here reports a count - Seret's critic figure is one editorial
+        # opinion, not a poll. Unknown is not few, so it is neither floored nor
+        # pulled: the providers' own number stands.
+        return round_half_up(mean)
+
+    votes = sum(counted)
+    if votes < config.min_total_votes:
+        return None
+
+    return round_half_up(_towards_the_prior(mean, votes, config))
+
+
+def _towards_the_prior(mean: float, votes: int, config: ScoresConfig) -> float:
+    """Move a mean towards the prior by however little supports it.
+
+    The weighted-rating shape IMDb's Top 250 uses. At ``confidence_votes`` the
+    title's own mean and the prior weigh the same; far past it the prior stops
+    mattering, and far short of it the title is described mostly by the company
+    it keeps. Nothing here is clamped: both inputs are already 0-100, so
+    anything between them is too.
+    """
+    strength = config.confidence_votes
+    return (votes * mean + strength * config.prior_score) / (votes + strength)

@@ -205,6 +205,30 @@ export function currentSources(availability = []) {
   return keys.sort();
 }
 
+/* How many votes a score has to rest on before it is shown plainly.
+ *
+ * Mirrors the confidence point the aggregate itself uses, and is here for the
+ * same reason the score bands are: what a number looks like is a decision
+ * about reading it, not about computing it. Under this the score has been
+ * pulled towards the ordinary and is more a statement about the catalog than
+ * about the title, so it is shown faintly - the figure is still there for
+ * anybody who wants it, it just stops competing for the eye with scores that
+ * thousands of people stand behind.
+ */
+export const CONFIDENT_VOTES = 100;
+
+/** Whether a score rests on too little to be read at face value.
+ *
+ * A title with no score is not a thinly-held one: it has nothing to hold. Its
+ * pill shows a dash, and dressing that up as low confidence would explain a
+ * number that is not there - and explain it wrongly, since the reason is more
+ * often a single rater than a shortage of voters.
+ */
+export function scoreIsThin(score, votes) {
+  if (score === null || score === undefined) return false;
+  return votes !== null && votes !== undefined && votes < CONFIDENT_VOTES;
+}
+
 /**
  * Which badge an offer needs, if any.
  *

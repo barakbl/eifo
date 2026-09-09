@@ -11,8 +11,10 @@ import {
   formatScore,
   formatWhen,
   languageName,
+  CONFIDENT_VOTES,
   offerState,
   offersByService,
+  scoreIsThin,
   personName,
   runtimeBand,
   paramsToFilters,
@@ -428,5 +430,36 @@ describe("countryFlag", () => {
     assert.equal(countryFlag("XYZ"), "");
     assert.equal(countryFlag("I1"), "");
     assert.equal(countryFlag(null), "");
+  });
+});
+
+
+describe("scoreIsThin", () => {
+  /* A score is only as good as the number of people behind it, and a card
+     gives no room to say so in words - so it says it in weight. */
+
+  it("calls a handful of votes thin", () => {
+    assert.equal(scoreIsThin(65, 3), true);
+    assert.equal(scoreIsThin(65, 99), true);
+  });
+
+  it("leaves a well-supported score alone", () => {
+    assert.equal(scoreIsThin(94, CONFIDENT_VOTES), false);
+    assert.equal(scoreIsThin(94, 2_000_000), false);
+  });
+
+  it("says nothing when nobody was counted", () => {
+    // An editorial rating is one opinion, not a thin poll: unknown is not few,
+    // which is the same rule the aggregate itself follows.
+    assert.equal(scoreIsThin(80, null), false);
+    assert.equal(scoreIsThin(80, undefined), false);
+  });
+
+  it("does not dress up a missing score as a doubtful one", () => {
+    // The pill shows a dash. Marking it low-confidence would explain a number
+    // that is not there, and explain it wrongly: no score usually means one
+    // rater rather than few voters.
+    assert.equal(scoreIsThin(null, 28), false);
+    assert.equal(scoreIsThin(undefined, 28), false);
   });
 });

@@ -206,6 +206,27 @@ def _weighted_mean(components: list[Component], minimum: int, config: ScoresConf
     return round_half_up(_towards_the_prior(mean, votes, config))
 
 
+def votes_behind(components: dict[str, Any] | None) -> int | None:
+    """How many people the score rests on, or None when nobody was counted.
+
+    The same sum the aggregate is judged by, exposed so a reader can be told
+    what a number is worth rather than only being shown the number. Counts only
+    the raters that were counted: an excluded rating is not evidence, and a
+    provider that reports no count - one editor's opinion rather than a poll -
+    is not a shortage of it either.
+    """
+    if not components:
+        return None
+    counted = [
+        int(row["vote_count"])
+        for row in components.values()
+        if (row.get("weight") or 0) > 0 and row.get("vote_count") is not None
+    ]
+    if not counted:
+        return None
+    return sum(counted)
+
+
 def _towards_the_prior(mean: float, votes: int, config: ScoresConfig) -> float:
     """Move a mean towards the prior by however little supports it.
 

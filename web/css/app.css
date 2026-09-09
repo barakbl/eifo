@@ -1142,6 +1142,31 @@ img {
   font-size: var(--text-sm);
 }
 
+/* A score a handful of people stand behind.
+ *
+ * Faint rather than hidden: it is a true number and a reader can weigh it, but
+ * it should not sit in a grid looking exactly like one two million people
+ * agreed on. The figure stays legible - this is a hint about how much to trust
+ * it, not a punishment - and the tooltip says how many votes it rests on.
+ */
+.score--thin {
+  opacity: 0.55;
+  border: 1px dashed currentColor;
+}
+
+/* No score at all, said out loud rather than by omission. */
+.badge--unrated {
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+  color: var(--fg-muted);
+}
+
+.aggregate__unrated {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 /* -- availability --------------------------------------------------------- */
 
 .offers {

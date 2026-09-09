@@ -5,7 +5,14 @@
  * search terms, and neither is trusted markup.
  */
 
-import { currentSources, formatScore, formatVotes, scoreBand, sourceColorVar } from "./format.js";
+import {
+  currentSources,
+  formatScore,
+  formatVotes,
+  scoreBand,
+  scoreIsThin,
+  sourceColorVar,
+} from "./format.js";
 import { displayName } from "./i18n.js";
 
 /**
@@ -45,14 +52,25 @@ export function replace(parent, ...children) {
 }
 
 /** A score pill, colour-banded, with the band also stated for screen readers. */
-export function scorePill(score, { large = false, label = "" } = {}) {
+export function scorePill(score, { large = false, label = "", votes = null, t = null } = {}) {
   const band = scoreBand(score);
-  const classes = ["score", `score--${band}`, large ? "score--large" : ""].filter(Boolean);
+  // A score held up by a handful of people is shown faintly rather than
+  // hidden: it is true, and a reader can weigh it, but it should not sit on a
+  // card looking exactly like one two million people agreed on.
+  const thin = scoreIsThin(score, votes);
+  const classes = [
+    "score",
+    `score--${band}`,
+    large ? "score--large" : "",
+    thin ? "score--thin" : "",
+  ].filter(Boolean);
+  const why = thin && t ? t("score.thinVotes", { votes: formatVotes(votes) || votes }) : "";
+  const described = [label, why].filter(Boolean).join(" - ");
   return el("span", {
     class: classes.join(" "),
     text: formatScore(score),
-    title: label,
-    "aria-label": label ? `${label}: ${formatScore(score)}` : undefined,
+    title: described || label,
+    "aria-label": described ? `${described}: ${formatScore(score)}` : undefined,
   });
 }
 
@@ -233,7 +251,7 @@ const EAGER_IMAGES = 12;
  * of the card rather than a child: the card is one big anchor, and a button
  * inside an anchor is neither valid nor clickable - the link swallows it.
  */
-export function titleCard(title, language, index = 0, actions = null) {
+export function titleCard(title, language, index = 0, actions = null, t = null) {
   const name = displayName(title, language);
   const eager = index < EAGER_IMAGES;
   const poster = title.poster_url
@@ -252,7 +270,7 @@ export function titleCard(title, language, index = 0, actions = null) {
       el("span", { class: "card__title", text: name }),
       el("span", { class: "card__meta" }, [
         title.year ? el("span", { text: String(title.year) }) : null,
-        scorePill(title.score),
+        scorePill(title.score, { votes: title.score_votes, t }),
       ]),
     ]),
     actions,

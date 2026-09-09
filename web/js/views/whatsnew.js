@@ -215,7 +215,7 @@ function arrivalCard(arrival, { language, t, index, actions }) {
       el("span", { class: "card__title", text: name }),
       el("span", { class: "card__meta" }, [
         title.year ? el("span", { text: String(title.year) }) : null,
-        scorePill(title.score),
+        scorePill(title.score, { votes: title.score_votes, t }),
       ]),
       el(
         "span",

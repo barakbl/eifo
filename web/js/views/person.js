@@ -124,7 +124,7 @@ function roleSection(person, role, heading, { t, language }) {
     el(
       "ul",
       { class: "grid" },
-      credits.map((credit, index) => titleCard(credit.title, language, index)),
+      credits.map((credit, index) => titleCard(credit.title, language, index, null, t)),
     ),
   ]);
 }

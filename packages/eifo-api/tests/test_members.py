@@ -12,13 +12,15 @@ from __future__ import annotations
 import datetime as dt
 
 import pytest
+import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from helpers import MakeAdmin, SignIn
-from providers import GOOGLE_EMAIL
+from helpers import MakeAdmin, SignIn, start_login
+from providers import GOOGLE_EMAIL, mock_google
 from seed import Seeded
 from sqlalchemy.orm import Session, sessionmaker
 
+from eifo_api.security import SESSION_COOKIE
 from eifo_core.enums import AuthProvider, MemberRole
 from eifo_core.models import ApiToken, Member, User, UserSession
 from eifo_core.tokens import API_TOKEN_PREFIX
@@ -144,6 +146,29 @@ class TestWhoGetsIn:
 
         # sign_in follows the redirect chain; the fragment is what the client reads.
         assert client.get("/api/v1/me").status_code == 401
+
+    @respx.mock
+    def test_the_browser_is_sent_back_saying_not_invited(self, client: TestClient, invite) -> None:
+        """The sentence somebody actually reads, pinned where it is chosen.
+
+        Every other test here asserts the 401, which a refusal of any kind
+        produces. Nothing asserted the outcome carried back to the app, so
+        turning this into the generic failure would have told somebody who can
+        never get in to try again, and no test would have minded.
+        """
+        invite("somebody.else@example.com")
+        mock_google()
+        _location, state = start_login(client)
+
+        landed = client.get(
+            "/api/v1/auth/callback/google",
+            params={"code": "the-code", "state": state},
+            follow_redirects=False,
+        )
+
+        assert landed.status_code == 302
+        assert landed.headers["location"].endswith("#/?login=not_invited")
+        assert client.cookies.get(SESSION_COOKIE) is None
 
 
 class TestManagingTheList:

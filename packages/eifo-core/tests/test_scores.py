@@ -270,3 +270,115 @@ class TestComponents:
         assert result.score is None
         assert result.score_israeli is None
         assert result.components == {}
+
+
+class TestEvidenceBehindTheNumber:
+    """Damping weighs providers against each other; this weighs the evidence.
+
+    Weight is only ever relative, so when every provider is thin *and they
+    agree*, halving them all changes nothing: a 10/10 from one voter beside
+    100% from two averaged to a catalog-topping 100. Thirteen of the top
+    fifteen titles rested on fewer than fifty votes between them.
+    """
+
+    def test_the_title_that_started_this(self) -> None:
+        """TMDB 10.0 from one voter, 100% from two. It was the whole catalog's
+        best film."""
+        result = aggregate(
+            [RatingInput(P.TMDB, 100, 1), RatingInput(P.RT_AUDIENCE, 100, 2)],
+            config(),
+        )
+
+        assert result.score is None
+
+    def test_agreement_does_not_make_thin_evidence_thick(self) -> None:
+        # Both damped, so both weigh 0.5 and the mean is still 100 - the part
+        # damping could never fix. 20 votes: (20*100 + 100*65) / 120 = 70.83
+        result = aggregate(
+            [RatingInput(P.TMDB, 100, 10), RatingInput(P.RT_AUDIENCE, 100, 10)],
+            config(),
+        )
+
+        assert result.score == 71
+
+    def test_at_the_confidence_point_the_prior_weighs_the_same(self) -> None:
+        # The definition of the setting, asserted: 100 votes against a prior
+        # worth 100 votes puts the answer exactly between them.
+        result = aggregate(
+            [RatingInput(P.IMDB, 95, 50), RatingInput(P.TMDB, 95, 50)],
+            config(),
+        )
+
+        assert result.score == (95 + 65) // 2
+
+    def test_a_well_supported_score_is_left_alone(self) -> None:
+        # (80*3 + 60*1) / 4 = 75, and two million votes leave it there.
+        result = aggregate(
+            [RatingInput(P.IMDB, 80, 2_000_000), RatingInput(P.TMDB, 60, 300_000)],
+            config(),
+        )
+
+        assert result.score == 75
+
+    def test_it_pulls_a_low_score_up_as_readily_as_a_high_one_down(self) -> None:
+        """Not a penalty for being obscure - a statement about confidence."""
+        thin = aggregate(
+            [RatingInput(P.TMDB, 10, 10), RatingInput(P.RT_AUDIENCE, 10, 10)],
+            config(),
+        )
+
+        assert thin.score is not None
+        assert 10 < thin.score < 65
+
+    def test_no_number_at_all_below_the_floor(self) -> None:
+        nine = aggregate(
+            [RatingInput(P.TMDB, 90, 4), RatingInput(P.RT_AUDIENCE, 90, 5)],
+            config(),
+        )
+        ten = aggregate(
+            [RatingInput(P.TMDB, 90, 5), RatingInput(P.RT_AUDIENCE, 90, 5)],
+            config(),
+        )
+
+        assert nine.score is None
+        assert ten.score is not None
+
+    def test_ratings_that_count_nobody_are_neither_floored_nor_pulled(self) -> None:
+        """Seret's critic figure is one editor's opinion, not a poll.
+
+        Unknown is not few - the same rule the per-provider floor already
+        follows - so a title rated only by such providers keeps their number.
+        """
+        result = aggregate(
+            [RatingInput(P.IMDB, 80, None), RatingInput(P.TMDB, 60, None)],
+            config(),
+        )
+
+        assert result.score == 75
+
+    def test_a_counted_rating_beside_an_uncounted_one_is_judged_on_what_it_has(
+        self,
+    ) -> None:
+        # Only IMDb reports a count, so the evidence is its 200 votes.
+        # (80*3 + 60*1) / 4 = 75, then (200*75 + 100*65) / 300 = 71.67
+        result = aggregate(
+            [RatingInput(P.IMDB, 80, 200), RatingInput(P.TMDB, 60, None)],
+            config(),
+        )
+
+        assert result.score == 72
+
+    def test_the_israeli_score_is_judged_the_same_way(self) -> None:
+        """Its top three were 100s resting on twenty-odd votes each."""
+        result = aggregate([RatingInput(P.SERET_VIEWERS, 100, 20)], config())
+
+        assert result.score_israeli == 71
+
+    def test_how_much_evidence_is_enough_is_configurable(self) -> None:
+        lenient = aggregate(
+            [RatingInput(P.TMDB, 100, 10), RatingInput(P.RT_AUDIENCE, 100, 10)],
+            config(confidence_votes=10),
+        )
+
+        # 20 votes against a prior worth 10: (20*100 + 10*65) / 30 = 88.3
+        assert lenient.score == 88

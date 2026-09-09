@@ -80,6 +80,39 @@ class ScoresConfig(BaseModel):
     #: default outright rather than merging, so name every provider you want a
     #: floor for.
     min_votes: dict[str, int] = Field(default_factory=lambda: {"seret_viewers": 10})
+    #: Votes at which a title's own rating outweighs the prior below.
+    #:
+    #: Halving a thin rating's weight was not enough, because weight is only
+    #: relative: when every provider is thin *and they agree*, halving them all
+    #: changes nothing. A 10/10 from one voter and 100% from two produced a
+    #: catalog-topping 100, and thirteen of the top fifteen titles rested on
+    #: fewer than fifty votes between them.
+    #:
+    #: So the score is pulled towards ``prior_score`` in proportion to how
+    #: little evidence stands behind it - the standard weighted-rating shape,
+    #: the same one IMDb's Top 250 uses. At this many votes a title's own
+    #: rating and the prior weigh the same; well past it the prior stops
+    #: mattering. 100 was chosen against the real catalog: it puts The
+    #: Godfather at the top and the one-vote wonders in the middle, where they
+    #: belong.
+    confidence_votes: int = 100
+    #: What a title with no evidence is assumed to be worth.
+    #:
+    #: Roughly the catalog average - a prior, not a measurement. Deliberately a
+    #: constant rather than the mean recomputed each run: a figure derived from
+    #: the catalog would move every score in it whenever titles were added, and
+    #: a score that changes because something unrelated arrived is not one
+    #: anybody can reason about.
+    prior_score: int = 65
+    #: Below this many votes in total, no aggregate at all.
+    #:
+    #: The pull above handles thin evidence; this handles none worth the name.
+    #: A title whose entire support is three votes is not a low score, it is an
+    #: absence of one, and saying so is more honest than publishing a number
+    #: that is almost entirely the prior. Counted across every provider that
+    #: reports a count, so a rating with no count - Seret's editorial critic
+    #: figure - neither helps nor hurts.
+    min_total_votes: int = 10
 
 
 class EnrichConfig(BaseModel):

@@ -16,12 +16,14 @@ use chrono::Utc;
 use muda::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
 use crate::health::Status;
+use crate::procs::EnricherOption;
 use crate::runs::{self, RunView, SourceOption};
 use crate::worker::{Snapshot, UpdateView};
 
 /// Prefix on the id of a per-source item, so a click can be turned back into
 /// the source it was for. The id is the only thing a menu event carries.
 pub const SOURCE_PREFIX: &str = "source:";
+pub const ENRICHER_PREFIX: &str = "enricher:";
 
 /// How many rows the progress list may take before it stops naming what is
 /// still to come. A menu longer than the screen is not a readout.
@@ -40,6 +42,8 @@ pub struct Items {
     /// One row per service on offer, with the key its id was built from.
     source_items: RefCell<Vec<(String, MenuItem)>>,
     pub run_enrich: MenuItem,
+    pub enrich_one: Submenu,
+    enricher_items: RefCell<Vec<(String, MenuItem)>>,
     pub run_images: MenuItem,
     pub run_all: MenuItem,
     pub stop_fetch: MenuItem,
@@ -80,6 +84,7 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
     let run_sync = MenuItem::new("Sync every service now", true, None);
     let sync_one = Submenu::new("Sync one service", true);
     let run_enrich = MenuItem::new("Refresh ratings now", true, None);
+    let enrich_one = Submenu::new("Refresh one rating source", true);
     let run_images = MenuItem::new("Download artwork now", true, None);
     let run_all = MenuItem::new("Run everything now", true, None);
     let stop_fetch = MenuItem::new("Stop the current fetch", false, None);
@@ -116,6 +121,7 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         &run_sync,
         &sync_one,
         &run_enrich,
+        &enrich_one,
         &run_images,
         &run_all,
         &stop_fetch,
@@ -157,6 +163,8 @@ pub fn build(login_enabled: bool) -> (Menu, Items) {
         sync_one,
         source_items: RefCell::new(Vec::new()),
         run_enrich,
+        enrich_one,
+        enricher_items: RefCell::new(Vec::new()),
         run_images,
         run_all,
         stop_fetch,
@@ -447,6 +455,20 @@ pub fn source_key(id: &str) -> Option<&str> {
     id.strip_prefix(SOURCE_PREFIX)
 }
 
+/// The id a per-enricher item carries, and the key read back out of one.
+///
+/// Its own prefix rather than sharing the source one: a menu event carries an
+/// id and nothing else, and `tmdb` is both a source and an enricher here - so
+/// one prefix would make a click on "TMDB metadata" indistinguishable from a
+/// click on a source that syncs a catalog.
+pub fn enricher_id(key: &str) -> String {
+    format!("{ENRICHER_PREFIX}{key}")
+}
+
+pub fn enricher_key(id: &str) -> Option<&str> {
+    id.strip_prefix(ENRICHER_PREFIX)
+}
+
 pub fn apply(items: &Items, snapshot: &Snapshot) {
     items.status.set_text(headline(snapshot));
     let detail_text = detail(snapshot);
@@ -479,6 +501,11 @@ pub fn apply(items: &Items, snapshot: &Snapshot) {
     let offered = snapshot.run.sources.iter().filter(|s| s.on).count();
     items.sync_one.set_enabled(!busy && offered > 0);
     fill_sources(items, &snapshot.run.sources);
+
+    items
+        .enrich_one
+        .set_enabled(!busy && !snapshot.enrichers.is_empty());
+    fill_enrichers(items, &snapshot.enrichers);
 
     items.stop_fetch.set_enabled(busy);
     items.stop_fetch.set_text(stop_fetch_label(snapshot));
@@ -584,6 +611,35 @@ fn fill_sources(items: &Items, sources: &[SourceOption]) {
     }
 }
 
+/// The Refresh one rating source submenu, one item per provider.
+///
+/// Rebuilt only when the set changes, because each item's id is built from its
+/// key and a click is matched by id - the same reason `fill_sources` does.
+/// Unlike the services, these have nothing to say about themselves beyond their
+/// name: an enricher does not have a "last synced" of its own, and the run log
+/// above already says what ran when.
+fn fill_enrichers(items: &Items, enrichers: &[EnricherOption]) {
+    let mut held = items.enricher_items.borrow_mut();
+
+    let same = held.len() == enrichers.len()
+        && held
+            .iter()
+            .zip(enrichers)
+            .all(|((key, _), option)| key == &option.key);
+    if same {
+        return;
+    }
+
+    for (_, item) in held.drain(..) {
+        let _ = items.enrich_one.remove(&item);
+    }
+    for option in enrichers {
+        let item = MenuItem::with_id(enricher_id(&option.key), &option.name, true, None);
+        let _ = items.enrich_one.append(&item);
+        held.push((option.key.clone(), item));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,6 +676,7 @@ mod tests {
             fetch_pid: None,
             last_result: None,
             run: RunView::default(),
+            enrichers: Vec::new(),
             server_owned: true,
             server_pid: Some(1234),
             server_remote: false,
@@ -848,6 +905,21 @@ mod tests {
     fn a_source_item_carries_its_key_and_gives_it_back() {
         assert_eq!(source_key(&source_id("kan")), Some("kan"));
         assert_eq!(source_key("stop_fetch"), None);
+    }
+
+    #[test]
+    fn an_enricher_item_carries_its_key_and_gives_it_back() {
+        assert_eq!(enricher_key(&enricher_id("rt")), Some("rt"));
+        assert_eq!(enricher_key("stop_fetch"), None);
+    }
+
+    #[test]
+    fn a_source_and_an_enricher_of_the_same_name_are_told_apart() {
+        // `tmdb` is both here: a source with a catalog to sync and an enricher
+        // that fills in metadata. A click carries an id and nothing else, so
+        // one shared prefix would make "Refresh TMDB metadata" start a sync.
+        assert_eq!(source_key(&enricher_id("tmdb")), None);
+        assert_eq!(enricher_key(&source_id("tmdb")), None);
     }
 
     #[test]

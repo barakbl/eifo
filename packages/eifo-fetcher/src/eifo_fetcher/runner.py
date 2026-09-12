@@ -244,6 +244,40 @@ def sync_all(
     return report
 
 
+def enrich_options(settings: Settings) -> list[tuple[str, str]]:
+    """Every unit an enrich can be narrowed to, and how to say each one.
+
+    The enrichers configuration leaves switched on, plus the two passes that
+    are not enrichers but are separately runnable and separately able to fail -
+    the IMDb bulk join and the Seret page crawl, both of which already have a
+    name here because they get a row of their own in the run log.
+
+    For whoever is offering the choice. The menu-bar app reads this rather than
+    keeping its own list, because a list of providers kept in two languages is
+    a list that disagrees with itself the first time one is added.
+    """
+    listed = [(e.key, e.called()) for e in discover_enrichers(settings)]
+    listed.append((IMDB_RUN_KEY, "IMDb ratings"))
+    listed.append((SERET_INDEX_RUN_KEY, "Seret page index"))
+    return listed
+
+
+def unknown_enrichers(settings: Settings, only: Iterable[str] | None) -> list[str]:
+    """The names in ``only`` that nothing here answers to.
+
+    Its own function so a caller can ask before it has opened anything. A
+    mistyped name is worth refusing at the moment it can still be explained,
+    and refusing it inside the run leaves a row in the log for a run that never
+    enriched anything.
+    """
+    return sorted(_named(only) - dict(enrich_options(settings)).keys())
+
+
+def _named(keys: Iterable[str] | None) -> set[str]:
+    """The keys somebody actually typed, tidied. Blanks are not names."""
+    return {key.strip().casefold() for key in (keys or ()) if key.strip()}
+
+
 def enrich_all(
     settings: Settings,
     *,
@@ -253,6 +287,7 @@ def enrich_all(
     limit: int | None = None,
     skip_imdb: bool = False,
     skip: Iterable[str] | None = None,
+    only: Iterable[str] | None = None,
 ) -> EnrichResultTally:
     """Run the per-title enrichers, then the IMDb bulk pass, then rescore.
 
@@ -272,8 +307,33 @@ def enrich_all(
             rate chosen to be polite to somebody's website while TMDB answers
             twenty times faster - and a catch-up over a large backlog is a
             different job from a nightly refresh.
+        only: the mirror of ``skip``, and the one to reach for when the question
+            is about a single provider: run these and nothing else. Naming the
+            one you want is a great deal harder to get wrong than naming the
+            five you do not, and a run narrowed by ``skip`` silently widens
+            every time an enricher is added.
+
+    Raises:
+        ValueError: when ``only`` names something that is not on offer. Said
+            rather than shrugged at, because a mistyped ``--only`` would
+            otherwise enrich with nothing at all and report a clean run.
     """
-    skipped = {key.strip().casefold() for key in (skip or ()) if key.strip()}
+    skipped = _named(skip)
+    wanted = _named(only)
+
+    if wanted:
+        offered = dict(enrich_options(settings))
+        unknown = sorted(wanted - offered.keys())
+        if unknown:
+            raise ValueError(
+                f"no enricher called {', '.join(unknown)}. On offer: {', '.join(sorted(offered))}"
+            )
+        # `only` decides the whole shape of the run, so it decides these two as
+        # well. An --only that left the IMDb download in would be a lie about
+        # what it was narrowing the run to, and tens of megabytes of one.
+        skipped = offered.keys() - wanted
+        skip_imdb = IMDB_RUN_KEY not in wanted
+
     skip_imdb = skip_imdb or IMDB_RUN_KEY in skipped
 
     # Before the per-title pass, so pages read tonight are scored tonight

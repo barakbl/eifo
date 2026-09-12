@@ -262,6 +262,14 @@ pub enum Phase {
         name: String,
     },
     Enrich,
+    /// One rating provider, the same idea applied to the enrich half. The Apple
+    /// price pass moves at a third of a request a second and covers the catalog
+    /// over a fortnight of nights, so "is the new one behaving" is a question
+    /// worth being able to ask without waiting for all six.
+    OneEnricher {
+        key: String,
+        name: String,
+    },
     Images,
     All,
 }
@@ -273,6 +281,9 @@ impl Phase {
             Phase::Sync => vec!["sync".into()],
             Phase::One { key, .. } => vec!["sync".into(), "--source".into(), key.clone()],
             Phase::Enrich => vec!["enrich".into()],
+            Phase::OneEnricher { key, .. } => {
+                vec!["enrich".into(), "--only".into(), key.clone()]
+            }
             Phase::Images => vec!["images".into()],
             Phase::All => vec!["all".into()],
         }
@@ -284,6 +295,7 @@ impl Phase {
             Phase::Sync => "sync".into(),
             Phase::One { name, .. } => format!("sync of {name}"),
             Phase::Enrich => "enrich".into(),
+            Phase::OneEnricher { name, .. } => format!("refresh of {name}"),
             Phase::Images => "the artwork pass".into(),
             Phase::All => "the full run".into(),
         }
@@ -335,6 +347,66 @@ impl Fetch {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// One thing an enrich can be narrowed to, as the fetcher lists them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnricherOption {
+    pub key: String,
+    pub name: String,
+}
+
+/// What the enrich can be narrowed to, asked of the fetcher itself.
+///
+/// Read from the checkout rather than kept here. A list of providers maintained
+/// in both Python and Rust is a list that disagrees with itself the first time
+/// somebody adds one, and the menu would go on offering an enricher that no
+/// longer exists - or, worse, quietly stop offering the new one nobody has
+/// checked yet.
+///
+/// None when the fetcher is not there or would not answer, so the caller can
+/// keep whatever list it already had rather than emptying the submenu over a
+/// checkout that is mid-update.
+pub fn enricher_options(config: &Config) -> Option<Vec<EnricherOption>> {
+    let fetcher = config.fetcher();
+    if !fetcher.exists() {
+        return None;
+    }
+
+    let output = Command::new(&fetcher)
+        .args(["enrich", "--list"])
+        .current_dir(&config.app_dir)
+        // The fetcher logs its startup to stderr; only stdout is the answer.
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let listed = parse_enrichers(&String::from_utf8_lossy(&output.stdout));
+    // An empty answer is not an answer. A build whose `--list` prints nothing
+    // is a build this app should keep the old list for, not one to show an
+    // empty submenu about.
+    (!listed.is_empty()).then_some(listed)
+}
+
+/// `key<tab>name` a line, which is what `eifo-fetch enrich --list` prints.
+///
+/// Anything that is not that shape is dropped rather than guessed at: this
+/// output is the contract between two programs, and a line that does not match
+/// it means the contract moved, not that a provider is called something odd.
+fn parse_enrichers(text: &str) -> Vec<EnricherOption> {
+    text.lines()
+        .filter_map(|line| {
+            let (key, name) = line.split_once('\t')?;
+            let (key, name) = (key.trim(), name.trim());
+            (!key.is_empty() && !name.is_empty()).then(|| EnricherOption {
+                key: key.to_string(),
+                name: name.to_string(),
+            })
+        })
+        .collect()
 }
 
 /// Start a fetcher phase, refusing if one is already going.
@@ -687,6 +759,63 @@ mod tests {
         assert!(Phase::All.is_sweep());
     }
 
+    #[test]
+    fn one_enricher_is_the_flag_the_fetcher_already_takes() {
+        // Same reasoning as one source: `enrich --only KEY` is what somebody
+        // would type. The Apple price pass covers the catalog over a fortnight
+        // of nights, so being able to ask about it alone is worth a menu item.
+        let one = Phase::OneEnricher {
+            key: "apple_prices".into(),
+            name: "Apple TV prices".into(),
+        };
+        assert_eq!(one.arguments(), ["enrich", "--only", "apple_prices"]);
+        assert_eq!(one.label(), "refresh of Apple TV prices");
+        assert!(
+            !one.is_sweep(),
+            "one provider is not a sweep of every source"
+        );
+    }
+
+    #[test]
+    fn the_enricher_listing_is_read_as_key_and_name() {
+        let listed = parse_enrichers("tmdb\tTMDB metadata\napple_prices\tApple TV prices\n");
+
+        assert_eq!(
+            listed,
+            vec![
+                EnricherOption {
+                    key: "tmdb".into(),
+                    name: "TMDB metadata".into()
+                },
+                EnricherOption {
+                    key: "apple_prices".into(),
+                    name: "Apple TV prices".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_line_that_is_not_that_shape_is_dropped_rather_than_guessed_at() {
+        // This output is a contract between two programs. A line that does not
+        // match it means the contract moved, not that a provider is called
+        // something odd - and half-reading it would put a menu item there that
+        // starts a run the fetcher then refuses.
+        let listed = parse_enrichers("a warning that escaped\nrt\tRotten Tomatoes\n\n\t\n");
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].key, "rt");
+    }
+
+    #[test]
+    fn a_checkout_with_no_fetcher_is_asked_nothing() {
+        // Rather than spawning something that is not there and reading a
+        // failure back out of the error.
+        let dir = tempdir();
+
+        assert_eq!(enricher_options(&config_in(&dir)), None);
+    }
+
     fn tempdir() -> std::path::PathBuf {
         let base = std::env::temp_dir().join(format!(
             "eifo-tray-test-{}-{:?}",
@@ -695,5 +824,35 @@ mod tests {
         ));
         std::fs::create_dir_all(&base).unwrap();
         base
+    }
+}
+
+#[cfg(test)]
+mod live {
+    use super::*;
+
+    /// The real `eifo-fetch --list`, against the checkout this app is pointed
+    /// at. Ignored by default because it needs a built venv; the parser tests
+    /// above pin the shape, and this pins that the shape is still what the
+    /// fetcher actually prints.
+    ///
+    ///   EIFO_TEST_APP_DIR=/path/to/eifo cargo test live -- --ignored --nocapture
+    #[test]
+    #[ignore = "needs a checkout with a built .venv"]
+    fn the_real_fetcher_lists_its_enrichers() {
+        let Ok(dir) = std::env::var("EIFO_TEST_APP_DIR") else {
+            panic!("set EIFO_TEST_APP_DIR");
+        };
+        let config = Config::new(std::path::PathBuf::from(dir));
+
+        let listed = enricher_options(&config).expect("a listing");
+
+        assert!(
+            listed.iter().any(|option| option.key == "tmdb"),
+            "no tmdb in {listed:?}"
+        );
+        for option in &listed {
+            println!("  {} - {}", option.key, option.name);
+        }
     }
 }

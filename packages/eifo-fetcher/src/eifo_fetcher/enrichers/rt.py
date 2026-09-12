@@ -74,6 +74,7 @@ class RottenTomatoesEnricher(Enricher):
             position=1,
         ),
     )
+    name = "Rotten Tomatoes"
     host = HOST
     #: What this has always effectively run at - the client-wide default - now
     #: said out loud and settable through ``[enrich.rate_limits] rt``.

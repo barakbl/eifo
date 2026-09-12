@@ -35,7 +35,9 @@ _eifo_enrichers() {
     'rt:Rotten Tomatoes - scraped, and by far the slowest'
     'tmdb:TMDB ratings and metadata'
     'seret:Seret - Israeli ratings'
+    'apple_prices:Apple TV rental and purchase prices'
     'imdb:the IMDb dataset download'
+    'seret-index:the Seret page index crawl'
   )
   _describe -t enrichers 'enricher' keys
 }
@@ -153,7 +155,9 @@ _eifo-fetch() {
             '--force[re-enrich regardless of how fresh the ratings are]' \
             '--limit=[stop after N titles]:count:' \
             '--skip-imdb[skip the IMDb dataset download (tens of megabytes)]' \
-            '*--skip=[skip one enricher for this run; repeatable]:enricher:_eifo_enrichers'
+            '*--skip=[skip one enricher for this run; repeatable]:enricher:_eifo_enrichers' \
+            '*--only=[run these enrichers and nothing else; repeatable]:enricher:_eifo_enrichers' \
+            '--list[print what --only and --skip accept]'
           ;;
         images)
           _arguments \

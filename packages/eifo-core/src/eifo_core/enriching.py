@@ -116,6 +116,47 @@ def titles_due(
     return list(session.scalars(statement).all())
 
 
+def titles_missing_price(session: Session, *, source_key: str, limit: int) -> list[Title]:
+    """Titles a service currently offers without saying what it charges.
+
+    A worklist rather than a queue, and the difference is the whole point: the
+    schedule in :func:`titles_due` is shared by every enricher and answers "has
+    this title been looked at lately", which is the wrong question for a pass
+    that fills in one service's prices. A title nobody could rate backs off for
+    a year; its Apple price is still missing, and still worth a request.
+
+    So this ignores ``due_at`` and asks the catalog's own question instead - is
+    there an offer here with no price on it - and orders by least recently
+    attempted, which is what makes it advance. The run reports on everything it
+    is handed, attempt times move, and the next run gets the next slice without
+    the fetcher having to remember anything between runs.
+    """
+    unpriced = (
+        select(Availability.title_id)
+        .join(Source, Source.id == Availability.source_id)
+        .where(
+            Source.key == source_key,
+            Availability.is_current.is_(True),
+            Availability.price_minor.is_(None),
+        )
+    )
+    statement = (
+        select(Title)
+        .outerjoin(EnrichAttempt, EnrichAttempt.title_id == Title.id)
+        .where(Title.id.in_(unpriced))
+        # Never attempted first, then oldest attempt: the same ordering as the
+        # queue, and spelled out the same way, because SQLite and PostgreSQL
+        # disagree about where NULLs sort.
+        .order_by(
+            EnrichAttempt.attempted_at.is_(None).desc(),
+            EnrichAttempt.attempted_at,
+            Title.id,
+        )
+        .limit(limit)
+    )
+    return list(session.scalars(statement).all())
+
+
 def record_attempt(
     session: Session,
     title: Title,
@@ -200,14 +241,22 @@ def mislabelled_names(session: Session, *, limit: int | None = None) -> list[Tit
     return broken[:limit] if limit is not None else broken
 
 
-def outcome_of(title: Title, *, written: int, errored: bool) -> EnrichOutcome:
+def outcome_of(title: Title, *, written: int, errored: bool, offers: int = 0) -> EnrichOutcome:
     """Read the outcome off what one title's pass through the enrichers produced.
 
     The order matters: a rating written is a success whatever else went wrong,
     and a provider failure says nothing about whether the title is rateable, so
     it outranks the two empty-handed verdicts below it.
+
+    A price counts as much as a rating. It used to count as nothing: ``written``
+    was ratings alone, so an enricher that filled in what Apple charges - and
+    nothing else, which is exactly what ``--only apple_prices`` does - reported
+    every title it had just priced as empty-handed. Each of those recorded a
+    fruitless attempt, the backoff doubled, and 34,402 of 39,068 titles ended up
+    next due in a year's time. The run had been working perfectly and the queue
+    was punishing it for it.
     """
-    if written:
+    if written or offers:
         return EnrichOutcome.OK
     if errored:
         return EnrichOutcome.ERROR

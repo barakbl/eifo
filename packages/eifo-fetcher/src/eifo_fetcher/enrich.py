@@ -132,7 +132,7 @@ def enrich_titles(
     with capture_log() as captured:
         try:
             wanted = limit if limit is not None else settings.enrich.batch_size
-            due = titles if titles is not None else _due(api, wanted, force=force)
+            due = _worklist(api, enrichers, wanted, titles=titles, force=force)
             # Said before the first title, because it is the number that decides
             # whether to wait for this or go to bed: a run with nine titles due
             # and a run with five thousand look identical until it is over.
@@ -207,6 +207,57 @@ def enrich_titles(
     tally.metadata_updated = int(outcome.get("metadata_updated", tally.metadata_updated))
     tally.aggregates_computed = int(outcome.get("aggregates_computed", tally.aggregates_computed))
     return tally
+
+
+def _worklist(
+    api: IngestClient,
+    enrichers: list[Enricher],
+    wanted: int,
+    *,
+    titles: list[TitleView] | None,
+    force: bool,
+) -> list[TitleView]:
+    """The titles this run is about, from whichever list answers its question.
+
+    Three of them, in order of how specific they are. Titles handed in win:
+    a repair already knows what it is about. Then a run made up entirely of
+    price enrichers for one service, which walks that service's offers that
+    carry no figure. Everything else is the ratings queue.
+
+    The middle case exists because the queue answers the wrong question for a
+    price. ``--only apple_prices`` used to ask it anyway, and on a catalog
+    where every title had backed off after a fruitless attempt or ten, the
+    answer was an empty list: a run that took two seconds, priced nothing, and
+    looked for all the world like a finished job.
+    """
+    if titles is not None:
+        return titles
+
+    source_key = _prices_only_for(enrichers)
+    if source_key is None:
+        return _due(api, wanted, force=force)
+
+    if force:
+        # Nothing to override: this list is what is missing, not what is
+        # overdue. Said rather than ignored, so a flag that did nothing does
+        # not read as a flag that did something.
+        logger.info("--force has no effect on a price pass; it walks what has no price")
+    found = api.offers_missing_price(source_key=source_key, limit=wanted)
+    logger.info("%d %s offer(s) carry no price yet", len(found), source_key)
+    return found
+
+
+def _prices_only_for(enrichers: list[Enricher]) -> str | None:
+    """The one service every enricher in this run prices, if that is the run.
+
+    None the moment anything else is in it - a rating provider, or a second
+    service's prices - because then the run is about more than one list and the
+    queue is the only one that covers all of it.
+    """
+    declared = {enricher.prices_for for enricher in enrichers}
+    if len(declared) != 1:
+        return None
+    return declared.pop()
 
 
 def _due(api: IngestClient, wanted: int, *, force: bool) -> list[TitleView]:

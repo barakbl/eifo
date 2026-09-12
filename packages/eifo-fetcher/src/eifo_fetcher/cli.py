@@ -55,11 +55,13 @@ from eifo_fetcher.registry import (
 )
 from eifo_fetcher.runner import (
     enrich_all,
+    enrich_options,
     fetch_images,
     index_seret,
     phase_client,
     repair_names,
     sync_all,
+    unknown_enrichers,
 )
 from eifo_fetcher.runs import close_abandoned_runs
 from eifo_fetcher.sources.base import SourceInfo
@@ -123,6 +125,22 @@ def build_parser() -> argparse.ArgumentParser:
             "skip one enricher for this run; repeatable. "
             "`rt` is the scraped one and by far the slowest"
         ),
+    )
+    enrich.add_argument(
+        "--only",
+        action="append",
+        dest="only",
+        metavar="KEY",
+        help=(
+            "run these enrichers and nothing else; repeatable. "
+            "the one to reach for when the question is about a single provider"
+        ),
+    )
+    enrich.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_enrichers",
+        help="print what --only and --skip will accept, one `key<tab>name` a line",
     )
 
     images = subcommands.add_parser("images", help="download missing artwork")
@@ -395,6 +413,27 @@ def _cmd_images(args: argparse.Namespace, settings: Settings) -> int:
 
 
 def _cmd_enrich(args: argparse.Namespace, settings: Settings) -> int:
+    if args.list_enrichers:
+        # Before the lock and before any request: this answers a question about
+        # the installed code, and asking it should not have to wait behind a
+        # nightly run that has been going for two hours.
+        for key, name in enrich_options(settings):
+            print(f"{key}\t{name}")
+        return EXIT_OK
+
+    if args.only and (args.skip or args.skip_imdb):
+        logger.error("--only and --skip say the same thing two ways; use one")
+        return EXIT_FATAL
+
+    # Checked before the lock and before the client: a name nothing answers to
+    # is a typo somebody can fix in a second, and refusing it inside the run
+    # would leave a row in the log for an enrich that enriched nothing.
+    unknown = unknown_enrichers(settings, args.only)
+    if unknown:
+        offered = ", ".join(key for key, _ in enrich_options(settings))
+        logger.error("no enricher called %s. On offer: %s", ", ".join(unknown), offered)
+        return EXIT_FATAL
+
     try:
         with (
             single_flight(settings),
@@ -409,6 +448,7 @@ def _cmd_enrich(args: argparse.Namespace, settings: Settings) -> int:
                 limit=args.limit,
                 skip_imdb=args.skip_imdb,
                 skip=args.skip,
+                only=args.only,
             )
     except IngestError as exc:
         return _refused(exc)

@@ -365,6 +365,20 @@ sync creates, and artwork needs the URLs enrichment fills in. The start time com
 `[schedule]` in `config/eifo.toml`. They can still be run one at a time
 (`eifo-fetch sync`, `enrich`, `images`) when you want just one of them.
 
+A phase can be narrowed further. `sync --source netflix_il` reads one catalog, and
+`enrich --only apple_prices` asks one provider - which is what you want when a provider
+has just been added or has just come back, because the alternative is a sweep of all six
+at the pace of the slowest. `enrich --list` prints what it will accept:
+
+```bash
+uv run eifo-fetch enrich --list          # tmdb, seret, rt, apple_prices, imdb, seret-index
+uv run eifo-fetch enrich --only rt       # just Rotten Tomatoes, no IMDb download
+uv run eifo-fetch enrich --skip rt       # the mirror: everything except the scraped one
+```
+
+A name nothing answers to stops the run rather than warning about it: an `--only` nobody
+spelled right would enrich with nothing at all and report a clean pass over the catalog.
+
 **Every phase writes through the API.** None of them opens the catalog: they ask what needs
 doing, send back what they did, and never touch the database or the images directory. On a
 single-box install there is nothing to configure for this - the fetcher talks to the API on

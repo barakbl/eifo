@@ -26,6 +26,7 @@ from eifo_core.enums import (
     SourceKind,
     TitleKind,
 )
+from eifo_core.findings import OfferFact
 from eifo_core.models import (
     AggregateScore,
     Availability,
@@ -919,6 +920,122 @@ class TestFindingTheMislabelled:
             add_title(session, name_en=f"千と千尋{index}", tmdb_id=100 + index)
 
         assert len(mislabelled_names(session, limit=2)) == 2
+
+
+class TestAPricePass:
+    """A run made only of price enrichers walks offers, not the ratings queue.
+
+    Against the real application, because the whole bug was in the seam: the
+    fetcher asked the queue, the queue answered honestly - nothing is due - and
+    the run finished in two seconds having priced nothing, on a catalog with
+    seventeen thousand unpriced Apple offers in it.
+    """
+
+    def _ctx(self, http: Any, settings: Settings) -> FetchContext:
+        return FetchContext(source_key="enrich", http=http, settings=settings)
+
+    def _offer(self, session: Session, title: Title, **overrides: Any) -> Availability:
+        source = session.scalars(select(Source).where(Source.key == "apple_tv_store")).first()
+        if source is None:
+            source = Source(
+                key="apple_tv_store",
+                name="Apple TV Store",
+                kind=SourceKind.RENT_BUY,
+                website_url="https://tv.apple.com/il",
+            )
+            session.add(source)
+            session.flush()
+        values: dict[str, Any] = {
+            "title_id": title.id,
+            "source_id": source.id,
+            "offer_type": OfferType.RENT,
+        }
+        values.update(overrides)
+        row = Availability(**values)
+        session.add(row)
+        session.commit()
+        return row
+
+    def _pricer(self, price: int = 1690) -> FakeEnricher:
+        enricher = FakeEnricher(
+            EnrichResult(
+                offers=[
+                    OfferFact(
+                        source_key="apple_tv_store",
+                        offer_type=OfferType.RENT,
+                        price_minor=price,
+                        price_currency="ILS",
+                        deep_link_url="https://tv.apple.com/il/movie/x",
+                    )
+                ]
+            ),
+            key="apple_prices",
+        )
+        enricher.prices_for = "apple_tv_store"
+        return enricher
+
+    def test_it_prices_a_title_the_queue_would_not_hand_over(
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
+    ) -> None:
+        title = add_title(session)
+        offer = self._offer(session, title)
+        add_attempt(
+            session,
+            title,
+            outcome=EnrichOutcome.NO_DATA,
+            fruitless=10,
+            due_at=utcnow() + dt.timedelta(days=365),
+        )
+        pricer = self._pricer()
+
+        run_enrich(session, api, [pricer], self._ctx(http, settings), settings)
+
+        assert [view.id for view in pricer.seen] == [title.id]
+        session.refresh(offer)
+        assert offer.price_minor == 1690
+
+    def test_a_price_leaves_the_title_recorded_as_a_success(
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """Or the pass punishes itself: every title it priced backed off further
+        than the last, until the whole catalog was a year from due."""
+        title = add_title(session)
+        self._offer(session, title)
+
+        run_enrich(session, api, [self._pricer()], self._ctx(http, settings), settings)
+
+        attempt = _attempt(session, title)
+        assert attempt.outcome is EnrichOutcome.OK
+        assert attempt.fruitless == 0
+
+    def test_a_priced_title_is_not_asked_about_twice(
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """What makes the pass finite: the worklist is what is missing, and the
+        first run takes it off the list."""
+        self._offer(session, add_title(session))
+        run_enrich(session, api, [self._pricer()], self._ctx(http, settings), settings)
+
+        second = self._pricer()
+        run_enrich(session, api, [second], self._ctx(http, settings), settings)
+
+        assert second.seen == []
+
+    def test_a_run_with_a_rating_provider_in_it_still_uses_the_queue(
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """Two enrichers, two questions, and only the queue covers both."""
+        title = add_title(session)
+        self._offer(session, title)
+        add_attempt(session, title, due_at=utcnow() + dt.timedelta(days=365))
+        due_now = add_title(session, name_he="שטיסל")
+        rater = FakeEnricher(EnrichResult(ratings=[Rating(RatingProvider.SERET_VIEWERS, 8.0)]))
+
+        run_enrich(session, api, [rater, self._pricer()], self._ctx(http, settings), settings)
+
+        # The queue's answer, not the worklist's: the unpriced title is backed
+        # off, and the one nobody has attempted is the only thing due.
+        assert [view.id for view in rater.seen] == [due_now.id]
 
 
 class TestSayingHowFarThroughTheBatchItIs:

@@ -74,7 +74,11 @@ class ApplePricesEnricher(Enricher):
     """Prices and store links for titles the Apple TV store carries."""
 
     key = "apple_prices"
+    name = "Apple TV prices"
     host = HOST
+    # Not a rating provider, so the ratings queue is not its worklist: asked on
+    # its own, it walks the store's offers that carry no figure yet.
+    prices_for = SOURCE_KEY
     # Apple documents roughly twenty calls a minute for this endpoint, so a
     # third of a request a second with a little room. The pipeline applies it
     # from here; nothing in this file has to remember to be polite.

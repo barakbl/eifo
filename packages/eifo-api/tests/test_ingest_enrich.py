@@ -32,16 +32,20 @@ from eifo_core.enums import (
     EnrichOutcome,
     FetchPhase,
     FetchStatus,
+    OfferType,
     RatingProvider,
+    SourceKind,
     TitleKind,
 )
 from eifo_core.models import (
     AggregateScore,
+    Availability,
     EnrichAttempt,
     ExternalRating,
     FetchRun,
     RatingProviderInfo,
     SeretTitle,
+    Source,
     Title,
 )
 from eifo_core.types import utcnow
@@ -53,6 +57,7 @@ RESCORE = "/api/v1/ingest/enrich/rescore"
 RUNS = "/api/v1/ingest/enrich/runs"
 SERET_INDEX = "/api/v1/ingest/enrich/seret/index"
 SERET_STATUS = "/api/v1/ingest/enrich/seret/status"
+OFFERS_WANTED = "/api/v1/ingest/enrich/offers/wanted"
 IMDB_WANTED = "/api/v1/ingest/enrich/imdb/wanted"
 IMDB_RATINGS = "/api/v1/ingest/enrich/imdb/ratings"
 
@@ -79,6 +84,32 @@ def run(client: TestClient, operator: str) -> int:
     assert response.status_code == 201
     run_id: int = response.json()["run_id"]
     return run_id
+
+
+@pytest.fixture
+def apple_offer(session_factory: sessionmaker[Session], title: int) -> int:
+    """A rent offer on the Apple TV Store with no price on it - which is every
+    one of them until something prices it."""
+    with session_factory() as session:
+        source = Source(
+            key="apple_tv_store",
+            name="Apple TV Store",
+            kind=SourceKind.RENT_BUY,
+            website_url="https://tv.apple.com/il",
+        )
+        session.add(source)
+        session.flush()
+        session.add(
+            Availability(
+                title_id=title,
+                source_id=source.id,
+                offer_type=OfferType.RENT,
+                first_seen=utcnow(),
+                last_seen=utcnow(),
+            )
+        )
+        session.commit()
+        return title
 
 
 def rating(provider: RatingProvider = RatingProvider.IMDB, score: float = 8.3) -> dict[str, Any]:
@@ -154,6 +185,86 @@ class TestTheQueue:
         assert [row["name_en"] for row in rows] == ["千と千尋の神隠し"]
 
 
+class TestThePriceWorklist:
+    """Offers with no price, asked for instead of the queue.
+
+    The queue answers "has this title been looked at lately", which is the
+    wrong question for a price: every title in the deployed catalog had backed
+    off after a string of fruitless attempts, so a run narrowed to prices was
+    handed nothing at all and finished in two seconds looking like a success.
+    """
+
+    def test_an_unpriced_offer_is_handed_over(
+        self, client: TestClient, operator: str, apple_offer: int
+    ) -> None:
+        rows = client.get(OFFERS_WANTED, params={"source": "apple_tv_store"}).json()
+
+        assert [row["id"] for row in rows] == [apple_offer]
+        assert rows[0]["offered_by"] == ["apple_tv_store"]
+
+    def test_a_priced_one_is_not(
+        self,
+        client: TestClient,
+        operator: str,
+        apple_offer: int,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        with session_factory() as session:
+            offer = session.scalars(select(Availability)).one()
+            offer.price_minor = 1690
+            offer.price_currency = "ILS"
+            session.commit()
+
+        assert client.get(OFFERS_WANTED, params={"source": "apple_tv_store"}).json() == []
+
+    def test_the_backoff_does_not_reach_it(
+        self,
+        client: TestClient,
+        operator: str,
+        apple_offer: int,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """The point of the list. The queue says no; the price is still missing."""
+        with session_factory() as session:
+            session.add(
+                EnrichAttempt(
+                    title_id=apple_offer,
+                    attempted_at=utcnow(),
+                    outcome=EnrichOutcome.NO_DATA,
+                    fruitless=10,
+                    due_at=utcnow() + dt.timedelta(days=365),
+                )
+            )
+            session.commit()
+
+        assert client.get(DUE).json() == []
+        assert len(client.get(OFFERS_WANTED, params={"source": "apple_tv_store"}).json()) == 1
+
+    def test_a_source_that_does_not_exist_is_said_out_loud(
+        self, client: TestClient, operator: str
+    ) -> None:
+        """A typo there looks exactly like a finished job."""
+        response = client.get(OFFERS_WANTED, params={"source": "aple_tv_store"})
+
+        assert response.status_code == 404
+
+    def test_it_will_not_hand_over_more_than_its_cap(
+        self, client: TestClient, operator: str
+    ) -> None:
+        response = client.get(
+            OFFERS_WANTED,
+            params={"source": "apple_tv_store", "limit": wire.MAX_DUE_PAGE + 1},
+        )
+
+        assert response.status_code == 422
+
+    def test_a_stranger_is_not_told_it_exists(self, client: TestClient) -> None:
+        assert client.get(OFFERS_WANTED, params={"source": "apple_tv_store"}).status_code in {
+            401,
+            404,
+        }
+
+
 class TestReportingFindings:
     def test_a_rating_is_stored_and_the_title_rescored(
         self,
@@ -202,6 +313,51 @@ class TestReportingFindings:
             attempt = session.scalars(select(EnrichAttempt)).one()
         assert attempt.outcome is not EnrichOutcome.OK
         assert attempt.due_at > utcnow()
+
+    def test_a_price_written_counts_as_a_successful_attempt(
+        self,
+        client: TestClient,
+        operator: str,
+        apple_offer: int,
+        run: int,
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        """It used to count as nothing, so a pass that priced a title recorded a
+        fruitless attempt against it and the wait doubled - up to a year."""
+        answer = report(
+            client,
+            operator,
+            run,
+            {
+                "title_id": apple_offer,
+                "findings": [
+                    {
+                        "source": "apple_prices",
+                        "result": {
+                            "ratings": [],
+                            "metadata_patch": {},
+                            "offers": [
+                                {
+                                    "source_key": "apple_tv_store",
+                                    "offer_type": OfferType.RENT.value,
+                                    "price_minor": 1690,
+                                    "price_currency": "ILS",
+                                    "deep_link_url": "https://tv.apple.com/il/movie/x",
+                                }
+                            ],
+                        },
+                    }
+                ],
+            },
+        ).json()
+
+        assert answer["ratings_written"] == 0
+        with session_factory() as session:
+            attempt = session.scalars(select(EnrichAttempt)).one()
+            offer = session.scalars(select(Availability)).one()
+        assert attempt.outcome is EnrichOutcome.OK
+        assert attempt.fruitless == 0
+        assert offer.price_minor == 1690
 
     def test_a_score_outside_its_providers_scale_is_refused(
         self,

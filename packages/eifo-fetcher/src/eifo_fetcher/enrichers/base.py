@@ -62,10 +62,31 @@ class Enricher(ABC):
     #: overrides it. None leaves the client-wide default in place.
     default_rate_limit_rps: float | None = None
 
+    #: The source key whose prices this enricher fills in, if it fills in
+    #: prices rather than ratings.
+    #:
+    #: What it changes: a run made up only of enrichers that declare the same
+    #: one walks that service's unpriced offers instead of the ratings queue.
+    #: The queue asks when a title was last looked at, which is the wrong
+    #: question here - a title nobody can rate backs off for up to a year, and
+    #: its price is missing for just as long. Left None by a rating provider,
+    #: which is every other enricher, and a run mixing the two uses the queue.
+    prices_for: str | None = None
+
+    #: How to say which provider this is where a person is reading - a menu of
+    #: enrichers to pick one from, a sentence about what is running. Optional:
+    #: the key is a serviceable name for anything that does not declare one,
+    #: which is what a third-party enricher gets.
+    name: str = ""
+
     @property
     @abstractmethod
     def key(self) -> str:
         """Short stable name, used in configuration and logs."""
+
+    def called(self) -> str:
+        """What to call it in front of somebody."""
+        return self.name or self.key
 
     @abstractmethod
     def enrich(self, title: TitleView, ctx: FetchContext) -> EnrichResult | None:

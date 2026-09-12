@@ -407,6 +407,21 @@ class IngestClient:
         )
         return [wire.view_from_wire(row) for row in rows]
 
+    def offers_missing_price(self, *, source_key: str, limit: int) -> list[TitleView]:
+        """Titles a service offers with no price on them yet.
+
+        The worklist a price pass walks instead of the ratings queue. Which
+        titles those are is a question about the catalog - which offers are
+        current, which of them carry a figure - so it is asked, like everything
+        else this client asks rather than works out.
+        """
+        rows = self._json(
+            "GET",
+            "/api/v1/ingest/enrich/offers/wanted",
+            params={"source": source_key, "limit": min(limit, wire.MAX_DUE_PAGE)},
+        )
+        return [wire.view_from_wire(row) for row in rows]
+
     def begin_enrich(self, *, started_at: dt.datetime) -> int:
         payload = self._json(
             "POST", "/api/v1/ingest/enrich/runs", json={"started_at": started_at.isoformat()}

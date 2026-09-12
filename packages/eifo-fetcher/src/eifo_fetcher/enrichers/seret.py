@@ -155,6 +155,7 @@ class SeretEnricher(Enricher):
             position=1,
         ),
     )
+    name = "Seret"
     host = HOST
     default_rate_limit_rps = DEFAULT_RATE_LIMIT_RPS
 

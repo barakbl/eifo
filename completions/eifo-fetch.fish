@@ -24,12 +24,14 @@ end
 
 # The chain of positional words typed so far, so "review list" can be told
 # apart from "sources list" - fish's own helpers only look for a word anywhere.
-function __eifo_enrichers --description 'Enrichers that --skip understands'
+function __eifo_enrichers --description 'Enrichers that --only and --skip understand'
     printf '%s\t%s\n' \
         rt 'Rotten Tomatoes - scraped, and by far the slowest' \
         tmdb 'TMDB ratings and metadata' \
         seret 'Seret - Israeli ratings' \
-        imdb 'the IMDb dataset download'
+        apple_prices 'Apple TV rental and purchase prices' \
+        imdb 'the IMDb dataset download' \
+        seret-index 'the Seret page index crawl'
 end
 
 function __eifo_chain
@@ -85,6 +87,8 @@ complete -c eifo-fetch -n '__eifo_at enrich' -l force -d 're-enrich regardless o
 complete -c eifo-fetch -n '__eifo_at enrich' -l limit -x -d 'stop after N titles'
 complete -c eifo-fetch -n '__eifo_at enrich' -l skip-imdb -d 'skip the IMDb dataset download (tens of megabytes)'
 complete -c eifo-fetch -n '__eifo_at enrich' -l skip -x -d 'skip one enricher for this run; repeatable' -a '(__eifo_enrichers)'
+complete -c eifo-fetch -n '__eifo_at enrich' -l only -x -d 'run these enrichers and nothing else; repeatable' -a '(__eifo_enrichers)'
+complete -c eifo-fetch -n '__eifo_at enrich' -l list -d 'print what --only and --skip accept'
 
 # -- images ------------------------------------------------------------------
 

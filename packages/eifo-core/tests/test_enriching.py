@@ -35,6 +35,7 @@ from eifo_core.enriching import (
     record_attempt,
     store_ratings,
     titles_due,
+    titles_missing_price,
     view_of,
 )
 from eifo_core.enums import EnrichOutcome, OfferType, RatingProvider, TitleKind
@@ -294,6 +295,18 @@ class TestReadingTheOutcome:
         title = add_title(session)
 
         assert outcome_of(title, written=0, errored=False) is not EnrichOutcome.OK
+
+    def test_a_price_written_is_a_success_too(self, session: Session) -> None:
+        """It used to count as nothing, so a run that priced a title recorded a
+        fruitless attempt against it and the backoff doubled for the trouble."""
+        title = add_title(session)
+
+        assert outcome_of(title, written=0, errored=False, offers=1) is EnrichOutcome.OK
+
+    def test_a_price_written_outranks_a_failure_elsewhere(self, session: Session) -> None:
+        title = add_title(session)
+
+        assert outcome_of(title, written=0, errored=True, offers=1) is EnrichOutcome.OK
 
 
 class TestStoringRatings:
@@ -605,6 +618,114 @@ class TestAttachingPricesToOffers:
 
         assert changed == 0
         assert row.price_minor is None
+
+
+class TestThePriceWorklist:
+    """What a price pass walks instead of the ratings queue.
+
+    The queue asks when a title was last looked at. For a price that is the
+    wrong question: a title nobody could rate backs off for up to a year, and
+    its price is missing for just as long. This asks which offers carry no
+    figure, and orders by attempt so that reporting on a slice advances it.
+    """
+
+    def _source(self, session: Session, key: str) -> Source:
+        source = session.scalars(select(Source).where(Source.key == key)).first()
+        if source is None:
+            source = make_source(key=key, name=key)
+            session.add(source)
+            session.flush()
+        return source
+
+    def _offer(self, session: Session, title: Title, **overrides: Any) -> Availability:
+        values: dict[str, Any] = {
+            "title_id": title.id,
+            "source_id": self._source(session, overrides.pop("key", "apple_tv_store")).id,
+            "offer_type": OfferType.RENT,
+            "first_seen": utcnow(),
+            "last_seen": utcnow(),
+            "is_current": True,
+            "miss_count": 0,
+        }
+        values.update(overrides)
+        row = Availability(**values)
+        session.add(row)
+        session.commit()
+        return row
+
+    def _wanted(self, session: Session, limit: int = 10) -> list[str | None]:
+        rows = titles_missing_price(session, source_key="apple_tv_store", limit=limit)
+        return [title.name_he for title in rows]
+
+    def test_an_offer_with_no_price_is_wanted(self, session: Session) -> None:
+        self._offer(session, add_title(session, name_he="פאודה"))
+
+        assert self._wanted(session) == ["פאודה"]
+
+    def test_one_that_already_has_a_price_is_not(self, session: Session) -> None:
+        self._offer(session, add_title(session), price_minor=1690, price_currency="ILS")
+
+        assert self._wanted(session) == []
+
+    def test_a_retired_offer_is_not_wanted(self, session: Session) -> None:
+        """Nobody can rent it, so what it would cost is not a question."""
+        self._offer(session, add_title(session), is_current=False)
+
+        assert self._wanted(session) == []
+
+    def test_another_service_is_not_this_service(self, session: Session) -> None:
+        self._offer(session, add_title(session), key="netflix_il")
+
+        assert self._wanted(session) == []
+
+    def test_a_title_is_asked_for_once_however_many_offers_it_has(self, session: Session) -> None:
+        """Rent and buy are two rows and one film, and one lookup prices both."""
+        title = add_title(session, name_he="ברבי")
+        self._offer(session, title, offer_type=OfferType.RENT)
+        self._offer(session, title, offer_type=OfferType.BUY)
+
+        assert self._wanted(session) == ["ברבי"]
+
+    def test_the_backoff_does_not_hold_anything_back(self, session: Session) -> None:
+        """The whole point. Every title in the catalog was a year from due when
+        this was written, and every Apple price was missing for that year."""
+        title = add_title(session, name_he="ברבי")
+        self._offer(session, title)
+        attempted(
+            session,
+            title,
+            outcome=EnrichOutcome.NO_DATA,
+            fruitless=10,
+            due_at=utcnow() + dt.timedelta(days=365),
+        )
+
+        assert self._wanted(session) == ["ברבי"]
+
+    def test_the_longest_unattempted_comes_first(self, session: Session) -> None:
+        """What makes it advance: a run reports on what it took, attempt times
+        move, and the next run is handed the next slice."""
+        recent = add_title(session, name_he="לאחרונה")
+        older = add_title(session, name_he="מזמן")
+        self._offer(session, recent)
+        self._offer(session, older)
+        attempted(session, recent, attempted_at=utcnow() - dt.timedelta(days=1))
+        attempted(session, older, attempted_at=utcnow() - dt.timedelta(days=30))
+
+        assert self._wanted(session) == ["מזמן", "לאחרונה"]
+
+    def test_never_attempted_sorts_ahead_of_long_ago(self, session: Session) -> None:
+        old = add_title(session, name_he="ישן")
+        self._offer(session, old)
+        attempted(session, old, attempted_at=utcnow() - dt.timedelta(days=90))
+        self._offer(session, add_title(session, name_he="חדש"))
+
+        assert self._wanted(session) == ["חדש", "ישן"]
+
+    def test_the_slice_is_bounded(self, session: Session) -> None:
+        for index in range(5):
+            self._offer(session, add_title(session, name_he=f"סרט {index}"))
+
+        assert len(self._wanted(session, limit=2)) == 2
 
 
 class TestFindingTheMislabelled:

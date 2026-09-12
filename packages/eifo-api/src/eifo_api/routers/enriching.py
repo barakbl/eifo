@@ -63,11 +63,12 @@ from eifo_core.enriching import (
     record_attempt,
     store_ratings,
     titles_due,
+    titles_missing_price,
     view_of,
 )
 from eifo_core.enums import FetchPhase, FetchStatus, RatingProvider, TitleKind
 from eifo_core.findings import Rating
-from eifo_core.models import FetchRun, SeretTitle, Title
+from eifo_core.models import FetchRun, SeretTitle, Source, Title
 from eifo_core.providers import DeclaredProvider, register_declared_providers
 from eifo_core.seret import SeretEntry, index_status, wake_titles_newly_covered
 from eifo_core.settings import Settings
@@ -304,6 +305,33 @@ def seret_status(_admin: AdminDep, session: SessionDep, settings: SettingsDep) -
     )
 
 
+@router.get("/offers/wanted", response_model=list[TitleDue], summary="Offers with no price yet")
+def offers_wanted(
+    _admin: AdminDep,
+    session: SessionDep,
+    source: Annotated[str, Query(description="Source key, e.g. apple_tv_store")],
+    limit: Annotated[int, Query(ge=1, le=wire.MAX_DUE_PAGE)] = wire.DUE_PAGE_SIZE,
+) -> list[TitleDue]:
+    """Titles this service currently offers with no price stored.
+
+    The queue at ``/due`` asks when a title was last looked at, which is the
+    right question for ratings and the wrong one for a price: a title no
+    provider can rate backs off for a year, and its price is missing for just
+    as long. This asks the question the pass is actually about, so a run
+    narrowed to one service's prices has something to do even when nothing is
+    due.
+
+    Unknown source keys are refused rather than answered with an empty list: a
+    typo there looks exactly like a finished job.
+    """
+    known = session.scalar(select(Source.key).where(Source.key == source))
+    if known is None:
+        raise HTTPException(status_code=404, detail=f"No source called {source!r}")
+
+    rows = titles_missing_price(session, source_key=source, limit=limit)
+    return [TitleDue(**wire.view_to_wire(view_of(title))) for title in rows]
+
+
 @router.get("/imdb/wanted", response_model=list[WantedImdb], summary="Titles carrying an IMDb id")
 def imdb_wanted(
     _admin: AdminDep,
@@ -449,6 +477,10 @@ def _store_findings(
 
         tally.titles_seen += 1
         written = 0
+        # Offer facts written for this title. Counted apart from ``written``,
+        # which is ratings and is reported as ``ratings_written``, but counted
+        # all the same: see outcome_of, and the year-long backoff it explains.
+        offers = 0
         errored = bool(entry.get("errored"))
 
         for finding in entry.get("findings") or []:
@@ -467,8 +499,9 @@ def _store_findings(
             # the harvester already found. Counted with the metadata because it
             # is the same kind of thing: a fact about the title filled in by
             # somebody who knows it better than whoever first reported it.
-            tally.metadata_updated += apply_offer_facts(session, title, result)
+            offers += apply_offer_facts(session, title, result)
 
+        tally.metadata_updated += offers
         tally.ratings_written += written
         if recompute(session, title, settings):
             tally.aggregates_computed += 1
@@ -476,7 +509,10 @@ def _store_findings(
         # queue has to learn from the attempts that found nothing, or it spends
         # every run on the same titles.
         record_attempt(
-            session, title, settings, outcome=outcome_of(title, written=written, errored=errored)
+            session,
+            title,
+            settings,
+            outcome=outcome_of(title, written=written, errored=errored, offers=offers),
         )
         session.flush()
 

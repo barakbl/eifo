@@ -826,11 +826,11 @@ mod tests {
         // answering.
         let mut s = snapshot();
         s.server_remote = true;
-        s.server_host = "151-145-94-93.nip.io".into();
+        s.server_host = "eifo.example.com".into();
         s.server_owned = false;
 
         let line = server_line(&s);
-        assert!(line.contains("151-145-94-93.nip.io"), "{line}");
+        assert!(line.contains("eifo.example.com"), "{line}");
         assert!(line.contains("managed there"), "{line}");
         assert!(!line.contains("pid"), "no local process to name: {line}");
     }

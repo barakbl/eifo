@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn anything_else_is_somebody_elses_machine() {
         for url in [
-            "https://151-145-94-93.nip.io",
+            "https://203-0-113-7.nip.io",
             "http://192.168.1.9:3436",
             "https://eifo.example.com",
         ] {

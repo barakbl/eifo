@@ -24,6 +24,7 @@ from eifo_api.routers import (
     me,
     meta,
     reviews,
+    stats,
     syncing,
 )
 from eifo_api.static import mount_client, mount_images
@@ -122,6 +123,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     gated = [Depends(require_membership)]
     app.include_router(meta.router, prefix=API_PREFIX, dependencies=gated)
     app.include_router(catalog.router, prefix=API_PREFIX, dependencies=gated)
+    app.include_router(stats.router, prefix=API_PREFIX, dependencies=gated)
     app.include_router(auth.router, prefix=API_PREFIX)
     app.include_router(me.router, prefix=API_PREFIX)
     app.include_router(admin.router, prefix=API_PREFIX)

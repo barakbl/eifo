@@ -2690,3 +2690,208 @@ img {
   gap: var(--space-2);
   margin-top: var(--space-4);
 }
+
+/* -- stats ---------------------------------------------------------------- */
+
+/* Every control that scopes the page, in one row above what it scopes. */
+.stats-page__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+}
+
+.stats-page__group {
+  margin: 0;
+}
+
+.stats-page__check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.stats-page__check input {
+  accent-color: var(--accent);
+}
+
+.stats-page__note {
+  margin-block: var(--space-3) 0;
+}
+
+.stats-page .stats {
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+
+/* The service's colour beside its name. The name itself stays in text ink: a
+   light brand colour is unreadable as type. */
+.stats-page__dot {
+  display: inline-block;
+  flex: none;
+  inline-size: 0.6rem;
+  block-size: 0.6rem;
+  border-radius: 50%;
+  background: var(--source-color, var(--source-unknown));
+}
+
+/* Counts line up digit under digit. */
+.stats-table__n {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-table tfoot th,
+.stats-table tfoot td {
+  padding: var(--space-2) var(--space-3);
+  border-block-start: 1px solid var(--line-strong);
+  background: var(--surface-raised);
+  color: var(--fg);
+  font-size: inherit;
+  font-weight: var(--weight-bold);
+  text-align: start;
+}
+
+.stats-table tfoot .num {
+  text-align: end;
+}
+
+.stats-table__retired td {
+  color: var(--fg-muted);
+}
+
+.stats-table__bar {
+  margin-inline-start: auto;
+}
+
+/* -- small multiples -------------------------------------------------------- */
+
+.multiples__wrap {
+  position: relative;
+  margin-block-start: var(--space-5);
+}
+
+.multiples {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.multiple {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.multiple__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.multiple__name {
+  overflow: hidden;
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multiple__total {
+  margin-inline-start: auto;
+  font-weight: var(--weight-bold);
+}
+
+.multiple__plot {
+  block-size: 6rem;
+}
+
+.multiple__chart {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  overflow: visible;
+  cursor: crosshair;
+  border-radius: var(--radius-sm);
+}
+
+.multiple__chart:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.multiple__baseline {
+  stroke: var(--line);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.multiple__bar {
+  fill: var(--source-color, var(--source-unknown));
+  transition: opacity var(--duration) var(--ease);
+}
+
+/* The hovered week stays solid and the rest step back, so the eye lands on it. */
+.multiple__chart:has(.multiple__bar--on) .multiple__bar {
+  opacity: 0.45;
+}
+
+.multiple__chart .multiple__bar--on {
+  opacity: 1;
+}
+
+.multiple__axis {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-family: var(--font-data);
+  font-size: var(--text-xs);
+  color: var(--fg-faint);
+}
+
+/* One tooltip for every chart, placed over the hovered bar. Value first and
+   strongest; the service and the date follow in secondary ink. */
+.chart-tip {
+  position: absolute;
+  inset-inline-start: 0;
+  inset-block-start: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+  pointer-events: none;
+  white-space: nowrap;
+  transform: translate(calc(var(--x, 0px) - 50%), calc(var(--y, 0px) - 100% - var(--space-2)));
+}
+
+[dir="rtl"] .chart-tip {
+  inset-inline-start: auto;
+  left: 0;
+}
+
+.chart-tip__value {
+  font-family: var(--font-data);
+  font-size: var(--text-md);
+  color: var(--fg);
+}
+
+.chart-tip__label {
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+}

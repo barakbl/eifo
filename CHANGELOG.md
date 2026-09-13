@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/barakbl/eifo/compare/v0.19.0...v0.20.0) (2026-09-13)
+
+
+### Features
+
+* a page that says how the catalog grew, and what it holds ([#129](https://github.com/barakbl/eifo/issues/129)) ([d82faf3](https://github.com/barakbl/eifo/commit/d82faf37418374e83977e1bb9aebdbb1c280c1f9))
+
 ## [0.19.0](https://github.com/barakbl/eifo/compare/v0.18.0...v0.19.0) (2026-09-13)
 
 

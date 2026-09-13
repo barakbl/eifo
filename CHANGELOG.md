@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/barakbl/eifo/compare/v0.18.0...v0.19.0) (2026-09-13)
+
+
+### Features
+
+* an enrich can be asked about one provider ([#127](https://github.com/barakbl/eifo/issues/127)) ([4678d6c](https://github.com/barakbl/eifo/commit/4678d6cd2014608d3ad9b92681643062e6b44126))
+
 ## [0.18.0](https://github.com/barakbl/eifo/compare/v0.17.0...v0.18.0) (2026-09-09)
 
 

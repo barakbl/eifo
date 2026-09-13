@@ -146,6 +146,16 @@ export function listWhatsNew({ sources = [] } = {}, { page = 1, pageSize = 24 } 
   return request(`/whats-new?${params}`, options);
 }
 
+/** What every sync in the last `days` added, oldest first. */
+export function getGrowth({ days = 365 } = {}, options) {
+  return request(`/stats/growth?days=${encodeURIComponent(days)}`, options);
+}
+
+/** Every service as it stands now: titles, offers and price coverage. */
+export function getServiceStats(options) {
+  return request("/stats/services", options);
+}
+
 export function listGenres(options) {
   return request("/genres", options);
 }

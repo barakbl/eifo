@@ -249,6 +249,77 @@ class Arrival(BaseModel):
     title: TitleCard
 
 
+class SyncGrowth(BaseModel):
+    """What one sync of one service added to the catalog.
+
+    Two different "added"s, because they answer different questions.
+    ``offers_added`` is what was new to this service - a film long on HBO Max
+    that Netflix picked up counts here, for Netflix. ``titles_created`` is what
+    was new to the whole catalog, and belongs to whichever service found it
+    first.
+    """
+
+    run_id: int
+    source_key: str
+    source_name: str
+    status: FetchStatus
+    started_at: dt.datetime
+    finished_at: dt.datetime | None = None
+    items_seen: int = 0
+    offers_added: int = 0
+    titles_created: int = 0
+    offers_retired: int = 0
+    #: Whether this sync loaded a catalog that already existed rather than
+    #: growing one - a service's first full sweep, or a scrape that was widened.
+    #: What it "added" was found, not arriving, and next to an ordinary night
+    #: it flattens every other bar to nothing.
+    catalog_load: bool = False
+
+
+class PriceCoverage(BaseModel):
+    """How many of one kind of paid offer carry a price."""
+
+    offers: int = 0
+    priced: int = 0
+    unpriced: int = 0
+    #: Titles with at least one priced offer of this kind.
+    titles_priced: int = 0
+
+
+class ServiceSnapshot(BaseModel):
+    """One service as it stands now: what it carries, and how completely."""
+
+    key: str
+    name: str
+    kind: SourceKind
+    active: bool
+    #: Distinct titles currently offered. A film to rent and to buy is one.
+    titles: int = 0
+    movies: int = 0
+    series: int = 0
+    #: Current offers, where a film to rent and to buy is two.
+    offers: int = 0
+    offers_by_type: dict[OfferType, int] = Field(default_factory=dict)
+    rent: PriceCoverage = Field(default_factory=PriceCoverage)
+    buy: PriceCoverage = Field(default_factory=PriceCoverage)
+    last_synced_at: dt.datetime | None = None
+
+
+class CatalogSnapshot(BaseModel):
+    """The whole catalog by service, with the totals that are not a plain sum.
+
+    A title on two services is one title, so the catalog's own count is asked
+    for rather than added up from the rows.
+    """
+
+    generated_at: dt.datetime
+    titles: int
+    movies: int
+    series: int
+    offers: int
+    services: list[ServiceSnapshot]
+
+
 class TitleDetail(TitleCard):
     """A single title in full."""
 

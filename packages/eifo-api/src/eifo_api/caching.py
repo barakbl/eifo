@@ -28,6 +28,7 @@ CACHEABLE_PREFIXES = (
     "/api/v1/sources",
     "/api/v1/genres",
     "/api/v1/whats-new",
+    "/api/v1/stats",
 )
 
 #: Paths whose responses must never be written down anywhere.

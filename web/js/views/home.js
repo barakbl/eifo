@@ -341,6 +341,8 @@ function buildFilterBar({ state, sources, genres, language, user, t, onChange })
       // at the end of the row and is a link: what is new is a page, not a
       // filter, and something to come back from.
       el("a", { class: "control control--new", href: "#/new", text: t("filters.whatsNew") }),
+      // Beside it, and for the same reason: somewhere to go, not a filter.
+      el("a", { class: "control control--new", href: "#/stats", text: t("filters.stats") }),
     ]),
   );
 

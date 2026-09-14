@@ -1450,12 +1450,6 @@ img {
   border-color: var(--line-strong);
 }
 
-.account__name {
-  max-inline-size: 10ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .account__panel {
   position: absolute;
   inset-block-start: calc(100% + var(--space-2));
@@ -1485,6 +1479,95 @@ img {
 
 .account__item:hover {
   background: var(--surface-sunken);
+}
+
+/* Signed in: the avatar and one quiet icon per page, colored only when reached. */
+.account--inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.account__who {
+  display: inline-flex;
+  margin-inline-end: var(--space-1);
+}
+
+.account__link {
+  display: inline-grid;
+  place-items: center;
+  inline-size: 2rem;
+  block-size: 2rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 1.125rem;
+  cursor: pointer;
+  transition:
+    color var(--duration) var(--ease),
+    background-color var(--duration) var(--ease);
+}
+
+.account__link .icon {
+  stroke-width: 1.75;
+  stroke-linecap: round;
+}
+
+.account__link:hover,
+.account__link:focus-visible {
+  color: var(--accent);
+  background: var(--accent-quiet);
+}
+
+/* The sign-out confirmation. */
+.confirm {
+  inline-size: min(22rem, calc(100vw - 2 * var(--space-4)));
+  padding: var(--space-5);
+  background: var(--surface-raised);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+}
+
+.confirm[open] {
+  animation: confirm-in var(--duration) var(--ease);
+}
+
+.confirm::backdrop {
+  background: rgb(0 0 0 / 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.confirm__title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-bold);
+}
+
+.confirm__body {
+  margin: 0 0 var(--space-4);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+.confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.confirm .button {
+  cursor: pointer;
+}
+
+@keyframes confirm-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.98);
+  }
 }
 
 .avatar {

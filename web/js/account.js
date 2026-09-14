@@ -66,28 +66,79 @@ export function accountMenu({ user, providers, t, onSignOut }) {
   );
 }
 
+/**
+ * The signed-in user's pages, laid out in the header rather than folded into a
+ * menu: there are only a handful, and each is one press instead of two. The
+ * icons are quiet until reached for; the name is in the tooltip and aria-label.
+ */
 function signedInMenu({ user, t, onSignOut }) {
-  return el("details", { class: "account" }, [
-    el("summary", { class: "account__summary", "aria-label": t("auth.menu") }, [
-      avatar(user),
-      el("span", { class: "account__name", text: user.display_name }),
-    ]),
-    el("div", { class: "account__panel" }, [
-      el("a", { class: "account__item", href: "#/me", text: t("mylist.title") }),
-      el("a", { class: "account__item", href: "#/settings", text: t("settings.title") }),
-      // Only for an administrator, and only as a shortcut: the page checks, and
-      // so does every endpoint it calls.
-      user.is_admin
-        ? el("a", { class: "account__item", href: "#/manage", text: t("manage.title") })
-        : null,
-      el("button", {
-        class: "account__item",
+  const link = (href, iconName, key) => {
+    const label = t(key);
+    return el("a", { class: "account__link", href, title: label, "aria-label": label }, icon(iconName));
+  };
+
+  return el("nav", { class: "account account--inline", "aria-label": t("auth.menu") }, [
+    el("span", { class: "account__who", title: user.display_name }, avatar(user)),
+    link("#/me", "list", "mylist.title"),
+    link("#/settings", "settings", "settings.title"),
+    // Only for an administrator, and only as a shortcut: the page checks, and
+    // so does every endpoint it calls.
+    user.is_admin ? link("#/manage", "manage", "manage.title") : null,
+    el(
+      "button",
+      {
+        class: "account__link",
         type: "button",
-        text: t("auth.signOut"),
-        onClick: onSignOut,
-      }),
-    ]),
+        title: t("auth.signOut"),
+        "aria-label": t("auth.signOut"),
+        onClick: () => confirmSignOut({ t, onSignOut }),
+      },
+      icon("signOut"),
+    ),
   ]);
+}
+
+/**
+ * Ask before signing out: the icon sits one slot from Settings, and a stray
+ * press should not cost somebody a round trip through Google.
+ *
+ * A native <dialog> opened with showModal(): it traps focus, closes on Escape
+ * and makes the page behind it inert without any of that written here. Not
+ * window.confirm(), which blocks the thread and cannot be styled.
+ */
+function confirmSignOut({ t, onSignOut }) {
+  const cancel = el("button", {
+    class: "button button--quiet",
+    type: "button",
+    text: t("auth.signOutCancel"),
+    onClick: () => dialog.close(),
+  });
+  const confirm = el("button", {
+    class: "button",
+    type: "button",
+    text: t("auth.signOut"),
+    onClick: () => {
+      dialog.close();
+      onSignOut();
+    },
+  });
+
+  const dialog = el("dialog", { class: "confirm", "aria-labelledby": "confirm-title" }, [
+    el("h2", { class: "confirm__title", id: "confirm-title", text: t("auth.signOutConfirm") }),
+    el("p", { class: "confirm__body", text: t("auth.signOutConfirmBody") }),
+    el("div", { class: "confirm__actions" }, [cancel, confirm]),
+  ]);
+
+  // A press on the backdrop lands on the dialog itself, not on its contents.
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) dialog.close();
+  });
+  dialog.addEventListener("close", () => dialog.remove());
+
+  document.body.append(dialog);
+  dialog.showModal();
+  // Cancel, not the destructive choice, is what Enter presses by default.
+  cancel.focus();
 }
 
 /** The user's picture, or their initial when the provider sent none. */

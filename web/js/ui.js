@@ -203,6 +203,14 @@ const ICONS = {
     "M2 12s3.8-6.5 10-6.5S22 12 22 12s-3.8 6.5-10 6.5S2 12 2 12z",
     "M12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z",
   ],
+  // The account row's pages. Three rules and their bullets, for my list.
+  list: ["M9 6h11M9 12h11M9 18h11", "M4.5 6h.01M4.5 12h.01M4.5 18h.01"],
+  // Three sliders rather than a gear: at 18px a gear's teeth are a smudge.
+  settings: ["M5 20v-6M5 10V4M12 20v-8M12 8V4M19 20v-4M19 12V4", "M3 14h4M10 8h4M17 16h4"],
+  // A shield, for the page only an administrator gets.
+  manage: ["M12 3.5l7 2.6v5.4c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6.1z"],
+  // A door with the arrow leaving through it.
+  signOut: ["M9.5 20.5H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h3.5", "M15.5 16.5 20 12l-4.5-4.5M20 12H9.5"],
 };
 
 /**

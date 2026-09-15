@@ -55,6 +55,8 @@ class EnrichResultTally:
     #: landed said "nothing yet" for the whole first chunk - and "a third of the
     #: way through and nothing found" is precisely the signal it exists to give.
     ratings_found: int = 0
+    #: Offers an enricher quoted a price for, counted the same way.
+    prices_found: int = 0
     ratings_written: int = 0
     metadata_updated: int = 0
     aggregates_computed: int = 0
@@ -65,6 +67,7 @@ class EnrichResultTally:
         return {
             "titles_seen": self.titles_seen,
             "ratings_found": self.ratings_found,
+            "prices_found": self.prices_found,
             "ratings_written": self.ratings_written,
             "metadata_updated": self.metadata_updated,
             "aggregates_computed": self.aggregates_computed,
@@ -137,6 +140,7 @@ def enrich_titles(
             # whether to wait for this or go to bed: a run with nine titles due
             # and a run with five thousand look identical until it is over.
             logger.info("%d title(s) due for enrichment", len(due))
+            _prepare(enrichers, due, ctx)
             ticker = ProgressTicker()
             began = time.monotonic()
 
@@ -196,7 +200,11 @@ def enrich_titles(
             # produced how many of the ratings. The catalog sees findings, not
             # who was asked, so without this the run row could say a thousand
             # ratings were written and nothing about where they came from.
-            stats={"by_enricher": tally.by_enricher, "ratings_found": tally.ratings_found},
+            stats={
+                "by_enricher": tally.by_enricher,
+                "ratings_found": tally.ratings_found,
+                "prices_found": tally.prices_found,
+            },
             log=captured.text(),
         )
     except IngestError as exc:
@@ -289,6 +297,24 @@ def _due(api: IngestClient, wanted: int, *, force: bool) -> list[TitleView]:
     return api.titles_due(limit=min(wanted, wire.MAX_DUE_PAGE), force=force)
 
 
+def _prepare(enrichers: list[Enricher], due: list[TitleView], ctx: FetchContext) -> None:
+    """Hand each enricher the worklist, so a batching one can fetch it at once.
+
+    A failure costs that enricher its head start, not the run: whatever it
+    could not fetch here it is still asked about title by title, and says so
+    there.
+    """
+    if not due:
+        return
+    for enricher in enrichers:
+        try:
+            enricher.prepare(due, ctx)
+        except TooManyErrorsError:
+            raise
+        except Exception as exc:
+            ctx.record_error(f"{enricher.key} could not prepare the batch", exc=exc)
+
+
 def _findings_for(
     enrichers: list[Enricher],
     view: TitleView,
@@ -372,6 +398,7 @@ def _run_one(
     ctx.record_success()
     found = len(result.ratings)
     tally.ratings_found += found
+    tally.prices_found += sum(1 for offer in result.offers if offer.price_minor is not None)
     tally.by_enricher[enricher.key] = tally.by_enricher.get(enricher.key, 0) + found
     if result.metadata_patch:
         tally.metadata_updated += 1
@@ -390,6 +417,10 @@ def _progress(tally: EnrichResultTally, done: int, total: int, began: float) -> 
         _tail(remaining(done, total, time.monotonic() - began)),
         tally_of(
             ratings=tally.ratings_found,
+            # A price pass finds no ratings at all, and used to say "nothing
+            # yet" for the whole of a run that was pricing hundreds of offers -
+            # and just as quietly for one pricing none.
+            prices=tally.prices_found,
             metadata_updated=tally.metadata_updated,
             errors=len(tally.errors),
         ),

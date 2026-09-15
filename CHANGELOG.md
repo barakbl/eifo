@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.0](https://github.com/barakbl/eifo/compare/v0.20.0...v0.21.0) (2026-09-14)
+
+
+### Features
+
+* the account menu is a row of icons, and signing out asks first ([#131](https://github.com/barakbl/eifo/issues/131)) ([5dae56e](https://github.com/barakbl/eifo/commit/5dae56e587d7b414febe5ae6a3ed13266ee4a583))
+
 ## [0.20.0](https://github.com/barakbl/eifo/compare/v0.19.0...v0.20.0) (2026-09-13)
 
 

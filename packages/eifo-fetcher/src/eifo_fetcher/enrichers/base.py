@@ -88,6 +88,15 @@ class Enricher(ABC):
         """What to call it in front of somebody."""
         return self.name or self.key
 
+    def prepare(self, titles: list[TitleView], ctx: FetchContext) -> None:  # noqa: B027
+        """Be told the whole worklist before the first title is asked about.
+
+        For a provider that answers many titles per request: it can fetch
+        everything it needs here, in a few calls, and answer each ``enrich``
+        from what it kept. Optional and a no-op by default, because most
+        providers are asked one title at a time and have nothing to gain.
+        """
+
     @abstractmethod
     def enrich(self, title: TitleView, ctx: FetchContext) -> EnrichResult | None:
         """Look this title up. Return None when the provider has nothing.

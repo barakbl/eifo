@@ -1037,6 +1037,34 @@ class TestAPricePass:
         # off, and the one nobody has attempted is the only thing due.
         assert [view.id for view in rater.seen] == [due_now.id]
 
+    def test_the_whole_worklist_is_handed_over_before_the_first_title(
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """So an enricher that answers many titles per request can ask once."""
+        titles = [add_title(session, name_he=f"סרט {n}") for n in range(3)]
+        for title in titles:
+            self._offer(session, title)
+        pricer = self._pricer()
+        prepared: list[list[int]] = []
+        pricer.prepare = lambda due, ctx: prepared.append([v.id for v in due])  # type: ignore[method-assign]
+
+        run_enrich(session, api, [pricer], self._ctx(http, settings), settings)
+
+        assert prepared == [sorted(title.id for title in titles)]
+        assert pricer.seen
+
+    def test_prices_are_counted_so_the_run_does_not_say_nothing(
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """A price pass finds no ratings; its progress line said "nothing yet"
+        whether it had priced a thousand offers or none."""
+        self._offer(session, add_title(session))
+
+        tally = run_enrich(session, api, [self._pricer()], self._ctx(http, settings), settings)
+
+        assert tally.prices_found == 1
+        assert tally.ratings_found == 0
+
 
 class TestSayingHowFarThroughTheBatchItIs:
     """An enrich run is the longest thing the fetcher does and used to say

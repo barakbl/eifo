@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.1](https://github.com/barakbl/eifo/compare/v0.21.0...v0.21.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* Apple prices by id, now that Apple's search no longer finds films ([#133](https://github.com/barakbl/eifo/issues/133)) ([043ba2c](https://github.com/barakbl/eifo/commit/043ba2c07d0eda8b6e6c580031f7b17d0e713751))
+
 ## [0.21.0](https://github.com/barakbl/eifo/compare/v0.20.0...v0.21.0) (2026-09-14)
 
 

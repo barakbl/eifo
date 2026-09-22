@@ -145,6 +145,15 @@ rate_limit_rps = 0.5
 enabled = true
 rate_limit_rps = 1.0
 
+# Lev VOD ("לב בבית") - the Lev chain's rental library, ~360 films. Sold
+# through the same ticketing platform as the Cinematheque, but this one
+# answers in JSON: one request lists the whole chain, then two per film for
+# its own record (year, countries, director) and its price. About 730
+# requests a sync, and only titles inside their viewing window are listed.
+[sources.lev_vod]
+enabled = true
+rate_limit_rps = 1.0
+
 # Israeli Film Archive (Jerusalem Cinematheque) - the national archive's own
 # digitised collection, about 940 films: roughly half free to watch, the
 # rest sold per title, each offer carrying the price its page quotes. The

@@ -321,6 +321,7 @@ pretty() {
     kan) echo "Kan Box (Kan 11) - needs a headless browser" ;;
     reshet13) echo "Reshet 13 - needs a headless browser" ;;
     cinematheque_vod) echo "Cinematheque VOD (Tel Aviv)" ;;
+    lev_vod) echo "Lev VOD (Lev cinemas)" ;;
     israel_film_archive) echo "Israel Film Archive (Jerusalem)" ;;
     *) echo "$1" ;;
   esac

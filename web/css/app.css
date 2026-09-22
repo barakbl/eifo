@@ -409,6 +409,34 @@ img {
   font-style: italic;
 }
 
+/* Editing "my services": the same list, now saying which services are yours.
+ * An accent edge so it does not pass for the filter it usually is. */
+.combo__actions--editing {
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: nowrap;
+}
+
+.combo__editing {
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+}
+
+.combo__panel--editing {
+  border-color: var(--accent);
+}
+
+.combo__problem {
+  margin: 0;
+  padding: 0 var(--space-2);
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+
+.combo__problem:empty {
+  display: none;
+}
+
 /* Search-as-you-type, under the header box. */
 .suggest {
   position: absolute;

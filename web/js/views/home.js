@@ -1,6 +1,6 @@
 /* The catalog grid: filters, search-as-you-type, and endless scrolling. */
 
-import { ApiError, listGenres, listTitles } from "../api.js";
+import { ApiError, listGenres, listTitles, patchMe } from "../api.js";
 import { cardActions, loadMineFor } from "../account.js";
 import {
   DEFAULT_FILTERS,
@@ -146,6 +146,7 @@ export function createHomeView({ mount, app, router, items }) {
       user,
       t,
       onChange: apply,
+      onSaveMine: saveMine,
     });
     replace(mount, filterBar.node, region);
 
@@ -165,6 +166,13 @@ export function createHomeView({ mount, app, router, items }) {
       // Filters live in the URL so a filtered view can be shared or reloaded.
       router.replaceSearch(filtersToParams(state.filters).toString());
       load({ reset: true });
+    }
+
+    /** Save "my services" from the combo; the rest of the app reads the answer. */
+    async function saveMine(ids) {
+      const saved = await patchMe({ my_source_ids: ids });
+      app.set({ user: saved });
+      return saved;
     }
 
     async function load({ reset = false } = {}) {
@@ -298,8 +306,8 @@ export function createHomeView({ mount, app, router, items }) {
   };
 }
 
-function buildFilterBar({ state, sources, genres, language, user, t, onChange }) {
-  const combo = serviceCombo({ state, sources, user, t, onChange });
+function buildFilterBar({ state, sources, genres, language, user, t, onChange, onSaveMine }) {
+  const combo = serviceCombo({ state, sources, user, t, onChange, onSaveMine });
   const more = moreFilters({ state, genres, language, t, onChange });
   const direction = sortDirection({ state, t, onChange });
 
@@ -611,12 +619,25 @@ function isDecade(filters, decade) {
  * The services multi-select: a dropdown of every service, each with its colour
  * dot and a checkbox, plus select-all / clear (and "my services" when signed in).
  *
+ * Signed in, the pencil beside "my services" turns the same list into the
+ * editor for that preset: the checkboxes then say which services are yours,
+ * and each tick is saved as it is made. Settings has the same chips, but going
+ * there to add one service meant leaving the catalog for it.
+ *
  * Built on <details> so it opens, closes and takes keyboard focus with no JS of
  * its own; the checkboxes are native for the same reason.
  */
-function serviceCombo({ state, sources, user, t, onChange }) {
+function serviceCombo({ state, sources, user, t, onChange, onSaveMine }) {
   const chosen = () => new Set(state.filters.sources);
   const boxes = new Map();
+  // The signed-in user as this combo last knew them: replaced by whatever the
+  // server answers to an edit, so the preset button follows along.
+  let me = user;
+  let editing = false;
+  // Whether the grid was showing "my services" when editing began - if so, it
+  // should still be showing them, as edited, when editing ends.
+  let wasPreset = false;
+  let saveToken = 0;
 
   // Only services with titles right now - a retired source with an empty
   // catalog is nothing to filter by, so it does not belong in the list.
@@ -628,6 +649,10 @@ function serviceCombo({ state, sources, user, t, onChange }) {
       class: "combo__check",
       checked: chosen().has(source.key) || undefined,
       onChange: () => {
+        if (editing) {
+          saveMine(toggleMine(me.my_source_ids, source.id, box.checked));
+          return;
+        }
         const next = chosen();
         if (box.checked) next.add(source.key);
         else next.delete(source.key);
@@ -662,7 +687,25 @@ function serviceCombo({ state, sources, user, t, onChange }) {
     el("span", { class: "combo__caret", "aria-hidden": "true", text: "▾" }),
   ]);
 
-  const mine = myServicesAction({ user, sources, state, t, onChange });
+  const mine = user
+    ? el("button", {
+        class: "combo__action combo__action--mine",
+        type: "button",
+        text: t("filters.myServices"),
+        onClick: () =>
+          onChange({ sources: presetApplied({ user: me, sources, state }) ? [] : preset() }),
+      })
+    : null;
+  // With nothing saved yet this is the whole of "my services": an invitation
+  // to pick some, which opens the editor rather than sending anyone away.
+  const edit = user
+    ? el("button", {
+        class: "combo__action combo__action--edit",
+        type: "button",
+        onClick: () => setEditing(true),
+      })
+    : null;
+
   const actions = el("div", { class: "combo__actions" }, [
     el("button", {
       class: "combo__action",
@@ -677,21 +720,84 @@ function serviceCombo({ state, sources, user, t, onChange }) {
       onClick: () => onChange({ sources: [] }),
     }),
     mine,
+    edit,
   ]);
 
-  const node = el("details", { class: "combo" }, [
-    trigger,
-    el("div", { class: "combo__panel" }, [actions, el("ul", { class: "combo__list" }, options)]),
+  const problem = el("p", { class: "combo__problem", role: "status" });
+  const editActions = user
+    ? el("div", { class: "combo__actions combo__actions--editing", hidden: true }, [
+        el("span", { class: "combo__editing", text: t("filters.editingMine") }),
+        el("button", {
+          class: "combo__action combo__action--mine is-on",
+          type: "button",
+          text: t("filters.done"),
+          onClick: () => setEditing(false),
+        }),
+      ])
+    : null;
+
+  const panel = el("div", { class: "combo__panel" }, [
+    actions,
+    editActions,
+    problem,
+    el("ul", { class: "combo__list" }, options),
   ]);
+  const node = el("details", { class: "combo" }, [trigger, panel]);
+  // Closing the dropdown is also a way of being done.
+  node.addEventListener("toggle", () => {
+    if (!node.open && editing) setEditing(false);
+  });
+
+  function preset() {
+    return presetKeys(me, sources);
+  }
+
+  function setEditing(on) {
+    if (on === editing) return;
+    editing = on;
+    problem.textContent = "";
+    if (on) {
+      wasPreset = presetApplied({ user: me, sources, state });
+      sync();
+      return;
+    }
+    // The grid said "my services" before the edit, so it says it after,
+    // meaning the services as they are now. apply() re-syncs the bar.
+    if (wasPreset) onChange({ sources: preset() });
+    else sync();
+  }
+
+  /** Save the preset, ticks first: the box already moved, the request follows. */
+  async function saveMine(ids) {
+    const token = ++saveToken;
+    const before = me;
+    me = { ...me, my_source_ids: ids };
+    problem.textContent = "";
+    sync();
+    try {
+      const saved = await onSaveMine(ids);
+      // Ticking quickly sends several saves; only the newest one's answer is
+      // the list as it now stands.
+      if (token === saveToken) me = saved;
+    } catch (error) {
+      if (token !== saveToken) return;
+      me = before;
+      problem.textContent =
+        error instanceof ApiError ? error.detail || error.message : t("item.saveFailed");
+    }
+    sync();
+  }
 
   function sync() {
     const active = chosen();
-    for (const [key, box] of boxes) box.checked = active.has(key);
+    const yours = new Set(preset());
+    for (const [key, box] of boxes) box.checked = editing ? yours.has(key) : active.has(key);
 
     label.textContent = active.size
       ? t("filters.servicesSome", { count: active.size })
       : t("filters.servicesAll");
     node.classList.toggle("combo--active", active.size > 0);
+    panel.classList.toggle("combo__panel--editing", editing);
 
     // One dot per selected service, side by side; hover a dot for its name.
     replace(
@@ -707,8 +813,23 @@ function serviceCombo({ state, sources, user, t, onChange }) {
         ),
     );
 
-    if (mine && mine.dataset.mine) {
-      mine.classList.toggle("is-on", presetApplied({ user, sources, state }));
+    if (!user) return;
+    actions.hidden = editing;
+    editActions.hidden = !editing;
+
+    const empty = yours.size === 0;
+    mine.hidden = empty;
+    mine.classList.toggle("is-on", presetApplied({ user: me, sources, state }));
+    // A pencil beside the button when there is a preset to change; words when
+    // there is not, since a lone pencil would not say what it edits.
+    edit.textContent = empty ? t("filters.myServicesEmpty") : "✎";
+    edit.classList.toggle("combo__action--hint", empty);
+    if (empty) {
+      edit.removeAttribute("aria-label");
+      edit.removeAttribute("title");
+    } else {
+      edit.setAttribute("aria-label", t("filters.editMine"));
+      edit.setAttribute("title", t("filters.editMine"));
     }
   }
 
@@ -716,38 +837,25 @@ function serviceCombo({ state, sources, user, t, onChange }) {
   return { node, sync };
 }
 
-/** The "my services" preset, folded into the combo's action row when signed in. */
-function myServicesAction({ user, sources, state, t, onChange }) {
-  if (!user) return null;
-
-  const preset = presetKeys(user, sources);
-  if (!preset.length) {
-    return el("a", {
-      class: "combo__action combo__action--hint",
-      href: "#/settings",
-      text: t("filters.myServicesEmpty"),
-    });
-  }
-
-  const button = el("button", {
-    class: "combo__action combo__action--mine",
-    type: "button",
-    "data-mine": "1",
-    text: t("filters.myServices"),
-    onClick: () =>
-      onChange({ sources: presetApplied({ user, sources, state }) ? [] : preset }),
-  });
-  return button;
+/**
+ * The saved service ids with one added or taken out.
+ *
+ * Only ever the one: ids the combo does not list - a service picked in
+ * settings that has no titles right now - stay saved.
+ */
+export function toggleMine(ids, id, wanted) {
+  const rest = (ids ?? []).filter((each) => each !== id);
+  return wanted ? [...rest, id] : rest;
 }
 
 /** The user's saved services, as source keys the catalog understands. */
-function presetKeys(user, sources) {
+export function presetKeys(user, sources) {
   const byId = new Map(sources.map((source) => [source.id, source.key]));
   return (user?.my_source_ids ?? []).map((id) => byId.get(id)).filter(Boolean);
 }
 
 /** Whether the current filter is exactly the saved preset. */
-function presetApplied({ user, sources, state }) {
+export function presetApplied({ user, sources, state }) {
   const preset = presetKeys(user, sources);
   const active = new Set(state.filters.sources);
   return preset.length > 0 && preset.length === active.size && preset.every((k) => active.has(k));

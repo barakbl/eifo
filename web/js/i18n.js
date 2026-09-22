@@ -212,7 +212,10 @@ const STRINGS = {
     "whatsnew.empty": "אין כאן חדש",
     "whatsnew.emptyBody": "עוד לא ראינו תוספות בשירות הזה. נסו שירות אחר.",
     "filters.myServices": "השירותים שלי",
-    "filters.myServicesEmpty": "בחרו שירותים בהגדרות",
+    "filters.myServicesEmpty": "בחרו את השירותים שלכם",
+    "filters.editMine": "עריכת השירותים שלי",
+    "filters.editingMine": "סמנו את השירותים שיש לכם. כל שינוי נשמר מיד.",
+    "filters.done": "סיום",
 
     "item.watched": "נצפה",
     "item.wantToWatch": "לצפייה בהמשך",
@@ -590,7 +593,10 @@ const STRINGS = {
     "whatsnew.empty": "Nothing new here",
     "whatsnew.emptyBody": "No arrivals seen on this service yet. Try another one.",
     "filters.myServices": "My services",
-    "filters.myServicesEmpty": "Pick your services in settings",
+    "filters.myServicesEmpty": "Pick your services",
+    "filters.editMine": "Edit my services",
+    "filters.editingMine": "Tick the services you have. Each change saves at once.",
+    "filters.done": "Done",
 
     "item.watched": "Watched",
     "item.wantToWatch": "Want to watch",

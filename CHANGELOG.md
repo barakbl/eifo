@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.0](https://github.com/barakbl/eifo/compare/v0.22.0...v0.23.0) (2026-09-22)
+
+
+### Features
+
+* edit "my services" right from the services dropdown ([#137](https://github.com/barakbl/eifo/issues/137)) ([8994ec5](https://github.com/barakbl/eifo/commit/8994ec555a3951cb3f0f0d29c6f53fd7527fe498))
+
 ## [0.22.0](https://github.com/barakbl/eifo/compare/v0.21.1...v0.22.0) (2026-09-22)
 
 

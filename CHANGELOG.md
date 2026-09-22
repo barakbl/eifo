@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/barakbl/eifo/compare/v0.21.1...v0.22.0) (2026-09-22)
+
+
+### Features
+
+* Lev VOD, the cinema chain's rental library ([#135](https://github.com/barakbl/eifo/issues/135)) ([17a63bf](https://github.com/barakbl/eifo/commit/17a63bf1e3df1a6f5357d58eebf3fe140162d94a))
+
 ## [0.21.1](https://github.com/barakbl/eifo/compare/v0.21.0...v0.21.1) (2026-09-15)
 
 

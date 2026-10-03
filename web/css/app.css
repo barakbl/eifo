@@ -544,13 +544,15 @@ img {
  * genres, the year boxes, the apply button - is off the side of the screen and
  * unreachable, because the page does not scroll sideways to reach it.
  *
- * Taking the positioning off the button and giving it to the row makes the
- * panel span the row instead: full width on a phone, under the bar, with
- * nothing outside the screen. `100%` in the offset above still means "below
- * the thing I am positioned against", which is now the bar rather than the
- * button, and reads better for it. */
+ * Taking the positioning off the button and giving it to the bar makes the
+ * panel span the bar instead: full width on a phone, under it, with nothing
+ * outside the screen. `100%` in the offset above still means "below the thing
+ * I am positioned against", which is now the bar rather than the button, and
+ * reads better for it. It is the bar and not the row because the row scrolls
+ * sideways on a phone (see the touch section), and a scroller clips whatever
+ * is positioned inside it. */
 @media (max-width: 40rem) {
-  .filters__row {
+  .filters {
     position: relative;
   }
 
@@ -560,7 +562,7 @@ img {
 
   .combo__panel,
   .combo__panel--wide {
-    inset-inline: 0;
+    inset-inline: var(--space-2);
     inline-size: auto;
     min-inline-size: 0;
     max-inline-size: none;
@@ -717,10 +719,13 @@ img {
   color: var(--fg);
 }
 
+/* Three across on a phone. Two made each poster half the screen tall, so a
+ * screenful was four titles and finding anything was a long scroll; at three
+ * a poster is still big enough to recognise and a screen holds nine. */
 .grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-4);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4) var(--space-2);
   list-style: none;
   margin: 0;
   padding: 0;
@@ -728,13 +733,14 @@ img {
 
 @media (min-width: 40rem) {
   .grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-4);
   }
 }
 
 @media (min-width: 60rem) {
   .grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: var(--space-5);
   }
 }
@@ -757,8 +763,13 @@ img {
   transition: transform var(--duration) var(--ease);
 }
 
-.card:hover {
-  transform: translateY(-3px);
+/* Only where there is a pointer to hover with: on a touch screen :hover sticks
+ * to whatever was last tapped, and a card left floating after the back button
+ * looks like a glitch. */
+@media (hover: hover) {
+  .card:hover {
+    transform: translateY(-3px);
+  }
 }
 
 .card__poster {
@@ -847,8 +858,10 @@ img {
   transition: transform var(--duration) var(--ease);
 }
 
-.card-slot:hover .card__actions {
-  transform: translateY(-3px);
+@media (hover: hover) {
+  .card-slot:hover .card__actions {
+    transform: translateY(-3px);
+  }
 }
 
 /* Dark scrim rather than a themed surface: these sit on artwork, which is the
@@ -3005,4 +3018,263 @@ img {
 .chart-tip__label {
   font-size: var(--text-xs);
   color: var(--fg-muted);
+}
+
+/* -- touch ------------------------------------------------------------------
+ *
+ * A finger is about 44px across, and most of the controls above were drawn
+ * for a mouse at 28-36px: on a phone the poster toggles, the header icons and
+ * the filter chips were all a little smaller than the thing pressing them, so
+ * a tap landed on the neighbour or on nothing. Everything here is about that.
+ *
+ * Keyed on a coarse pointer *or* a narrow screen. Coarse alone is the honest
+ * test, but a narrow window is almost always a phone, and bigger targets cost a
+ * desktop at that width nothing.
+ */
+
+/* No grey flash over the whole link on tap - the :active states below say it
+   instead, on the thing that was pressed. `manipulation` drops the wait for a
+   possible double-tap zoom, which is what made taps feel late. */
+a,
+button,
+summary,
+select,
+label,
+input {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Pressed, as feedback you can see under your thumb. A small give rather than
+   a colour change, because the colour is already busy meaning on or off. */
+.button:active:not(:disabled),
+.icon-button:active,
+.chip:active,
+.control:active,
+.combo__trigger:active,
+.combo__action:active,
+.toggle:active,
+.account__link:active,
+.card-action:active,
+.person__link:active {
+  transform: scale(0.94);
+}
+
+.card:active {
+  transform: scale(0.97);
+}
+
+.button,
+.icon-button,
+.chip,
+.control,
+.combo__trigger,
+.combo__action,
+.toggle,
+.account__link,
+.person__link {
+  transition-property: color, background-color, border-color, transform;
+  transition-duration: var(--duration);
+  transition-timing-function: var(--ease);
+}
+
+@media (pointer: coarse), (max-width: 40rem) {
+  :root {
+    --tap: 2.75rem;
+    --tap-compact: 2.5rem;
+  }
+
+  /* The header row has a wordmark and up to seven icons to fit in 390px, so
+     these take the compact size and lose their gap: circles side by side are
+     still forty pixels each to aim at. */
+  .icon-button {
+    min-inline-size: var(--tap-compact);
+    block-size: var(--tap-compact);
+  }
+
+  .account__link {
+    inline-size: var(--tap-compact);
+    block-size: var(--tap-compact);
+  }
+
+  .account--inline {
+    gap: 0;
+  }
+
+  .header__inner {
+    gap: var(--space-2);
+  }
+
+  .header__actions {
+    gap: var(--space-1);
+  }
+
+  .account__summary,
+  .account__item {
+    min-block-size: var(--tap);
+  }
+
+  .account__item {
+    display: flex;
+    align-items: center;
+  }
+
+  /* Sixteen pixels is the size below which iOS zooms the page into a field you
+     tap, and then leaves it zoomed. */
+  .search__input,
+  .control,
+  .note,
+  .input {
+    font-size: max(1rem, 16px);
+  }
+
+  .search__input {
+    min-block-size: var(--tap);
+  }
+
+  /* Filters: one row of chips that scrolls sideways rather than three rows
+     that push the grid half a screen down. */
+  .filters__row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    padding-block: var(--space-2);
+  }
+
+  .filters__row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .chip,
+  .control,
+  .combo__trigger {
+    min-block-size: var(--tap-compact);
+  }
+
+  .control--new {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .control--order {
+    inline-size: var(--tap-compact);
+  }
+
+  .combo__panel {
+    padding: var(--space-3);
+  }
+
+  .combo__list {
+    max-block-size: min(24rem, 55vh);
+  }
+
+  .combo__option {
+    min-block-size: var(--tap);
+    padding-inline: var(--space-3);
+  }
+
+  .combo__check {
+    inline-size: 1.25rem;
+    block-size: 1.25rem;
+  }
+
+  .combo__action {
+    min-block-size: var(--tap-compact);
+    display: inline-flex;
+    align-items: center;
+    font-size: var(--text-sm);
+  }
+
+  .suggest__option {
+    min-block-size: var(--tap);
+  }
+
+  .button,
+  .toggle,
+  .tab {
+    min-block-size: var(--tap);
+  }
+
+  .person__link {
+    display: inline-flex;
+    align-items: center;
+    min-block-size: var(--tap-compact);
+  }
+
+  .notice__dismiss {
+    min-inline-size: var(--tap);
+    min-block-size: var(--tap);
+  }
+
+  .stars__track {
+    font-size: var(--text-xl);
+  }
+
+  /* Disclosures were a line of small text with nothing around it to hit. */
+  .note-editor summary,
+  .components summary {
+    padding-block: var(--space-3);
+  }
+
+  /* Names in a credit run sit close together; the padding reaches for the
+     finger without moving the lines apart. */
+  .meta__person {
+    padding-block: var(--space-1);
+  }
+
+  /* -- the grid at three across ---------------------------------------- */
+
+  .results {
+    padding-block-start: var(--space-3);
+  }
+
+  .results__status {
+    margin-block-end: var(--space-3);
+  }
+
+  .card {
+    gap: var(--space-1);
+  }
+
+  .card__poster {
+    border-radius: var(--radius-sm);
+  }
+
+  .card__title {
+    font-size: 0.8125rem;
+    line-height: 1.3;
+  }
+
+  .card__meta {
+    gap: var(--space-1);
+    font-size: 0.6875rem;
+  }
+
+  .card__placeholder {
+    font-size: var(--text-xl);
+  }
+
+  /* The toggles stay small on the artwork - a 44px button on a 110px poster
+     would cover the film - and reach further than they look: the ::after is
+     the part a finger hits. The gap keeps two neighbours' reach from
+     overlapping more than a sliver. */
+  .card__actions {
+    inset-block-start: var(--space-1);
+    inset-inline-end: var(--space-1);
+    gap: var(--space-2);
+  }
+
+  .card-action {
+    position: relative;
+    inline-size: 2rem;
+    block-size: 2rem;
+  }
+
+  .card-action::after {
+    content: "";
+    position: absolute;
+    inset: -0.375rem;
+    border-radius: var(--radius-pill);
+  }
 }

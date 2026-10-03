@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.0](https://github.com/barakbl/eifo/compare/v0.23.0...v0.24.0) (2026-10-03)
+
+
+### Features
+
+* touch-friendly phone layout ([#139](https://github.com/barakbl/eifo/issues/139)) ([9b74962](https://github.com/barakbl/eifo/commit/9b749624b0be5d2543315451cd6bce0d8f5c1baa))
+
 ## [0.23.0](https://github.com/barakbl/eifo/compare/v0.22.0...v0.23.0) (2026-09-22)
 
 

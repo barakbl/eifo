@@ -15,7 +15,7 @@ from enum import StrEnum
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import Select, func, or_, select, text
+from sqlalchemy import ColumnElement, Select, func, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from eifo_api.converters import (
@@ -42,6 +42,7 @@ from eifo_api.schemas import (
     TitleSuggestion,
 )
 from eifo_api.search import apply_relevance, apply_text_search, name_match
+from eifo_core.additions import user_added_ids
 from eifo_core.enums import FetchPhase, FetchStatus, TitleKind
 from eifo_core.fts import PEOPLE, TITLES
 from eifo_core.models import (
@@ -545,8 +546,28 @@ def _filtered_ids(
             Title.id.in_(select(TitleGenre.title_id).where(TitleGenre.genre_id == genre_id))
         )
 
-    statement = statement.where(Title.id.in_(_availability_ids(source_keys, available)))
-    return statement
+    return statement.where(_offered(source_keys, available))
+
+
+#: The services filter's name for "watched somewhere no tracked service is".
+#:
+#: Not a source: no row, no sync, nothing to sweep. Choosing it adds the films
+#: members added by hand (:func:`eifo_core.additions.user_added_ids`), and only
+#: choosing it does - they are not on any service, so a catalog of what can be
+#: watched tonight leaves them out until somebody asks for them.
+OTHER_SERVICES = "other"
+
+
+def _offered(source_keys: list[str], available: AvailabilityFilter) -> ColumnElement[bool]:
+    """Whether a title is offered as the services filter asks."""
+    services = [key for key in source_keys if key != OTHER_SERVICES]
+    listed = Title.id.in_(_availability_ids(services, available))
+    # "No longer available" is about titles that left a service. A member's
+    # addition was never on one, so it has nothing to have left.
+    if OTHER_SERVICES not in source_keys or available is AvailabilityFilter.GONE:
+        return listed
+    added = Title.id.in_(user_added_ids())
+    return added if not services else or_(listed, added)
 
 
 #: When a title arrived on a service: the earliest offer of any kind it has

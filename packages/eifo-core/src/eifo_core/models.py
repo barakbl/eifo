@@ -123,6 +123,22 @@ class Title(TimestampMixin, Base):
     #: in whichever language the reader chose.
     origin_countries: Mapped[str | None] = mapped_column(String(100))
 
+    #: When a member added this title by hand, having watched it somewhere no
+    #: tracked service covers - a cinema, a flight, a service nobody collects.
+    #: Null for everything a sync or a review brought in.
+    #:
+    #: The mark, rather than ``added_by_user_id``, because it outlives the
+    #: person: an account deleted tomorrow leaves the film, and the ratings
+    #: other members gave it, exactly where they were. Never cleared. Whether
+    #: the title is still "user added" is a question about today - does any
+    #: service carry it yet - and is asked of ``availability``, not stored, so
+    #: there is no flag for a sync to forget to flip (:mod:`eifo_core.additions`).
+    added_at: Mapped[dt.datetime | None]
+    added_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        index=True,
+    )
+
     credits: Mapped[list[Credit]] = relationship(
         back_populates="title",
         cascade="all, delete-orphan",

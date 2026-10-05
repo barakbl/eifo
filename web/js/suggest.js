@@ -5,6 +5,7 @@
  * worked on - "what else has she been in" was answerable, "find her" was not.
  */
 
+import { openAddFilm } from "./addfilm.js";
 import { suggest as fetchSuggestions } from "./api.js";
 import { paramsToFilters } from "./format.js";
 import { parseHash } from "./router.js";
@@ -64,7 +65,8 @@ export function createSuggest({ input, router, app }) {
   function choose(option) {
     close();
     input.blur();
-    router.navigate(option.route, [option.id]);
+    if (option.run) option.run();
+    else router.navigate(option.route, [option.id]);
   }
 
   function render(payload, language, t) {
@@ -84,6 +86,19 @@ export function createSuggest({ input, router, app }) {
 
     add("suggest.titles", payload.titles, (title) => titleOption(title, language, t));
     add("suggest.people", payload.people, (person) => personOption(person, language, t));
+
+    // Last, and only for somebody who can: a film nobody tracks is still a
+    // film somebody watched, and this box is where they will look for it.
+    const { user, canAddTitles } = app.get();
+    if (user && canAddTitles) {
+      const option = addFilmOption(t, () => openAddFilm({ app, router, query: payload.query }));
+      if (!options.length) {
+        rows.push(el("li", { class: "suggest__empty", role: "presentation", text: t("suggest.empty") }));
+      }
+      option.node.id = `suggest-${options.length}`;
+      options.push(option);
+      rows.push(option.node);
+    }
 
     if (!options.length) {
       replace(list, el("li", { class: "suggest__empty", role: "presentation", text: t("suggest.empty") }));
@@ -194,6 +209,18 @@ function personOption(person, language, t) {
     }),
   ]);
   return { node, id: person.id, route: "people" };
+}
+
+function addFilmOption(t, run) {
+  const node = el(
+    "li",
+    { class: "suggest__option suggest__option--add", role: "option", "aria-selected": "false" },
+    [
+      el("span", { class: "suggest__poster suggest__poster--add", "aria-hidden": "true", text: "+" }),
+      el("span", { class: "suggest__name", text: t("suggest.addFilm") }),
+    ],
+  );
+  return { node, run };
 }
 
 /** The reader's language, falling back rather than showing an empty row. */

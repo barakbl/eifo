@@ -274,7 +274,15 @@ export function titleCard(title, language, index = 0, actions = null, t = null) 
 
   return el("li", { class: actions ? "card-slot" : "" }, [
     el("a", { class: "card", href: `#/title/${title.id}` }, [
-      el("div", { class: "card__poster" }, [poster, spine(currentSources(title.availability))]),
+      el("div", { class: "card__poster" }, [
+        poster,
+        spine(currentSources(title.availability)),
+        // A member's addition: watched somewhere no service is tracked, so
+        // nothing here says where it could be watched tonight.
+        title.user_added && t
+          ? el("span", { class: "card__badge", text: t("card.userAdded") })
+          : null,
+      ]),
       el("span", { class: "card__title", text: name }),
       el("span", { class: "card__meta" }, [
         title.year ? el("span", { text: String(title.year) }) : null,

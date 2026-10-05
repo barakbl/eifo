@@ -369,6 +369,8 @@ async function start() {
     sources,
     user,
     loginProviders: context?.login_providers ?? meta?.login_providers ?? [],
+    canAddTitles: Boolean(meta?.can_add_titles),
+    userAddedCount: meta?.user_added_count ?? 0,
   });
 
   // Nothing to show and no way in: the catalog is private and nobody is signed

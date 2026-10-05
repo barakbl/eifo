@@ -261,6 +261,68 @@ class TestWatchLinksThatWentBackToTmdb:
         assert sites == "https://www.themoviedb.org"
 
 
+class TestMemberAdditions:
+    """0027 rebuilds ``titles``, which is what took the search triggers once."""
+
+    NOW = "'2026-10-05 00:00:00'"
+
+    def test_search_still_follows_writes_after_the_rebuild(self, tmp_path: Path) -> None:
+        db_url = f"sqlite:///{tmp_path / 'additions.db'}"
+        upgrade(db_url, "0026_watch_links_go_to_the_service")
+        engine = create_engine(db_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO titles (id, type, name_en, created_at, updated_at) "
+                        f"VALUES (1, 'movie', 'Before', {self.NOW}, {self.NOW})"
+                    )
+                )
+            upgrade(db_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO titles (id, type, name_en, created_at, updated_at) "
+                        f"VALUES (2, 'movie', 'After', {self.NOW}, {self.NOW})"
+                    )
+                )
+                found = connection.execute(
+                    text(
+                        "SELECT rowid FROM titles_fts WHERE titles_fts MATCH 'Before OR After' "
+                        "ORDER BY rowid"
+                    )
+                ).all()
+                kept = connection.execute(text("SELECT added_at FROM titles WHERE id = 1")).one()
+        finally:
+            engine.dispose()
+
+        assert [row[0] for row in found] == [1, 2]
+        assert kept == (None,)
+
+    def test_downgrade_leaves_search_working(self, tmp_path: Path) -> None:
+        db_url = f"sqlite:///{tmp_path / 'additions-down.db'}"
+        upgrade(db_url)
+        downgrade(db_url, "0026_watch_links_go_to_the_service")
+        engine = create_engine(db_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO titles (id, type, name_en, created_at, updated_at) "
+                        f"VALUES (1, 'movie', 'Later', {self.NOW}, {self.NOW})"
+                    )
+                )
+                found = connection.execute(
+                    text("SELECT rowid FROM titles_fts WHERE titles_fts MATCH 'Later'")
+                ).all()
+                columns = {column["name"] for column in inspect(connection).get_columns("titles")}
+        finally:
+            engine.dispose()
+
+        assert found == [(1,)]
+        assert "added_at" not in columns
+
+
 def test_downgrade_removes_the_schema(tmp_path: Path) -> None:
     db_url = f"sqlite:///{tmp_path / 'reversible.db'}"
     upgrade(db_url)

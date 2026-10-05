@@ -22,9 +22,10 @@ from sqlalchemy import Select, case, delete, func, select
 from sqlalchemy.orm import Session
 
 from eifo_api import members
-from eifo_api.converters import ProviderRegistry
+from eifo_api.converters import ProviderRegistry, hydrate_titles, to_card
 from eifo_api.deps import AdminDep, CsrfDep, SessionDep, SettingsDep
 from eifo_api.schemas import (
+    AdminAddition,
     AdminSource,
     AdminStats,
     MemberInvite,
@@ -36,6 +37,7 @@ from eifo_api.schemas import (
     ScoringProvider,
     SourceToggle,
 )
+from eifo_core.additions import removable, user_added_ids
 from eifo_core.enums import EnrichOutcome, FetchPhase, FetchStatus, MemberRole, RatingProvider
 from eifo_core.models import (
     AggregateScore,
@@ -50,6 +52,7 @@ from eifo_core.models import (
     Source,
     Title,
     User,
+    UserItem,
     UserSession,
     normalised_email,
 )
@@ -345,6 +348,89 @@ def get_run(run_id: int, _admin: AdminDep, session: SessionDep) -> RunDetail:
         raise HTTPException(status_code=404, detail=f"No run with id {run_id}")
 
     return RunDetail(**_to_run(run).model_dump(), log=run.log)
+
+
+@router.get(
+    "/additions",
+    response_model=Page[AdminAddition],
+    summary="Films members added by hand",
+)
+def list_additions(
+    _admin: AdminDep,
+    session: SessionDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> Page[AdminAddition]:
+    """Newest first: only those no service has listed since.
+
+    Once a sync finds one somewhere it is catalog data like any other, and
+    leaves this list by itself.
+    """
+    ids = user_added_ids()
+    total = _count(session, ids)
+    rows = session.execute(
+        select(Title.id, Title.added_at, User.display_name)
+        .outerjoin(User, User.id == Title.added_by_user_id)
+        .where(Title.id.in_(ids))
+        .order_by(Title.added_at.desc(), Title.id.desc())
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+    ).all()
+    title_ids = [row.id for row in rows]
+    cards = {title.id: to_card(title) for title in hydrate_titles(session, title_ids)}
+    members = dict(
+        session.execute(
+            select(UserItem.title_id, func.count())
+            .where(UserItem.title_id.in_(title_ids))
+            .group_by(UserItem.title_id)
+        )
+        .tuples()
+        .all()
+    )
+
+    return Page(
+        items=[
+            AdminAddition(
+                title=cards[row.id],
+                added_at=row.added_at,
+                added_by=row.display_name,
+                members=members.get(row.id, 0),
+            )
+            for row in rows
+            if row.id in cards
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
+
+
+@router.delete("/additions/{title_id}", status_code=204, summary="Remove a member's addition")
+def remove_addition(
+    title_id: int,
+    admin: AdminDep,
+    _csrf: CsrfDep,
+    session: SessionDep,
+) -> Response:
+    """Delete a film a member added, with every rating and list entry on it.
+
+    Only while it is nothing more than that. A title some service has listed
+    is catalog data, with history a sync keeps; refusing here is what stops
+    this from being a way to delete any title at all.
+    """
+    title = session.get(Title, title_id)
+    if title is None or title.added_at is None:
+        raise HTTPException(status_code=404, detail=f"No member added a title {title_id}.")
+    if not removable(session, title):
+        raise HTTPException(
+            status_code=409,
+            detail="A service lists this title now, so it is part of the catalog.",
+        )
+
+    logger.info("%s removed member addition %s (%r)", admin.user.id, title.id, title.display_name)
+    session.delete(title)
+    session.commit()
+    return Response(status_code=204)
 
 
 @router.get("/stats", response_model=AdminStats, summary="Catalog health at a glance")

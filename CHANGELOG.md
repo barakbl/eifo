@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.0](https://github.com/barakbl/eifo/compare/v0.24.0...v0.25.0) (2026-10-05)
+
+
+### Features
+
+* add a film you watched (or want to) from TMDB ([#141](https://github.com/barakbl/eifo/issues/141)) ([8d1787a](https://github.com/barakbl/eifo/commit/8d1787a660efbb30a5074276166a9cb1f8f5eee0))
+
 ## [0.24.0](https://github.com/barakbl/eifo/compare/v0.23.0...v0.24.0) (2026-10-03)
 
 

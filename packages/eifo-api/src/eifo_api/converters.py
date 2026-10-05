@@ -28,6 +28,7 @@ from eifo_api.schemas import (
     UserItemOut,
     UserOut,
 )
+from eifo_core.additions import TMDB_IMAGE_BASE
 from eifo_core.enums import CreditRole, RatingProvider
 from eifo_core.models import (
     AggregateScore,
@@ -212,7 +213,7 @@ def to_card(title: Title) -> TitleCard:
         name_he=title.name_he,
         name_en=title.name_en,
         year=title.year,
-        poster_url=image_url(title.poster_path),
+        poster_url=image_url(title.poster_path) or _tmdb_poster(title),
         score=title.aggregate.score if title.aggregate else None,
         score_israeli=title.aggregate.score_israeli if title.aggregate else None,
         score_votes=votes_behind(title.aggregate.components) if title.aggregate else None,
@@ -222,7 +223,22 @@ def to_card(title: Title) -> TitleCard:
             for availability in title.availability
             if availability.is_current
         ],
+        user_added=title.added_at is not None and not title.availability,
     )
+
+
+def _tmdb_poster(title: Title) -> str | None:
+    """TMDB's own copy of a member's addition's poster, until ours exists.
+
+    The fetcher stores posters on its next run, which can be a day away, and a
+    film somebody has just added showing a blank card reads as a failed add.
+    Only for additions, and only a URL on TMDB's image host - which the server
+    built itself from TMDB's answer, so it cannot name anywhere else.
+    """
+    url = title.poster_source_url
+    if title.added_at is None or not url or not url.startswith(f"{TMDB_IMAGE_BASE}/"):
+        return None
+    return url
 
 
 def to_detail(title: Title, registry: ProviderRegistry | None = None) -> TitleDetail:

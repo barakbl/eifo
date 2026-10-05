@@ -55,11 +55,15 @@ async def _http_exception_handler(request: Request, exc: Exception) -> Response:
             return fallback
 
     detail = exc.detail if isinstance(exc.detail, str) else None
-    return problem_response(
+    response = problem_response(
         status=exc.status_code,
         title=_TITLES.get(exc.status_code, "Request failed"),
         detail=detail,
     )
+    # Whatever the raiser attached - a Retry-After on a 429 - is part of the
+    # answer, not decoration the problem document can stand in for.
+    response.headers.update(exc.headers or {})
+    return response
 
 
 async def _validation_exception_handler(_request: Request, exc: Exception) -> JSONResponse:

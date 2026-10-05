@@ -100,7 +100,8 @@ function readSavedSources() {
 
 export function createHomeView({ mount, app, router, items }) {
   return async function render(route) {
-    const { t, language, sources, user } = app.get();
+    const { t, language, user, userAddedCount } = app.get();
+    const sources = withOtherServices(app.get().sources, { count: userAddedCount, t });
     const filters = paramsToFilters(route.search);
 
     // An explicit ?sources= in the URL wins (shared/deep links); otherwise fall
@@ -663,7 +664,7 @@ function serviceCombo({ state, sources, user, t, onChange, onSaveMine }) {
 
     return el(
       "li",
-      {},
+      { dataset: source.virtual ? { virtual: "true" } : {} },
       el(
         "label",
         { class: "combo__option", style: { "--source-color": sourceColorVar(source.key) } },
@@ -792,6 +793,9 @@ function serviceCombo({ state, sources, user, t, onChange, onSaveMine }) {
     const active = chosen();
     const yours = new Set(preset());
     for (const [key, box] of boxes) box.checked = editing ? yours.has(key) : active.has(key);
+    // "My services" is a list of services somebody pays for; "other" is not
+    // one, and the preset has no way to hold it.
+    for (const row of panel.querySelectorAll("[data-virtual]")) row.hidden = editing;
 
     label.textContent = active.size
       ? t("filters.servicesSome", { count: active.size })
@@ -836,6 +840,30 @@ function serviceCombo({ state, sources, user, t, onChange, onSaveMine }) {
   sync();
   return { node, sync };
 }
+
+/**
+ * The services to filter by, with "Other services" last when there is any.
+ *
+ * Not a source - no row on the server, no id, nothing a sync touches. It is
+ * the films members added after watching them somewhere no service is
+ * tracked, and the server knows the key (`other`). Absent while there are
+ * none, for the same reason an empty service is: nothing to filter by.
+ */
+export function withOtherServices(sources, { count = 0, t }) {
+  if (!count) return sources;
+  return [
+    ...sources,
+    {
+      key: OTHER_SERVICES,
+      name: t("filters.otherServices"),
+      title_count: count,
+      active: true,
+      virtual: true,
+    },
+  ];
+}
+
+export const OTHER_SERVICES = "other";
 
 /**
  * The saved service ids with one added or taken out.

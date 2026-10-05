@@ -17,12 +17,15 @@ import {
   inviteMember,
   listAdminSources,
   listMembers,
+  listAdditions,
   listRuns,
+  removeAddition,
   removeMember,
   setMemberRole,
   setSourceEnabled,
 } from "../api.js";
 import { formatDate } from "../format.js";
+import { displayName } from "../i18n.js";
 import { el, replace, stateBlock } from "../ui.js";
 import { createReviewView } from "./review.js";
 
@@ -33,6 +36,7 @@ const TABS = [
   { key: "runs", label: "manage.tab.runs" },
   { key: "review", label: "manage.tab.review" },
   { key: "members", label: "manage.tab.members" },
+  { key: "additions", label: "manage.tab.additions" },
 ];
 
 export function createManageView({ mount, app, router }) {
@@ -76,6 +80,7 @@ export function createManageView({ mount, app, router }) {
     if (tab.key === "review") return review.mount(panel, params);
     if (tab.key === "runs") return runsPanel(panel, { t, app, params, router });
     if (tab.key === "members") return membersPanel(panel, { t, user });
+    if (tab.key === "additions") return additionsPanel(panel, { t, app });
     return overviewPanel(panel, { t, app });
   };
 }
@@ -821,5 +826,87 @@ function memberRow(row, { t, user, refresh, problem }) {
               onClick: () => act(() => removeMember(row.email)),
             }),
           ]),
+  ]);
+}
+
+/* Films members added by hand, newest first.
+ *
+ * Only those no service lists yet: one a sync has found is catalog data and
+ * leaves this list by itself. Removing one takes every member's rating of it
+ * along, so the button asks twice. */
+async function additionsPanel(panel, { t, app }) {
+  const problem = el("p", { class: "form__problem", role: "alert" });
+  const list = el("div", { class: "members" });
+
+  async function refresh() {
+    problem.textContent = "";
+    let page;
+    try {
+      page = await listAdditions();
+    } catch (error) {
+      problem.textContent = error?.detail || t("error.body");
+      return;
+    }
+    replace(
+      list,
+      page.items.length
+        ? page.items.map((row) => additionRow(row, { t, app, refresh, problem }))
+        : el("p", { class: "state__body", text: t("additions.none") }),
+    );
+  }
+
+  replace(panel, [
+    el("h2", { class: "section__heading", text: t("additions.title") }),
+    el("p", { class: "state__body", text: t("additions.explain") }),
+    problem,
+    list,
+  ]);
+  await refresh();
+  return null;
+}
+
+function additionRow(row, { t, app, refresh, problem }) {
+  const { language } = app.get();
+  let armed = false;
+  const remove = el("button", {
+    class: "button button--quiet",
+    type: "button",
+    text: t("additions.remove"),
+    onClick: async () => {
+      if (!armed) {
+        armed = true;
+        remove.textContent = t("additions.removeConfirm", { count: row.members });
+        remove.classList.add("button--danger");
+        return;
+      }
+      remove.disabled = true;
+      problem.textContent = "";
+      try {
+        await removeAddition(row.title.id);
+        app.set({ userAddedCount: Math.max(0, (app.get().userAddedCount ?? 1) - 1) });
+        await refresh();
+      } catch (error) {
+        problem.textContent = error?.detail || t("error.body");
+        remove.disabled = false;
+      }
+    },
+  });
+
+  const name = displayName(row.title, language);
+  return el("div", { class: "members__row" }, [
+    el("a", {
+      class: "members__email additions__name",
+      href: `#/title/${row.title.id}`,
+      text: row.title.year ? `${name} (${row.title.year})` : name,
+    }),
+    el("span", {
+      class: "members__note",
+      text: t("additions.by", {
+        name: row.added_by ?? t("additions.formerMember"),
+        date: formatDate(row.added_at, language),
+        count: row.members,
+      }),
+    }),
+    el("span", { class: "members__actions" }, [remove]),
   ]);
 }

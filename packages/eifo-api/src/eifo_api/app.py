@@ -16,6 +16,7 @@ from eifo_api.errors import install_error_handlers
 from eifo_api.logging_privacy import install_log_filters
 from eifo_api.oauth import configured_providers, redirect_uri
 from eifo_api.routers import (
+    additions,
     admin,
     auth,
     catalog,
@@ -28,6 +29,7 @@ from eifo_api.routers import (
     syncing,
 )
 from eifo_api.static import mount_client, mount_images
+from eifo_api.tmdb import TmdbLookup
 from eifo_core.db import create_engine_from_settings, make_session_factory, require_schema
 from eifo_core.fts import ensure_search_triggers, missing_triggers
 from eifo_core.match import FoldedTitles
@@ -72,6 +74,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         engine.dispose()
+        if app.state.tmdb is not None:
+            app.state.tmdb.close()
 
 
 def _say_where_sign_in_goes(settings: Settings) -> None:
@@ -113,6 +117,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # belongs to one request; FoldedTitles checks the catalog has not moved
     # before it hands the fold over.
     app.state.folded_titles = FoldedTitles()
+    # Only with a key: without one, adding a film is off and says so (503),
+    # and the client is told not to offer it (``can_add_titles``).
+    key = settings.tmdb_api_key
+    app.state.tmdb = TmdbLookup(key.get_secret_value()) if key else None
+    app.state.rate_limits = {}
 
     install_error_handlers(app)
     install_log_filters()
@@ -126,6 +135,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(stats.router, prefix=API_PREFIX, dependencies=gated)
     app.include_router(auth.router, prefix=API_PREFIX)
     app.include_router(me.router, prefix=API_PREFIX)
+    app.include_router(additions.router, prefix=API_PREFIX)
     app.include_router(admin.router, prefix=API_PREFIX)
     # Not gated: `require_membership` refuses an anonymous caller, and every
     # route here already demands an administrator. Adding it would only mean a

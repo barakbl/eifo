@@ -252,6 +252,24 @@ export function deleteMyItem(titleId) {
   return request(`/me/items/${encodeURIComponent(titleId)}`, { method: "DELETE" });
 }
 
+/* -- films watched somewhere no service is tracked ------------------------ */
+
+/** Films on TMDB by name, each with `title_id` when the catalog has it. */
+export function searchFilms(q, options) {
+  return request(`/me/additions/search?${new URLSearchParams({ q })}`, options);
+}
+
+/**
+ * Put a film on a list by its TMDB id, adding it to the catalog if new.
+ *
+ * `status` is "watched" or "want_to_watch", the names `/me/items` uses.
+ */
+export function addFilm(tmdbId, { status = "watched", rating = null } = {}) {
+  const body = { tmdb_id: tmdbId, status };
+  if (rating !== null) body.rating = rating;
+  return request("/me/additions", { method: "POST", body });
+}
+
 /* -- operator surfaces ----------------------------------------------------
  *
  * Every one of these 404s for a signed-in user who is not an administrator,
@@ -383,4 +401,13 @@ export function dismissReview(id) {
 
 export function ruleInBulk(ids, decision) {
   return request("/reviews/bulk", { method: "POST", body: { ids, decision } });
+}
+
+export function listAdditions({ page = 1, pageSize = 50 } = {}, options) {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+  return request(`/admin/additions?${params}`, options);
+}
+
+export function removeAddition(titleId) {
+  return request(`/admin/additions/${encodeURIComponent(titleId)}`, { method: "DELETE" });
 }

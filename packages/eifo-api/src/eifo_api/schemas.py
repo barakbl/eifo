@@ -16,6 +16,7 @@ from eifo_core.enums import (
     CreditRole,
     FetchPhase,
     FetchStatus,
+    ItemStatus,
     MemberRole,
     OfferType,
     RatingProvider,
@@ -105,6 +106,13 @@ class MetaResponse(BaseModel):
     #: Sign-in providers this deployment is configured for; the client renders a
     #: button per entry, and none at all on a deployment without accounts.
     login_providers: list[AuthProvider] = Field(default_factory=list)
+    #: Whether members can add a film they watched elsewhere - which needs a
+    #: TMDB key on the server. The client hides the offer when it is false
+    #: rather than letting somebody type a whole name into a 503.
+    can_add_titles: bool = False
+    #: How many of those additions no service lists yet: the count beside
+    #: "Other services" in the services filter.
+    user_added_count: int = 0
 
 
 class SourceOut(BaseModel):
@@ -232,6 +240,10 @@ class TitleCard(BaseModel):
     score_votes: int | None = None
     genres: list[GenreOut] = Field(default_factory=list)
     availability: list[AvailabilityOut] = Field(default_factory=list)
+    #: Added by a member, having watched it somewhere no tracked service
+    #: covers, and not listed by any service since. Goes false by itself the
+    #: night a sync finds it somewhere.
+    user_added: bool = False
 
 
 class Arrival(BaseModel):
@@ -496,6 +508,54 @@ class ItemUpsert(BaseModel):
     watched: bool | None = None
     rating: int | None = Field(default=None, ge=RATING_MIN, le=RATING_MAX)
     note: str | None = Field(default=None, max_length=NOTE_MAX_LENGTH)
+
+
+class FoundMovieOut(BaseModel):
+    """A film TMDB knows, offered for adding."""
+
+    tmdb_id: int
+    name: str
+    original_name: str | None = None
+    year: int | None = None
+    thumbnail_url: str | None = None
+    #: Set when the catalog already holds this film: the client opens it
+    #: rather than offering to add a second copy.
+    title_id: int | None = None
+
+
+class AdditionCreate(BaseModel):
+    """A film a member watched, named by its TMDB id and nothing else.
+
+    No name, year or poster: the server reads those from TMDB itself. Anything
+    else in the body is refused rather than ignored, so a client that thinks it
+    is setting a name finds out.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    tmdb_id: int = Field(gt=0, lt=2**31)
+    #: Which list it goes on: seen it, or means to.
+    status: ItemStatus = ItemStatus.WATCHED
+    rating: int | None = Field(default=None, ge=RATING_MIN, le=RATING_MAX)
+
+
+class AdditionOut(BaseModel):
+    """What adding did: a new title, or a mark on one the catalog had."""
+
+    title_id: int
+    created: bool
+    item: UserItemOut
+
+
+class AdminAddition(BaseModel):
+    """A member's addition, as an administrator reviews them."""
+
+    title: TitleCard
+    added_at: dt.datetime
+    #: Null once the member who added it has deleted their account.
+    added_by: str | None = None
+    #: How many members have it on a list - what deleting it would take away.
+    members: int = 0
 
 
 # -- operator surfaces ------------------------------------------------------

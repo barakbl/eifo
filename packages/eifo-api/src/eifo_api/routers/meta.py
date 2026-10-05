@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from eifo_api import __version__
 from eifo_api.deps import SessionDep, SettingsDep
 from eifo_api.oauth import configured_providers
 from eifo_api.schemas import Attribution, MetaResponse, SourceFreshness
+from eifo_core.additions import user_added_ids
 from eifo_core.enums import FetchPhase, FetchStatus
 from eifo_core.models import FetchRun, Source, Title
 from eifo_core.types import utcnow
@@ -36,7 +37,7 @@ ATTRIBUTION = [
 
 
 @router.get("/meta", response_model=MetaResponse, summary="Data freshness and attribution")
-def get_meta(session: SessionDep, settings: SettingsDep) -> MetaResponse:
+def get_meta(request: Request, session: SessionDep, settings: SettingsDep) -> MetaResponse:
     """Report per-source freshness, the catalog size and licence attribution."""
     now = utcnow()
     stale_before = now - dt.timedelta(hours=settings.stale_after_hours)
@@ -64,6 +65,11 @@ def get_meta(session: SessionDep, settings: SettingsDep) -> MetaResponse:
         attribution=ATTRIBUTION,
         # So the client offers only the buttons that lead somewhere.
         login_providers=configured_providers(settings),
+        can_add_titles=request.app.state.tmdb is not None,
+        user_added_count=session.scalar(
+            select(func.count()).select_from(user_added_ids().subquery())
+        )
+        or 0,
     )
 
 

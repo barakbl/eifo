@@ -490,7 +490,7 @@ function offersSection(title, { t, language, mine = [] }) {
   if (!title.availability.length) {
     return el("section", { class: "section" }, [
       el("h2", { class: "section__heading", text: t("title.whereToWatch") }),
-      el("p", { class: "state__body", text: t("title.noOffers") }),
+      el("p", { class: "state__body", text: t(title.user_added ? "title.userAdded" : "title.noOffers") }),
     ]);
   }
 

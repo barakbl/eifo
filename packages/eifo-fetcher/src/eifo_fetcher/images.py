@@ -1,8 +1,15 @@
 """Artwork download and resizing.
 
-Posters come from TMDB where possible (stable CDN, licensing-clean) and from the
-source's own listing otherwise. A missing poster never fails a sync: the client
+Posters come from whatever the catalog names - the source's own listing, or
+TMDB's when a sync found none. A missing poster never fails a sync: the client
 has a placeholder, and the next run retries.
+
+When the named artwork is *gone* - the host answers a 4xx that will not change
+by asking again - TMDB's poster for the same title is used instead. A listing's
+image can vanish under it: four Lev VOD films pointed at files missing from
+Lev's own CDN, and the catalog could not move off them, because the enricher
+only fills empty fields and the dead address was not empty. They retried it
+every night, and every night the run reported itself failed.
 
 **Nothing here writes to the catalog.** It downloads, resizes, packs a batch and
 posts it to ``/api/v1/ingest/posters``, which is what lets this run somewhere
@@ -27,6 +34,7 @@ from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 
+import httpx
 from PIL import Image, UnidentifiedImageError
 
 from eifo_core.ingest import (
@@ -40,6 +48,7 @@ from eifo_core.ingest import (
 )
 from eifo_fetcher.http import HttpClient
 from eifo_fetcher.ingest import IngestClient, IngestError, PendingPoster
+from eifo_fetcher.tmdb import ENGLISH_LANGUAGE, HEBREW_LANGUAGE, TmdbClient, image_url
 
 logger = logging.getLogger("eifo.fetch.images")
 
@@ -68,6 +77,8 @@ class ImageResult:
     downloaded: int = 0
     skipped: int = 0
     failed: int = 0
+    #: Titles whose own artwork was gone and whose TMDB poster was used.
+    from_tmdb: int = 0
     #: What the server would not take, in its words. Kept on the result so it
     #: reaches the run's stats: a poster rejected at the far end is invisible
     #: here otherwise, and "downloaded 100, stored 98" with no reason is the
@@ -80,6 +91,8 @@ class ImageResult:
             "skipped": self.skipped,
             "failed": self.failed,
         }
+        if self.from_tmdb:
+            stats["from_tmdb"] = self.from_tmdb
         if self.rejected:
             stats["rejected"] = self.rejected[:50]
         return stats
@@ -128,10 +141,14 @@ class ImageFetcher:
         api: IngestClient,
         *,
         batch_size: int = BATCH_SIZE,
+        tmdb: TmdbClient | None = None,
     ) -> None:
         self._http = http
         self._api = api
         self._batch_size = batch_size
+        #: Where to turn when a title's own artwork is gone. Without one, such
+        #: a title is counted as failed and offered again next run, as before.
+        self._tmdb = tmdb
 
     def fetch_missing(self, *, force: bool = False, limit: int | None = None) -> ImageResult:
         """Fill in poster artwork for every title the API says is missing it.
@@ -189,7 +206,7 @@ class ImageFetcher:
     ) -> PosterItem | None:
         """One title's renditions, written where the packer will find them."""
         try:
-            data = self._http.get(poster.source_url).content
+            data, source_url = self._download(poster, result)
             save_variants(data, staging / str(poster.title_id), POSTER_VARIANTS)
         except (UnidentifiedImageError, OSError) as exc:
             # Bad bytes or an unwritable path: log and move on, retry next run.
@@ -204,8 +221,48 @@ class ImageFetcher:
         return PosterItem(
             title_id=poster.title_id,
             variants=tuple(variant.name for variant in POSTER_VARIANTS),
-            source_url=poster.source_url,
+            source_url=source_url,
         )
+
+    def _download(self, poster: PendingPoster, result: ImageResult) -> tuple[bytes, str]:
+        """The artwork's bytes and where they came from, falling back to TMDB.
+
+        Only a *gone* image falls back. A timeout or a 5xx is the host having a
+        bad night, and the source's own artwork is still the one wanted - so
+        those raise as before, and the title is offered again next run.
+        """
+        try:
+            return self._http.get(poster.source_url).content, poster.source_url
+        except httpx.HTTPStatusError as exc:
+            if not _is_gone(exc.response.status_code):
+                raise
+            fallback = self._tmdb_poster(poster)
+            if fallback is None or fallback == poster.source_url:
+                raise
+            logger.info(
+                "poster for title %s is gone (%s from %s); using TMDB's",
+                poster.title_id,
+                exc.response.status_code,
+                httpx.URL(poster.source_url).host,
+            )
+            data = self._http.get(fallback).content
+            result.from_tmdb += 1
+            return data, fallback
+
+    def _tmdb_poster(self, poster: PendingPoster) -> str | None:
+        """TMDB's poster for this title, English first as the enricher picks it."""
+        if self._tmdb is None or poster.tmdb_id is None or poster.kind is None:
+            return None
+        for language in (ENGLISH_LANGUAGE, HEBREW_LANGUAGE):
+            try:
+                details = self._tmdb.details(poster.kind, poster.tmdb_id, language=language)
+            except Exception as exc:
+                logger.warning("TMDB has no record for title %s: %r", poster.title_id, exc)
+                return None
+            path = details.get("poster_path")
+            if isinstance(path, str) and path.startswith("/"):
+                return image_url(path)
+        return None
 
     def _send(self, archive: Path, items: list[PosterItem], result: ImageResult) -> None:
         try:
@@ -243,3 +300,13 @@ def _pack(staging: Path, items: list[PosterItem], archive: Path) -> None:
             for variant in item.variants:
                 name = member_name(item.title_id, variant)
                 tar.add(staging / str(item.title_id) / f"{variant}.jpg", arcname=name)
+
+
+#: Client errors that asking again will not change. 408 and 429 are the host
+#: asking for patience, not saying the thing is not there.
+_NOT_GONE = frozenset({408, 429})
+
+
+def _is_gone(status: int) -> bool:
+    """Whether a status says the artwork is not coming back."""
+    return 400 <= status < 500 and status not in _NOT_GONE

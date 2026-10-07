@@ -17,7 +17,8 @@ import logging
 import pytest
 from live import LiveApi
 
-from eifo_core.enums import FetchPhase
+from eifo_core.enums import FetchPhase, TitleKind
+from eifo_core.models import Title
 from eifo_core.types import utcnow
 from eifo_fetcher.ingest import IngestClient, IngestError
 
@@ -127,3 +128,33 @@ class TestItReadsAsARun:
         calls = [entry for entry in said.messages if "->" in entry]
         assert len(calls) == 2
         assert all(entry.split()[0] in {"GET", "POST", "PATCH"} for entry in calls)
+
+
+class TestPendingPosters:
+    """What the fallback needs to reach TMDB crosses the wire with the work."""
+
+    def test_each_carries_its_tmdb_identity(self, live_api: LiveApi, api: IngestClient) -> None:
+        with live_api.session() as session:
+            session.add_all(
+                [
+                    Title(
+                        type=TitleKind.MOVIE,
+                        name_en="Matador",
+                        tmdb_id=4271,
+                        poster_source_url="https://cdn.example/matador",
+                    ),
+                    Title(
+                        type=TitleKind.SERIES,
+                        name_he="משהו מקומי",
+                        poster_source_url="https://cdn.example/local",
+                    ),
+                ]
+            )
+            session.commit()
+
+        pending = api.pending_posters(limit=10)
+
+        assert [(p.source_url, p.kind, p.tmdb_id) for p in pending] == [
+            ("https://cdn.example/matador", TitleKind.MOVIE, 4271),
+            ("https://cdn.example/local", TitleKind.SERIES, None),
+        ]

@@ -82,6 +82,10 @@ class PendingPoster:
 
     title_id: int
     source_url: str
+    #: TMDB's name for the title, when it has one: the fallback when the
+    #: source's own artwork is gone (:class:`eifo_fetcher.images.ImageFetcher`).
+    kind: TitleKind | None = None
+    tmdb_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +164,13 @@ class IngestClient:
             params={"limit": limit, "force": str(force).lower(), "after": after},
         )
         return [
-            PendingPoster(title_id=row["title_id"], source_url=row["source_url"]) for row in payload
+            PendingPoster(
+                title_id=row["title_id"],
+                source_url=row["source_url"],
+                kind=_kind(row.get("kind")),
+                tmdb_id=row.get("tmdb_id") if isinstance(row.get("tmdb_id"), int) else None,
+            )
+            for row in payload
         ]
 
     def upload_posters(self, archive: Path) -> dict[str, Any]:
@@ -610,5 +620,13 @@ def _when(value: Any) -> dt.datetime | None:
         return None
     try:
         return dt.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _kind(value: Any) -> TitleKind | None:
+    """A title kind from the wire, or None for one this side does not know."""
+    try:
+        return TitleKind(value)
     except ValueError:
         return None

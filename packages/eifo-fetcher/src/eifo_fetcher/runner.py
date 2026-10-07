@@ -601,7 +601,7 @@ def fetch_images(
     # poster a second - a static CDN, at the pace set for scraping somebody's
     # website. Anything hosted elsewhere keeps the polite default.
     http.rate_limiter.set_host_rate(IMAGE_HOST, settings.tmdb.rate_limit_rps)
-    fetcher = ImageFetcher(http, api)
+    fetcher = ImageFetcher(http, api, tmdb=_tmdb_client(http, settings))
 
     # FetchPhase.IMAGES existed and had never once been written: poster
     # downloads reported themselves only to a log line that scrolled away.

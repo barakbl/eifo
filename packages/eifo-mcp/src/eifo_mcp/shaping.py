@@ -152,3 +152,70 @@ def _cut(text: Any) -> str | None:
 def _drop_empty(record: dict[str, Any]) -> dict[str, Any]:
     """Leave out what is not known, rather than spend tokens saying so."""
     return {key: value for key, value in record.items() if value not in (None, [], {}, "")}
+
+
+def similar(card: dict[str, Any], link: str) -> dict[str, Any]:
+    """A title like another, with how alike and what they share."""
+    because = card.get("because") or {}
+    return _drop_empty(
+        {
+            **title_card(card, link),
+            "similarity": card.get("similarity"),
+            "shares": _drop_empty(
+                {
+                    "genres": because.get("genres"),
+                    "people": [
+                        {"id": person["id"], "name": _person_name(person)}
+                        for person in because.get("people") or []
+                    ],
+                }
+            ),
+        }
+    )
+
+
+def taste(profile: dict[str, Any]) -> dict[str, Any]:
+    """The taste profile, without the bookkeeping a model has no use for."""
+
+    def leanings(by_facet: dict[str, Any]) -> dict[str, Any]:
+        return _drop_empty(
+            {
+                facet: [
+                    _drop_empty(
+                        {
+                            "name": entry.get("name"),
+                            "id": entry.get("id") if facet in ("directors", "cast") else None,
+                            "titles": entry.get("titles"),
+                            "average": entry.get("average"),
+                        }
+                    )
+                    for entry in entries
+                ]
+                for facet, entries in (by_facet or {}).items()
+            }
+        )
+
+    def titles(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [
+            _drop_empty(
+                {
+                    "id": entry.get("title_id"),
+                    "name": entry.get("name"),
+                    "year": entry.get("year"),
+                    "my_rating": entry.get("rating"),
+                }
+            )
+            for entry in entries
+        ]
+
+    return _drop_empty(
+        {
+            "rated": profile.get("rated"),
+            "average_rating": profile.get("average"),
+            "vs_critics": profile.get("against_consensus"),
+            "favourites": titles(profile.get("favourites") or []),
+            "dislikes": titles(profile.get("dislikes") or []),
+            "likes": leanings(profile.get("liked") or {}),
+            "dislikes_by": leanings(profile.get("disliked") or {}),
+        }
+    )

@@ -41,6 +41,9 @@ Recommending well:
 directors, leads, countries, decades and languages they rate above or below \
 their own average, their favourite titles, and whether they rate kinder or \
 harsher than the critics. my_lists with list="rated" has the titles themselves.
+- recommendations is the quickest start: picks from their favourites, on \
+the services asked about, available now, unseen - each with the favourite it \
+came from. Judge them against what they asked for; do not just list them.
 - similar_to(title_id) on one of their favourites is the strongest lead: it \
 returns titles sharing genres, director and leads, each with why. It already \
 leaves out what they have seen or saved.
@@ -185,6 +188,23 @@ def build_server(client: EifoClient) -> MCPServer:
         with the critics' (positive: kinder).
         """
         return shaping.taste(client.get("/me/taste"))
+
+    @tool
+    def recommendations(
+        services: Services = None,
+        type: Literal["movie", "series"] | None = None,
+        limit: Annotated[int, Field(ge=1, le=30)] = 12,
+    ) -> dict[str, Any]:
+        """Picks for the user from their favourites: available now, not seen or saved.
+
+        Each pick names the favourite it came from (and the user's rating of it)
+        and what the two share. A good first call for "what should I watch?".
+        """
+        picks = client.get(
+            "/me/for-you",
+            {"sources": _csv(_service_keys(client, services)), "type": type, "limit": limit},
+        )
+        return {"picks": [shaping.pick(pick, client.link(pick["id"])) for pick in picks]}
 
     @tool
     def similar_to(

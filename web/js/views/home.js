@@ -8,6 +8,7 @@ import {
   paramsToFilters,
   sourceColorVar,
 } from "../format.js";
+import { fillForYou } from "../picks.js";
 import { el, replace, skeletonCards, stateBlock, titleCard } from "../ui.js";
 
 const PAGE_SIZE = 24;
@@ -130,6 +131,9 @@ export function createHomeView({ mount, app, router, items }) {
     const status = el("p", { class: "results__status" });
     const sentinel = el("div", { class: "sentinel" });
     const region = el("section", { class: "results shell" }, [status, grid, sentinel]);
+    // Above the catalog, for a signed-in member browsing rather than searching.
+    const forYouRow = el("section", { class: "shelf shell", hidden: true });
+    let forYouRequest = null;
 
     // A genre list is a nicety; failing to load one must not cost the catalog.
     let genres = [];
@@ -149,12 +153,35 @@ export function createHomeView({ mount, app, router, items }) {
       onChange: apply,
       onSaveMine: saveMine,
     });
-    replace(mount, filterBar.node, region);
+    replace(mount, filterBar.node, forYouRow, region);
 
     let observer = null;
     let requestToken = 0;
 
+    /**
+     * The "For you" row, narrowed to the services the grid is showing.
+     *
+     * Only while browsing: a member searching for something has said what
+     * they want, and a row of other things above the answer is in the way.
+     */
+    function refreshForYou() {
+      forYouRequest?.abort();
+      if (!user || state.filters.q) {
+        forYouRow.hidden = true;
+        return;
+      }
+      forYouRequest = new AbortController();
+      fillForYou(forYouRow, {
+        sources: [...state.filters.sources],
+        language,
+        t,
+        signal: forYouRequest.signal,
+        actionsFor: (titleId) => cardActions({ titleId, items, t }),
+      });
+    }
+
     function apply(patch) {
+      const before = `${state.filters.q ?? ""}|${[...state.filters.sources].join(",")}`;
       Object.assign(state.filters, patch);
       state.page = 1;
       state.loaded = [];
@@ -167,6 +194,8 @@ export function createHomeView({ mount, app, router, items }) {
       // Filters live in the URL so a filtered view can be shared or reloaded.
       router.replaceSearch(filtersToParams(state.filters).toString());
       load({ reset: true });
+      const after = `${state.filters.q ?? ""}|${[...state.filters.sources].join(",")}`;
+      if (after !== before) refreshForYou();
     }
 
     /** Save "my services" from the combo; the rest of the app reads the answer. */
@@ -298,9 +327,12 @@ export function createHomeView({ mount, app, router, items }) {
     });
     observer.observe(sentinel);
 
+    // Not awaited: the catalog never waits on a personal request to appear.
+    refreshForYou();
     await load({ reset: true });
 
     return () => {
+      forYouRequest?.abort();
       window.removeEventListener(QUERY_EVENT, onHeaderQuery);
       observer?.disconnect();
     };

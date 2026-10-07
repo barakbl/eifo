@@ -252,6 +252,23 @@ export function deleteMyItem(titleId) {
   return request(`/me/items/${encodeURIComponent(titleId)}`, { method: "DELETE" });
 }
 
+/* -- recommendations ------------------------------------------------------ */
+
+/** Picks from the member's favourites; `sources` narrows them like the grid. */
+export function forYou({ sources = [], type = null, limit = 12 } = {}, options) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (sources.length) params.set("sources", sources.join(","));
+  if (type) params.set("type", type);
+  return request(`/me/for-you?${params}`, options);
+}
+
+/** Titles like one title, each with what it shares with it. */
+export function similarTitles(titleId, { exclude = null, pageSize = 12 } = {}, options) {
+  const params = new URLSearchParams({ page_size: String(pageSize) });
+  if (exclude) params.set("exclude", exclude);
+  return request(`/titles/${encodeURIComponent(titleId)}/similar?${params}`, options);
+}
+
 /* -- films watched somewhere no service is tracked ------------------------ */
 
 /** Films on TMDB by name, each with `title_id` when the catalog has it. */

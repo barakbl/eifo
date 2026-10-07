@@ -20,7 +20,7 @@ from mcp_catalog import Catalog, seed
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_api.app import create_app
-from eifo_api.routers.catalog import forget_totals
+from eifo_api.routers.catalog import forget_recommendations, forget_totals
 from eifo_core.migrate import upgrade
 from eifo_core.settings import Settings
 from eifo_mcp.client import EifoClient
@@ -32,8 +32,10 @@ BASE = "https://testserver"
 @pytest.fixture(autouse=True)
 def _forget_totals() -> Iterator[None]:
     forget_totals()
+    forget_recommendations()
     yield
     forget_totals()
+    forget_recommendations()
 
 
 @pytest.fixture

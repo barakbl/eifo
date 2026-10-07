@@ -30,14 +30,17 @@ from eifo_api.converters import (
     to_person_ref,
     to_source,
 )
-from eifo_api.deps import OptionalPrincipalDep, SessionDep
+from eifo_api.deps import OptionalPrincipalDep, PrincipalDep, SessionDep
 from eifo_api.schemas import (
     Arrival,
     Because,
     GenreOut,
     Page,
     PersonDetail,
+    PersonRef,
     PersonSuggestion,
+    RatedTitleOut,
+    Recommendation,
     SimilarCard,
     SourceOut,
     Suggestions,
@@ -356,7 +359,7 @@ def similar_titles(
 
     titles = {loaded.id: loaded for loaded in hydrate_titles(session, [f.title_id for f in found])}
     genres = {
-        genre.id: genre.name_en
+        genre.id: genre
         for genre in session.scalars(
             select(Genre).where(Genre.id.in_({g for f in found for g in f.shared_genres}))
         )
@@ -373,10 +376,7 @@ def similar_titles(
             SimilarCard(
                 **to_card(titles[f.title_id]).model_dump(),
                 similarity=f.similarity,
-                because=Because(
-                    genres=sorted(genres[g] for g in f.shared_genres if g in genres),
-                    people=[people[p] for p in f.shared_people if p in people],
-                ),
+                because=_because(f.shared_genres, f.shared_people, genres, people),
             )
             for f in found
             if f.title_id in titles
@@ -385,6 +385,136 @@ def similar_titles(
         page_size=page_size,
         total=total,
     )
+
+
+#: Most recommendations one answer gives. A row a person scrolls, not a page.
+MAX_FOR_YOU = 30
+
+#: How long a member's recommendations are reused. They change when the
+#: member rates or lists something - which is part of the key - or when the
+#: catalog does, which is nightly; ten minutes is far inside that.
+FOR_YOU_TTL = dt.timedelta(minutes=10)
+FOR_YOU_CACHE_SIZE = 256
+
+_for_you: OrderedDict[Any, tuple[dt.datetime, list[Recommendation]]] = OrderedDict()
+
+
+@router.get(
+    "/me/for-you",
+    response_model=list[Recommendation],
+    summary="Titles you are likely to enjoy",
+)
+def for_you(
+    principal: PrincipalDep,
+    session: SessionDep,
+    sources: Annotated[str | None, Query(description="Comma-separated source keys")] = None,
+    type: Annotated[TitleKind | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_FOR_YOU)] = 12,
+) -> list[Recommendation]:
+    """Picks from what you rated highly, available now, that you do not have.
+
+    Each of your favourites (rated 8 or more) proposes the titles most like
+    it; the best proposals win, a little more when several favourites agree,
+    and no single favourite supplies more than a few. Each pick says which
+    favourite it came from and what the two share. Empty until you have
+    rated something 8 or more.
+    """
+    user_id = principal.user.id
+    key = (user_id, sources, type, limit, _lists_fingerprint(session, user_id))
+    now = dt.datetime.now(dt.UTC)
+    held = _for_you.get(key)
+    if held is not None and held[0] > now:
+        _for_you.move_to_end(key)
+        return held[1]
+
+    within = _filtered_ids(
+        session,
+        q=None,
+        source_keys=_csv(sources),
+        available=AvailabilityFilter.CURRENT,
+        kind=type,
+        genre_ids=[],
+        year_min=None,
+        year_max=None,
+        score_min=None,
+        runtime_max=None,
+    ).where(Title.id.not_in(_own_titles(user_id, Exclude.LISTED)))
+
+    picks = taste.for_you(session, user_id, within=within, limit=limit)
+    answer = _recommendations(session, picks)
+
+    _for_you[key] = (now + FOR_YOU_TTL, answer)
+    while len(_for_you) > FOR_YOU_CACHE_SIZE:
+        _for_you.popitem(last=False)
+    return answer
+
+
+def forget_recommendations() -> None:
+    """Drop every remembered answer. For tests."""
+    _for_you.clear()
+
+
+def _because(
+    genre_ids: tuple[int, ...],
+    person_ids: tuple[int, ...],
+    genres: dict[int, Genre],
+    people: dict[int, PersonRef],
+) -> Because:
+    """What two titles share, named in both languages."""
+    shared = sorted((genres[g] for g in genre_ids if g in genres), key=lambda g: g.name_en)
+    return Because(
+        genres=[genre.name_en for genre in shared],
+        genres_he=[genre.name_he or genre.name_en for genre in shared],
+        people=[people[p] for p in person_ids if p in people],
+    )
+
+
+def _lists_fingerprint(session: Session, user_id: int) -> tuple[int, Any]:
+    """Changes whenever the member rates, lists or unlists anything."""
+    count, latest = session.execute(
+        select(func.count(), func.max(UserItem.updated_at)).where(UserItem.user_id == user_id)
+    ).one()
+    return int(count or 0), latest
+
+
+def _recommendations(session: Session, picks: list[taste.Pick]) -> list[Recommendation]:
+    titles = {
+        loaded.id: loaded
+        for loaded in hydrate_titles(
+            session, [pick.title_id for pick in picks] + [pick.seed_id for pick in picks]
+        )
+    }
+    genres = {
+        genre.id: genre
+        for genre in session.scalars(
+            select(Genre).where(Genre.id.in_({g for pick in picks for g in pick.shared_genres}))
+        )
+    }
+    people = {
+        person.id: to_person_ref(person)
+        for person in session.scalars(
+            select(Person).where(Person.id.in_({p for pick in picks for p in pick.shared_people}))
+        )
+    }
+    answer = []
+    for pick in picks:
+        title, seed = titles.get(pick.title_id), titles.get(pick.seed_id)
+        if title is None or seed is None:
+            continue
+        answer.append(
+            Recommendation(
+                **to_card(title).model_dump(),
+                because=_because(pick.shared_genres, pick.shared_people, genres, people),
+                seed=RatedTitleOut(
+                    title_id=seed.id,
+                    name=seed.name_en or seed.name_he or "",
+                    name_he=seed.name_he,
+                    year=seed.year,
+                    rating=pick.seed_rating,
+                ),
+            )
+        )
+    return answer
 
 
 @router.get("/whats-new", response_model=Page[Arrival], summary="Recent arrivals, per service")

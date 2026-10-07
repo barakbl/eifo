@@ -219,3 +219,22 @@ def taste(profile: dict[str, Any]) -> dict[str, Any]:
             "dislikes_by": leanings(profile.get("disliked") or {}),
         }
     )
+
+
+def pick(card: dict[str, Any], link: str) -> dict[str, Any]:
+    """A recommendation, with the favourite it came from."""
+    seed = card.get("seed") or {}
+    shaped = similar(card, link)
+    shaped.pop("similarity", None)
+    return _drop_empty(
+        {
+            **shaped,
+            "because_you_rated": _drop_empty(
+                {
+                    "id": seed.get("title_id"),
+                    "name": seed.get("name"),
+                    "my_rating": seed.get("rating"),
+                }
+            ),
+        }
+    )

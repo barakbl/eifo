@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from eifo_core.enums import CreditRole, TitleKind
 from eifo_core.models import AggregateScore, Credit, Genre, Person, Title, User, UserItem
-from eifo_core.taste import seed_of, similar, taste
+from eifo_core.taste import PER_SEED_PICKS, for_you, seed_of, similar, taste
 
 
 @pytest.fixture
@@ -267,3 +267,97 @@ class TestSimilar:
         found, total = similar(session, seed_of(session, seed))
 
         assert (found, total) == ([], 0)
+
+
+class TestForYou:
+    def _names(self, session: Session, picks: list[Any]) -> list[str]:
+        names = dict(session.execute(select(Title.id, Title.name_en)).tuples().all())
+        return [names[pick.title_id] for pick in picks]
+
+    def test_nothing_rated_highly_is_nothing_to_go_on(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        world.rate(user, world.film("Fine"), 7)
+        world.film("Anything")
+
+        assert for_you(session, user.id) == []
+
+    def test_from_a_favourite_with_the_reason(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        loved = world.film("Loved", director="Auteur")
+        world.rate(user, loved, 10)
+        world.film("By the same hand", director="Auteur")
+        world.film("Same genre only")
+
+        picks = for_you(session, user.id)
+
+        assert self._names(session, picks) == ["By the same hand", "Same genre only"]
+        assert (picks[0].seed_id, picks[0].seed_rating) == (loved.id, 10)
+        assert picks[0].shared_people == (world.people["Auteur"].id,)
+
+    def test_a_loved_favourite_counts_for_more(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        world.rate(user, world.film("Ten", genres=("Western",)), 10)
+        world.rate(user, world.film("Eight", genres=("Comedy",)), 8)
+        world.film("Like the ten", genres=("Western",))
+        world.film("Like the eight", genres=("Comedy",))
+
+        assert self._names(session, for_you(session, user.id)) == ["Like the ten", "Like the eight"]
+
+    def test_never_what_the_member_rated(self, session: Session, user: User, world: World) -> None:
+        """Two favourites alike would otherwise recommend each other."""
+        first, second = world.film("First"), world.film("Second")
+        world.rate(user, first, 10)
+        world.rate(user, second, 9)
+        world.film("New")
+
+        assert self._names(session, for_you(session, user.id)) == ["New"]
+
+    def test_favourites_agreeing_lift_a_title(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        """Equally good matches for one favourite; only one is liked by both."""
+        world.rate(user, world.film("Western love", genres=("Western",)), 9)
+        world.rate(user, world.film("Comedy love", genres=("Comedy",)), 9)
+        world.film("Western horror", genres=("Western", "Horror"))
+        world.film("Western comedy", genres=("Western", "Comedy"))
+
+        picks = for_you(session, user.id)
+
+        assert self._names(session, picks) == ["Western comedy", "Western horror"]
+
+    def test_one_favourite_cannot_fill_the_row(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        world.rate(user, world.film("Franchise", genres=("Action",)), 10)
+        world.rate(user, world.film("Other love", genres=("Romance",)), 9)
+        for number in range(6):
+            world.film(f"Sequel {number}", genres=("Action",), score=90)
+        world.film("Something else", genres=("Romance",), score=50)
+
+        picks = for_you(session, user.id)
+
+        sequels = [name for name in self._names(session, picks) if name.startswith("Sequel")]
+        assert len(sequels) == PER_SEED_PICKS
+        assert "Something else" in self._names(session, picks)
+
+    def test_within_is_the_callers_to_decide(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        world.rate(user, world.film("Loved"), 10)
+        world.film("Allowed")
+        blocked = world.film("Blocked")
+
+        picks = for_you(session, user.id, within=select(Title.id).where(Title.id != blocked.id))
+
+        assert self._names(session, picks) == ["Allowed"]
+
+    def test_the_limit(self, session: Session, user: User, world: World) -> None:
+        for number in range(3):
+            world.rate(user, world.film(f"Love {number}", genres=(f"G{number}",)), 10)
+            for extra in range(3):
+                world.film(f"Like {number}.{extra}", genres=(f"G{number}",))
+
+        assert len(for_you(session, user.id, limit=4)) == 4

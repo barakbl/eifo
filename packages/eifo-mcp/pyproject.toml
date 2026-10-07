@@ -1,0 +1,24 @@
+[project]
+name = "eifo-mcp"
+version = "0.25.0"  # x-release-please-version
+description = "Eifo for AI assistants: an MCP server over an Eifo instance's API"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Barak Bloch", email = "barak.bloch@gmail.com" }]
+# Deliberately not eifo-core: this runs on somebody's laptop next to their AI
+# assistant and talks to an instance over HTTP, the way any client would. It
+# needs nothing of the server's but its API.
+dependencies = [
+    "mcp>=2.3,<3",
+    "httpx>=0.28",
+]
+
+[project.scripts]
+eifo-mcp = "eifo_mcp.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/eifo_mcp"]

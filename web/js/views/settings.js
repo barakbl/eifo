@@ -221,6 +221,15 @@ function tokensSection({ t }) {
     "aria-label": t("tokens.name"),
   });
 
+  // Read only first, and chosen: the token somebody is likeliest to make now
+  // is one for an AI assistant, and the safe one should be the one they get
+  // without thinking about it.
+  const scope = el(
+    "select",
+    { class: "input", name: "scope", "aria-label": t("tokens.scope") },
+    TOKEN_SCOPES.map((value) => el("option", { value, text: t(`tokens.scope.${value}`) })),
+  );
+
   const form = el(
     "form",
     {
@@ -229,7 +238,7 @@ function tokensSection({ t }) {
         event.preventDefault();
         problem.textContent = "";
         try {
-          const made = await createMyToken(name.value.trim());
+          const made = await createMyToken(name.value.trim(), scope.value);
           name.value = "";
           // Rendered as text into a read-only input, never into markup: it is
           // a credential, and this file hands nothing to innerHTML.
@@ -243,7 +252,7 @@ function tokensSection({ t }) {
         }
       },
     },
-    [name, el("button", { class: "button", type: "submit", text: t("tokens.create") })],
+    [name, scope, el("button", { class: "button", type: "submit", text: t("tokens.create") })],
   );
 
   refresh();
@@ -257,6 +266,9 @@ function tokensSection({ t }) {
   ]);
 }
 
+/** What a token may do, safest first: the first is the one picked by default. */
+export const TOKEN_SCOPES = ["read", "lists", "full"];
+
 function tokenRow(row, { t, refresh, problem }) {
   const used = row.last_used_at
     ? t("tokens.lastUsed", { when: formatDate(row.last_used_at) })
@@ -265,6 +277,10 @@ function tokenRow(row, { t, refresh, problem }) {
   return el("div", { class: "tokens__row" }, [
     el("span", { class: "tokens__name", text: row.name }),
     el("span", { class: "tokens__hint", text: `${row.hint}\u2026` }),
+    el("span", {
+      class: `tokens__scope tokens__scope--${row.scope ?? "full"}`,
+      text: t(`tokens.scopeShort.${row.scope ?? "full"}`),
+    }),
     el("span", { class: "tokens__used", text: used }),
     el("button", {
       class: "button button--quiet",

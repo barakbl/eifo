@@ -45,6 +45,18 @@ def etag_for(body: bytes) -> str:
     return f'W/"{hashlib.sha256(body).hexdigest()[:32]}"'
 
 
+#: Query parameters that make a catalog answer one person's. The catalog is
+#: public and cacheable; "titles I have not seen" is not, and a shared cache
+#: handing one member's list of unseen films to the next is a leak of what the
+#: first has watched.
+PERSONAL_PARAMS = frozenset({"exclude"})
+
+
+def is_personal_query(request: Request) -> bool:
+    """Whether this request asks something only its sender's answer fits."""
+    return not PERSONAL_PARAMS.isdisjoint(request.query_params.keys())
+
+
 def is_private_path(path: str) -> bool:
     """Whether a path may carry user data, whatever the response turned out to be."""
     return any(path.startswith(prefix) for prefix in PRIVATE_PREFIXES)
@@ -62,7 +74,7 @@ class CatalogCacheMiddleware(BaseHTTPMiddleware):
 
         # Applied by path rather than by outcome: a 401 or a validation error on
         # a user route is exactly as unfit for a cache as the data itself.
-        if is_private_path(request.url.path):
+        if is_private_path(request.url.path) or is_personal_query(request):
             response.headers["Cache-Control"] = NO_STORE
             return response
 

@@ -13,7 +13,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session, sessionmaker
 
-from eifo_api import members
+from eifo_api import members, scopes
 from eifo_api.security import (
     CSRF_HEADER,
     SAFE_METHODS,
@@ -24,6 +24,7 @@ from eifo_api.security import (
     signing_secret,
 )
 from eifo_api.sessions import resolve_api_token, resolve_session
+from eifo_core.enums import TokenScope
 from eifo_core.models import User
 from eifo_core.settings import Settings
 
@@ -67,6 +68,9 @@ class Principal:
     #: browser being made to send a cookie it holds anyway, and nothing makes a
     #: browser attach somebody else's Authorization header.
     via_token: bool = False
+    #: What the token may do; None for a browser session, which may do
+    #: whatever its owner may.
+    scope: TokenScope | None = None
 
 
 def current_principal(
@@ -86,7 +90,19 @@ def current_principal(
 
     token = resolve_api_token(session, bearer_token(request.headers.get("Authorization")))
     if token is not None:
-        return _principal(session, settings, token.user, token.token_hash, via_token=True)
+        # Before anything else gets to see the request: a scoped token outside
+        # its allow-list is refused here, whatever route it was aimed at.
+        if not scopes.allows(token.scope, request.method, request.url.path):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"This token is limited to '{token.scope.value}' and cannot do that. "
+                    "Use a token with more access, or the web app."
+                ),
+            )
+        return _principal(
+            session, settings, token.user, token.token_hash, via_token=True, scope=token.scope
+        )
 
     return None
 
@@ -98,13 +114,19 @@ def _principal(
     token_hash: str,
     *,
     via_token: bool,
+    scope: TokenScope | None = None,
 ) -> Principal:
+    # A narrow token is never an administrator, whoever it belongs to. The
+    # allow-list already keeps it off the admin routes; this keeps it off
+    # anything that asks ``is_admin`` instead.
+    narrow = scope not in (None, TokenScope.FULL)
     return Principal(
         user=user,
         token_hash=token_hash,
         csrf_token=csrf_token_for(token_hash, signing_secret(settings)),
-        is_admin=members.is_admin(session, settings, user.email),
+        is_admin=not narrow and members.is_admin(session, settings, user.email),
         via_token=via_token,
+        scope=scope,
     )
 
 

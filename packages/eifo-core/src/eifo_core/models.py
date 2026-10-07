@@ -39,6 +39,7 @@ from eifo_core.enums import (
     RatingProvider,
     SourceKind,
     TitleKind,
+    TokenScope,
 )
 from eifo_core.types import UtcDateTime, utcnow
 
@@ -745,6 +746,13 @@ class ApiToken(Base):
     #: What it is for, in the owner's words. The only way to tell two apart:
     #: the token itself is unreadable after the moment it was created.
     name: Mapped[str] = mapped_column(String(100))
+    #: What it may do. Every token issued before scopes existed is ``full``,
+    #: which is what they could already do.
+    scope: Mapped[TokenScope] = mapped_column(
+        _enum(TokenScope, "token_scope"),
+        default=TokenScope.FULL,
+        server_default=TokenScope.FULL.value,
+    )
 
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
     #: Null until it is used. Never updated more than once a minute: a token is

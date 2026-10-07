@@ -24,6 +24,7 @@ members = ["packages/*"]
 eifo-core = { workspace = true }
 eifo-api = { workspace = true }
 eifo-fetcher = { workspace = true }
+eifo-mcp = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -35,6 +36,10 @@ dev = [
     "respx>=0.22",
     "pre-commit>=4.0",
     "httpx2>=2.9.1",
+    # The assistant-side package. A workspace member like the rest, but not a
+    # dependency of the server: the image is built --no-dev and has no use for
+    # an MCP library. Here so a checkout can run and test it.
+    "eifo-mcp",
 ]
 
 # ---------------------------------------------------------------- ruff
@@ -53,7 +58,7 @@ extend-exclude = [
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["eifo_core", "eifo_api", "eifo_fetcher"]
+known-first-party = ["eifo_core", "eifo_api", "eifo_fetcher", "eifo_mcp"]
 
 [tool.ruff.lint.per-file-ignores]
 # Pytest fixtures legitimately shadow names and use bare asserts.
@@ -67,6 +72,7 @@ files = [
     "packages/eifo-core/src",
     "packages/eifo-api/src",
     "packages/eifo-fetcher/src",
+    "packages/eifo-mcp/src",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
@@ -102,6 +108,7 @@ testpaths = [
     "packages/eifo-core/tests",
     "packages/eifo-api/tests",
     "packages/eifo-fetcher/tests",
+    "packages/eifo-mcp/tests",
 ]
 addopts = "-q --strict-markers --strict-config"
 markers = [
@@ -113,7 +120,7 @@ filterwarnings = ["error"]
 
 [tool.coverage.run]
 branch = true
-source = ["eifo_core", "eifo_api", "eifo_fetcher"]
+source = ["eifo_core", "eifo_api", "eifo_fetcher", "eifo_mcp"]
 
 [tool.coverage.report]
 exclude_also = [

@@ -46,6 +46,9 @@ jobs:
           uv run pytest packages/eifo-api packages/eifo-fetcher
           --cov=eifo_api --cov=eifo_fetcher --cov-fail-under=85
 
+      - name: Tests - eifo-mcp (coverage gate 85%)
+        run: uv run pytest packages/eifo-mcp --cov=eifo_mcp --cov-fail-under=85
+
       - name: Client logic tests
         run: node --test "web/tests/*.test.js"
 

@@ -3411,3 +3411,18 @@ input {
     border-radius: var(--radius-pill);
   }
 }
+
+/* A token's scope beside its hint. Full is the one worth noticing: it is the
+ * kind that should not be sitting in an assistant's configuration. */
+.tokens__scope {
+  padding: 0.0625rem var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+}
+
+.tokens__scope--full {
+  border-color: var(--accent);
+  color: var(--accent);
+}

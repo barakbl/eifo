@@ -28,7 +28,7 @@ from eifo_api.converters import (
     to_person_detail,
     to_source,
 )
-from eifo_api.deps import SessionDep
+from eifo_api.deps import OptionalPrincipalDep, SessionDep
 from eifo_api.schemas import (
     Arrival,
     GenreOut,
@@ -55,6 +55,7 @@ from eifo_core.models import (
     Source,
     Title,
     TitleGenre,
+    UserItem,
 )
 
 router = APIRouter(tags=["catalog"])
@@ -87,6 +88,17 @@ class AvailabilityFilter(StrEnum):
     CURRENT = "current"
     ANY = "any"
     GONE = "gone"
+
+
+class Exclude(StrEnum):
+    """What of the caller's own to leave out of a catalog answer."""
+
+    #: Titles they have marked watched.
+    WATCHED = "watched"
+    #: Titles they have said anything about: watched, wanted, rated or noted.
+    #: What a recommendation wants to skip - a film already on the watchlist
+    #: is not news either.
+    LISTED = "listed"
 
 
 class Sort(StrEnum):
@@ -172,8 +184,15 @@ def list_titles(
     ] = None,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+    exclude: Annotated[
+        Exclude | None,
+        Query(description="Leave out your own titles: 'watched', or 'listed' for any list"),
+    ] = None,
+    principal: OptionalPrincipalDep = None,
 ) -> Page[TitleCard]:
     """Titles matching every supplied filter."""
+    if exclude is not None and principal is None:
+        raise HTTPException(status_code=401, detail="Sign in to leave out your own titles.")
     filtered = _filtered_ids(
         session,
         q=q,
@@ -186,13 +205,31 @@ def list_titles(
         score_min=score_min,
         runtime_max=runtime_max,
     )
+    owner = None
+    if exclude is not None and principal is not None:
+        owner = principal.user.id
+        filtered = filtered.where(Title.id.not_in(_own_titles(owner, exclude)))
 
     total = _total_matching(
         session,
         filtered,
         # Everything that changes which rows match. Not the sort, the page or
         # the page size: those change the order and the slice, never the count.
-        (q, sources, available, type, genres, year_min, year_max, score_min, runtime_max),
+        # The owner too, once their own titles are left out: two members'
+        # "unseen" are two different counts.
+        (
+            q,
+            sources,
+            available,
+            type,
+            genres,
+            year_min,
+            year_max,
+            score_min,
+            runtime_max,
+            exclude,
+            owner,
+        ),
     )
     ordered = (
         _apply_sort(filtered, sort or _default_sort(q), order, query=q)
@@ -622,6 +659,12 @@ def _arrivals(source_keys: list[str]) -> Select[tuple[int, int, str, str, dt.dat
         statement = statement.where(Source.key.in_(source_keys))
 
     return statement
+
+
+def _own_titles(user_id: int, exclude: Exclude) -> Select[tuple[int]]:
+    """The titles of one member's to leave out."""
+    own = select(UserItem.title_id).where(UserItem.user_id == user_id)
+    return own.where(UserItem.watched) if exclude is Exclude.WATCHED else own
 
 
 def _availability_ids(source_keys: list[str], available: AvailabilityFilter) -> Select[tuple[int]]:

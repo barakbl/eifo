@@ -22,6 +22,7 @@ from eifo_core.enums import (
     RatingProvider,
     SourceKind,
     TitleKind,
+    TokenScope,
 )
 from eifo_core.ingest import MAX_IMDB_WRITE_CHUNK, MAX_SERET_WRITE_CHUNK
 from eifo_core.models import (
@@ -453,6 +454,10 @@ class MeResponse(BaseModel):
     #: leave the link out rather than offer one that 404s; the server never
     #: trusts the answer coming back.
     is_admin: bool = False
+    #: The scope of the token this request came with; null for a browser.
+    #: How a client holding a token finds out what it may do, rather than
+    #: offering a feature and meeting a 403.
+    token_scope: TokenScope | None = None
 
 
 class UserItemOut(BaseModel):
@@ -1025,6 +1030,8 @@ class ApiTokenOut(BaseModel):
     #: The first characters, so a person can tell which of their tokens a
     #: script is holding without being able to reconstruct it.
     hint: str
+    #: What it may do: everything, read only, or read and keep lists.
+    scope: TokenScope = TokenScope.FULL
     created_at: dt.datetime
     last_used_at: dt.datetime | None = None
 
@@ -1039,6 +1046,10 @@ class ApiTokenCreate(BaseModel):
     """Ask for a token, and say what it is for."""
 
     name: str = Field(min_length=1, max_length=100)
+    #: Full by default: that is what every token was, and what the fetcher
+    #: and other scripts that feed the catalog need. An AI assistant should be
+    #: given ``read``, or ``lists`` to let it keep a watchlist.
+    scope: TokenScope = TokenScope.FULL
 
 
 class ScoringProvider(BaseModel):

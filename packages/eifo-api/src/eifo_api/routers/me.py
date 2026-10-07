@@ -6,6 +6,7 @@ from the request, so there is no object for a caller to walk sideways through.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -19,13 +20,17 @@ from eifo_api.schemas import (
     ApiTokenCreated,
     ApiTokenOut,
     ItemUpsert,
+    Leaning,
     ListService,
     MeResponse,
     Page,
     ProfilePatch,
+    RatedTitleOut,
+    TasteOut,
     UserItemOut,
     UserOut,
 )
+from eifo_core import taste
 from eifo_core.enums import ItemStatus
 from eifo_core.models import ApiToken, Availability, Source, Title, User, UserItem
 from eifo_core.tokens import hash_token, new_api_token
@@ -196,6 +201,35 @@ def revoke_my_token(
     session.delete(row)
     session.commit()
     return Response(status_code=204)
+
+
+@router.get("/me/taste", response_model=TasteOut, summary="What your ratings say you like")
+def my_taste(principal: PrincipalDep, session: SessionDep) -> TasteOut:
+    """Your taste, read from your ratings.
+
+    The genres, directors, leads, countries, languages, decades and kinds you
+    rate above or below your own average, your favourite and least favourite
+    titles, and how your ratings compare with the critics'. Every average is
+    pulled toward yours by a couple of imaginary ratings, so a single 10 does
+    not make a favourite director - two 9s beat it.
+    """
+    found = taste.taste(session, principal.user.id)
+    return TasteOut(
+        rated=found.rated,
+        average=found.average,
+        distribution=found.distribution,
+        against_consensus=found.against_consensus,
+        favourites=[RatedTitleOut(**asdict(entry)) for entry in found.favourites],
+        dislikes=[RatedTitleOut(**asdict(entry)) for entry in found.dislikes],
+        liked={
+            facet: [Leaning(**asdict(entry)) for entry in entries]
+            for facet, entries in found.liked.items()
+        },
+        disliked={
+            facet: [Leaning(**asdict(entry)) for entry in entries]
+            for facet, entries in found.disliked.items()
+        },
+    )
 
 
 @router.get("/me/items", response_model=Page[UserItemOut], summary="Your lists")

@@ -10,12 +10,13 @@ round trips.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from collections import OrderedDict
 from enum import StrEnum
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import ColumnElement, Select, func, or_, select, text
+from sqlalchemy import ColumnElement, Select, false, func, literal, or_, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from eifo_api.converters import (
@@ -26,15 +27,18 @@ from eifo_api.converters import (
     to_detail,
     to_genre,
     to_person_detail,
+    to_person_ref,
     to_source,
 )
 from eifo_api.deps import OptionalPrincipalDep, SessionDep
 from eifo_api.schemas import (
     Arrival,
+    Because,
     GenreOut,
     Page,
     PersonDetail,
     PersonSuggestion,
+    SimilarCard,
     SourceOut,
     Suggestions,
     TitleCard,
@@ -42,8 +46,9 @@ from eifo_api.schemas import (
     TitleSuggestion,
 )
 from eifo_api.search import apply_relevance, apply_text_search, name_match
+from eifo_core import taste
 from eifo_core.additions import user_added_ids
-from eifo_core.enums import FetchPhase, FetchStatus, TitleKind
+from eifo_core.enums import CreditRole, FetchPhase, FetchStatus, TitleKind
 from eifo_core.fts import PEOPLE, TITLES
 from eifo_core.models import (
     AggregateScore,
@@ -188,6 +193,25 @@ def list_titles(
         Exclude | None,
         Query(description="Leave out your own titles: 'watched', or 'listed' for any list"),
     ] = None,
+    person: Annotated[
+        int | None, Query(ge=1, description="Only titles this person directed or acted in")
+    ] = None,
+    role: Annotated[
+        CreditRole | None,
+        Query(description="With person: only as director, or only in the cast"),
+    ] = None,
+    countries: Annotated[
+        str | None,
+        Query(description="Comma-separated ISO 3166 codes; made in any of them (IL,FR)"),
+    ] = None,
+    language: Annotated[
+        str | None,
+        Query(min_length=2, max_length=8, description="Original language, ISO 639-1 (he, ko)"),
+    ] = None,
+    ids: Annotated[
+        str | None,
+        Query(description=f"Comma-separated title ids, at most {MAX_PAGE_SIZE}"),
+    ] = None,
     principal: OptionalPrincipalDep = None,
 ) -> Page[TitleCard]:
     """Titles matching every supplied filter."""
@@ -204,6 +228,12 @@ def list_titles(
         year_max=year_max,
         score_min=score_min,
         runtime_max=runtime_max,
+        person_id=person,
+        person_role=role,
+        # Asked for, but nothing in it a code: that is "nowhere", not "anywhere".
+        country_codes=_codes(countries) if countries else None,
+        language=language,
+        title_ids=_int_csv(ids)[:MAX_PAGE_SIZE] if ids else None,
     )
     owner = None
     if exclude is not None and principal is not None:
@@ -229,6 +259,11 @@ def list_titles(
             runtime_max,
             exclude,
             owner,
+            person,
+            role,
+            countries,
+            language,
+            ids,
         ),
     )
     ordered = (
@@ -254,6 +289,102 @@ def get_title(title_id: int, session: SessionDep) -> TitleDetail:
     # One small query for the seven-odd rows that say how each score is
     # credited, rather than a per-rating lazy load of the same table.
     return to_detail(titles[0], ProviderRegistry.load(session))
+
+
+#: Most similar titles one page returns. Past this a list of "like this" is a
+#: list of the genre.
+MAX_SIMILAR = 50
+
+
+@router.get(
+    "/titles/{title_id}/similar",
+    response_model=Page[SimilarCard],
+    summary="Titles like this one",
+)
+def similar_titles(
+    title_id: int,
+    session: SessionDep,
+    sources: Annotated[str | None, Query(description="Comma-separated source keys")] = None,
+    available: Annotated[AvailabilityFilter, Query()] = AvailabilityFilter.CURRENT,
+    type: Annotated[TitleKind | None, Query()] = None,
+    score_min: Annotated[int | None, Query(ge=0, le=100)] = None,
+    runtime_max: Annotated[
+        int | None,
+        Query(ge=1, le=1000, description="Longest film, in minutes; films only"),
+    ] = None,
+    exclude: Annotated[
+        Exclude | None,
+        Query(description="Leave out your own titles: 'watched', or 'listed' for any list"),
+    ] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAX_SIMILAR)] = DEFAULT_PAGE_SIZE,
+    principal: OptionalPrincipalDep = None,
+) -> Page[SimilarCard]:
+    """The titles most like this one, with what each shares with it.
+
+    Alike means shared genres, directors and leads, then era, language and
+    kind, with a little of each candidate's own score so that of two equally
+    alike titles the better one comes first. Filtered the way ``/titles`` is,
+    so "like this, on my services, available now, that I have not seen" is one
+    request.
+    """
+    title = session.get(Title, title_id)
+    if title is None:
+        raise HTTPException(status_code=404, detail=f"No title with id {title_id}")
+    if exclude is not None and principal is None:
+        raise HTTPException(status_code=401, detail="Sign in to leave out your own titles.")
+
+    within = _filtered_ids(
+        session,
+        q=None,
+        source_keys=_csv(sources),
+        available=available,
+        kind=type,
+        genre_ids=[],
+        year_min=None,
+        year_max=None,
+        score_min=score_min,
+        runtime_max=runtime_max,
+    )
+    if exclude is not None and principal is not None:
+        within = within.where(Title.id.not_in(_own_titles(principal.user.id, exclude)))
+
+    seed = taste.seed_of(session, title)
+    found, total = taste.similar(
+        session, seed, within=within, limit=page_size, offset=(page - 1) * page_size
+    )
+
+    titles = {loaded.id: loaded for loaded in hydrate_titles(session, [f.title_id for f in found])}
+    genres = {
+        genre.id: genre.name_en
+        for genre in session.scalars(
+            select(Genre).where(Genre.id.in_({g for f in found for g in f.shared_genres}))
+        )
+    }
+    people = {
+        person.id: to_person_ref(person)
+        for person in session.scalars(
+            select(Person).where(Person.id.in_({p for f in found for p in f.shared_people}))
+        )
+    }
+
+    return Page(
+        items=[
+            SimilarCard(
+                **to_card(titles[f.title_id]).model_dump(),
+                similarity=f.similarity,
+                because=Because(
+                    genres=sorted(genres[g] for g in f.shared_genres if g in genres),
+                    people=[people[p] for p in f.shared_people if p in people],
+                ),
+            )
+            for f in found
+            if f.title_id in titles
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+    )
 
 
 @router.get("/whats-new", response_model=Page[Arrival], summary="Recent arrivals, per service")
@@ -547,9 +678,31 @@ def _filtered_ids(
     year_max: int | None,
     score_min: int | None,
     runtime_max: int | None,
+    person_id: int | None = None,
+    person_role: CreditRole | None = None,
+    country_codes: list[str] | None = None,
+    language: str | None = None,
+    title_ids: list[int] | None = None,
 ) -> Select[tuple[int]]:
     """Ids of titles matching every filter, before ordering or paging."""
     statement = select(Title.id)
+
+    if title_ids is not None:
+        statement = statement.where(Title.id.in_(title_ids))
+    if person_id is not None:
+        credited = select(Credit.title_id).where(Credit.person_id == person_id)
+        if person_role is not None:
+            credited = credited.where(Credit.role == person_role)
+        statement = statement.where(Title.id.in_(credited))
+    if country_codes is not None:
+        # Stored as "IL,FR" in the order the source lists them. Wrapped in
+        # commas so "IL" cannot match inside some longer code.
+        padded = literal(",") + func.coalesce(Title.origin_countries, "") + literal(",")
+        statement = statement.where(
+            or_(false(), *(padded.like(f"%,{code},%") for code in country_codes))
+        )
+    if language:
+        statement = statement.where(Title.original_language == language.lower())
 
     if q:
         statement = apply_text_search(statement, q)
@@ -796,6 +949,13 @@ def _last_sync_by_source(session: Session) -> dict[str, dt.datetime]:
 
 def _csv(value: str | None) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()] if value else []
+
+
+def _codes(value: str | None) -> list[str]:
+    """Country codes as stored: upper case, two letters, nothing else."""
+    return [
+        code for code in (part.upper() for part in _csv(value)) if re.fullmatch("[A-Z]{2}", code)
+    ]
 
 
 def _int_csv(value: str | None) -> list[int]:

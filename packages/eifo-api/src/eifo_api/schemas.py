@@ -247,6 +247,63 @@ class TitleCard(BaseModel):
     user_added: bool = False
 
 
+class Because(BaseModel):
+    """Why a title is like another: what the two share."""
+
+    genres: list[str] = Field(default_factory=list)
+    people: list[PersonRef] = Field(default_factory=list)
+
+
+class SimilarCard(TitleCard):
+    """A title like the one asked about, with how alike and why."""
+
+    #: Out of roughly a hundred, and comparable only within one answer.
+    similarity: int
+    because: Because = Field(default_factory=Because)
+
+
+class Leaning(BaseModel):
+    """One genre, person, country, decade, language or kind a member rated."""
+
+    key: str
+    name: str
+    name_he: str | None = None
+    #: The genre's or person's id, for asking the catalog about it.
+    id: int | None = None
+    titles: int
+    average: float
+    #: The average pulled toward the member's own, which is what the lists
+    #: are ranked by: one title rated 10 does not make a favourite.
+    weighted: float
+
+
+class RatedTitleOut(BaseModel):
+    title_id: int
+    name: str
+    name_he: str | None = None
+    year: int | None = None
+    rating: int
+
+
+class TasteOut(BaseModel):
+    """What a member likes, as far as their ratings tell.
+
+    The lists are keyed by facet: ``genres``, ``directors``, ``cast`` (leads
+    only), ``countries`` (ISO codes), ``languages``, ``decades`` and ``kinds``.
+    """
+
+    rated: int
+    average: float | None = None
+    distribution: dict[int, int] = Field(default_factory=dict)
+    #: Their rating against the catalog's on its 0-100 scale. Positive is a
+    #: kinder rater than the critics; negative, a harsher one.
+    against_consensus: float | None = None
+    favourites: list[RatedTitleOut] = Field(default_factory=list)
+    dislikes: list[RatedTitleOut] = Field(default_factory=list)
+    liked: dict[str, list[Leaning]] = Field(default_factory=dict)
+    disliked: dict[str, list[Leaning]] = Field(default_factory=dict)
+
+
 class Arrival(BaseModel):
     """A title as it turned up on one service.
 

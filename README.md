@@ -913,7 +913,9 @@ From a checkout, `uv run --directory /path/to/eifo eifo-mcp` does the same.
 
 | Tool | Answers |
 |---|---|
-| `search_titles` | the catalog's filters - services (`mine` for yours), genre, years, score, length - with `skip="listed"` to leave out what you watched or saved |
+| `taste_profile` | what your ratings say you like: genres, directors, leads, countries, decades, and how you rate against the critics |
+| `similar_to` | titles like one you loved - shared genres, director and leads - with why, leaving out what you have |
+| `search_titles` | the catalog's filters - services (`mine` for yours), genre, years, score, length, a director or actor, country, language - with `skip="listed"` to leave out what you watched or saved |
 | `get_title` | one title: where to watch and for how much, ratings, director, cast |
 | `find` | a title or a person by name, for their id |
 | `get_person` | what a director or actor made, and where it is |

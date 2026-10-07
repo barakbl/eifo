@@ -27,6 +27,8 @@ EXPECTED_TOOLS = {
     "whats_new",
     "list_services",
     "list_genres",
+    "taste_profile",
+    "similar_to",
 }
 
 
@@ -303,3 +305,55 @@ def _client_for(app: FastAPI, session_factory: sessionmaker[Session], user_id: i
         token_for(session_factory, user_id),
         http=TestClient(app, base_url="https://testserver"),
     )
+
+
+class TestTasteAndSimilar:
+    def test_taste_in_one_call(self, server: MCPServer, catalog: Catalog) -> None:
+        taste = call(server, "taste_profile")
+
+        assert taste["rated"] == 1
+        assert taste["favourites"] == [
+            {"id": catalog.shoplifters, "name": "Shoplifters", "year": 2018, "my_rating": 9}
+        ]
+
+    def test_like_a_favourite_by_the_same_director(
+        self, server: MCPServer, catalog: Catalog
+    ) -> None:
+        like = call(server, "similar_to", {"title_id": catalog.shoplifters})
+
+        # Both share the director and the genre; which leads is down to era
+        # and score, and is not what this is about.
+        assert {result["id"] for result in like["results"][:2]} == {
+            catalog.nobody_knows,
+            catalog.broker,
+        }
+        first = like["results"][0]
+        assert first["shares"]["people"] == [{"id": catalog.kore_eda, "name": "Hirokazu Kore-eda"}]
+        assert first["shares"]["genres"] == ["Drama"]
+        assert "similarity" in first
+
+    def test_similar_skips_what_the_user_has_by_default(
+        self, server: MCPServer, catalog: Catalog
+    ) -> None:
+        """Fauda is on the watchlist; Shoplifters is the seed."""
+        like = call(server, "similar_to", {"title_id": catalog.broker, "availability": "any"})
+
+        found = {result["id"] for result in like["results"]}
+        assert catalog.shoplifters not in found
+        assert catalog.fauda not in found
+        assert catalog.nobody_knows in found
+
+    def test_similar_on_my_services(self, server: MCPServer, catalog: Catalog) -> None:
+        like = call(server, "similar_to", {"title_id": catalog.shoplifters, "services": ["mine"]})
+
+        assert {result["id"] for result in like["results"]} == {catalog.broker}
+
+    def test_search_by_person(self, server: MCPServer, catalog: Catalog) -> None:
+        found = call(server, "search_titles", {"person_id": catalog.kore_eda, "skip": "watched"})
+
+        assert {card["id"] for card in found["results"]} == {catalog.broker, catalog.nobody_knows}
+
+    def test_search_by_country_that_nothing_matches(
+        self, server: MCPServer, catalog: Catalog
+    ) -> None:
+        assert call(server, "search_titles", {"countries": ["KR"]})["total"] == 0

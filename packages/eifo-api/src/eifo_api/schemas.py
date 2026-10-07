@@ -929,6 +929,12 @@ class PendingPoster(BaseModel):
 
     title_id: int
     source_url: str
+    #: What TMDB knows the title as, when it does: where the sender turns for
+    #: artwork when the source's own is gone. A listing's poster can vanish
+    #: from under it - Lev VOD has films whose image is a dead link on its own
+    #: CDN - and without these that title retried the dead link every night.
+    kind: TitleKind | None = None
+    tmdb_id: int | None = None
 
 
 class RejectedPoster(BaseModel):

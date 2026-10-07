@@ -104,7 +104,12 @@ def pending_posters(
         query = query.where(Title.id > after)
 
     return [
-        PendingPoster(title_id=title.id, source_url=title.poster_source_url)
+        PendingPoster(
+            title_id=title.id,
+            source_url=title.poster_source_url,
+            kind=title.type,
+            tmdb_id=title.tmdb_id,
+        )
         for title in session.scalars(query.limit(limit)).all()
         if title.poster_source_url
     ]

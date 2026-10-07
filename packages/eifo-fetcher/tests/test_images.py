@@ -23,7 +23,7 @@ import httpx
 import pytest
 from PIL import Image, UnidentifiedImageError
 
-from eifo_core.enums import FetchPhase, FetchStatus
+from eifo_core.enums import FetchPhase, FetchStatus, TitleKind
 from eifo_core.ingest import (
     BACKDROP_VARIANTS,
     MANIFEST_NAME,
@@ -361,3 +361,141 @@ class TestTheClientItself:
         assert api.runs[0]["phase"] == FetchPhase.IMAGES.value
         assert api.closed[0]["status"] == FetchStatus.OK.value
         assert api.closed[0]["stats"] == {"downloaded": 3}
+
+
+class FakeTmdb:
+    """TMDB's details endpoint, as far as the fallback asks it anything."""
+
+    def __init__(self, posters: dict[str, str | None] | None = None, *, fail: bool = False) -> None:
+        #: Poster path per language; a language left out has none.
+        self.posters = posters if posters is not None else {"en-US": "/tmdb.jpg"}
+        self.fail = fail
+        self.asked: list[tuple[TitleKind, int, str]] = []
+
+    def details(self, kind: TitleKind, tmdb_id: int, *, language: str) -> dict[str, Any]:
+        self.asked.append((kind, tmdb_id, language))
+        if self.fail:
+            raise httpx.ConnectError("TMDB is down")
+        return {"id": tmdb_id, "poster_path": self.posters.get(language)}
+
+
+TMDB_POSTER = "https://image.tmdb.org/t/p/w500/tmdb.jpg"
+
+
+def gone(title_id: int = 1, **extra: Any) -> list[dict[str, Any]]:
+    """A title whose own artwork is a dead link, and which TMDB knows."""
+    row = {
+        "title_id": title_id,
+        "source_url": f"https://cdn.example/{title_id}",
+        "kind": "movie",
+        "tmdb_id": 500 + title_id,
+    }
+    return [row | extra]
+
+
+class TestWhenTheArtworkIsGone:
+    """Lev VOD's dead CDN links: retried every night, failing every night."""
+
+    @pytest.fixture
+    def tmdb_images(self, respx_mock: Any) -> Any:
+        respx_mock.get(url__regex=r"https://image\.tmdb\.org/.*").mock(
+            return_value=httpx.Response(200, content=png_bytes())
+        )
+        return respx_mock
+
+    @pytest.mark.parametrize("status", [403, 404, 410])
+    def test_tmdbs_poster_is_used_instead(self, tmdb_images: Any, status: int) -> None:
+        tmdb_images.get("https://cdn.example/1").mock(return_value=httpx.Response(status))
+        api = FakeApi(gone(1))
+        tmdb = FakeTmdb()
+
+        with HttpClient() as http, api.client() as client:
+            result = ImageFetcher(http, client, tmdb=tmdb).fetch_missing()  # type: ignore[arg-type]
+
+        assert (result.downloaded, result.failed, result.from_tmdb) == (1, 0, 1)
+        assert result.as_stats()["from_tmdb"] == 1
+        assert tmdb.asked == [(TitleKind.MOVIE, 501, "en-US")]
+        # The record says where the artwork really came from.
+        assert FakeApi._manifest(api.uploads[0]).items[0].source_url == TMDB_POSTER
+
+    def test_hebrew_artwork_when_tmdb_has_no_english(self, tmdb_images: Any) -> None:
+        tmdb_images.get("https://cdn.example/1").mock(return_value=httpx.Response(403))
+        api = FakeApi(gone(1))
+        tmdb = FakeTmdb({"he-IL": "/tmdb.jpg"})
+
+        with HttpClient() as http, api.client() as client:
+            result = ImageFetcher(http, client, tmdb=tmdb).fetch_missing()  # type: ignore[arg-type]
+
+        assert result.from_tmdb == 1
+        assert [language for *_, language in tmdb.asked] == ["en-US", "he-IL"]
+
+    def test_a_host_having_a_bad_night_is_not_gone(self, respx_mock: Any) -> None:
+        """A 5xx is retried tomorrow; the source's own artwork is still wanted."""
+        respx_mock.get("https://cdn.example/1").mock(return_value=httpx.Response(503))
+        api = FakeApi(gone(1))
+        tmdb = FakeTmdb()
+
+        with HttpClient(attempts=1) as http, api.client() as client:
+            result = ImageFetcher(http, client, tmdb=tmdb).fetch_missing()  # type: ignore[arg-type]
+
+        assert (result.failed, result.from_tmdb) == (1, 0)
+        assert tmdb.asked == []
+
+    @pytest.mark.parametrize("status", [408, 429])
+    def test_asking_for_patience_is_not_gone(self, respx_mock: Any, status: int) -> None:
+        respx_mock.get("https://cdn.example/1").mock(return_value=httpx.Response(status))
+        api = FakeApi(gone(1))
+        tmdb = FakeTmdb()
+
+        with HttpClient(attempts=1) as http, api.client() as client:
+            result = ImageFetcher(http, client, tmdb=tmdb).fetch_missing()  # type: ignore[arg-type]
+
+        assert result.failed == 1
+        assert tmdb.asked == []
+
+    @pytest.mark.parametrize(
+        ("row", "tmdb"),
+        [
+            ({"tmdb_id": None}, FakeTmdb()),
+            ({"kind": "podcast"}, FakeTmdb()),
+            ({}, FakeTmdb({})),
+            ({}, FakeTmdb(fail=True)),
+            ({}, None),
+        ],
+        ids=["no tmdb id", "unknown kind", "tmdb has no poster", "tmdb down", "no tmdb key"],
+    )
+    def test_still_a_failure_when_tmdb_cannot_help(
+        self, respx_mock: Any, row: dict[str, Any], tmdb: FakeTmdb | None
+    ) -> None:
+        respx_mock.get("https://cdn.example/1").mock(return_value=httpx.Response(403))
+        api = FakeApi(gone(1, **row))
+
+        with HttpClient() as http, api.client() as client:
+            result = ImageFetcher(http, client, tmdb=tmdb).fetch_missing()  # type: ignore[arg-type]
+
+        assert (result.downloaded, result.failed, result.from_tmdb) == (0, 1, 0)
+        assert api.uploads == []
+
+    def test_a_dead_tmdb_poster_is_not_tried_twice(self, respx_mock: Any) -> None:
+        """When the dead link *is* TMDB's, there is nothing to fall back to."""
+        respx_mock.get(TMDB_POSTER).mock(return_value=httpx.Response(404))
+        api = FakeApi(gone(1, source_url=TMDB_POSTER))
+
+        with HttpClient() as http, api.client() as client:
+            result = ImageFetcher(http, client, tmdb=FakeTmdb()).fetch_missing()  # type: ignore[arg-type]
+
+        assert result.failed == 1
+        assert respx_mock.calls.call_count == 1
+
+    def test_the_rest_of_the_batch_is_untouched(self, tmdb_images: Any, poster_host: Any) -> None:
+        tmdb_images.get("https://cdn.example/1").mock(return_value=httpx.Response(403))
+        api = FakeApi(gone(1) + pending(2))
+
+        with HttpClient() as http, api.client() as client:
+            result = ImageFetcher(http, client, tmdb=FakeTmdb()).fetch_missing()  # type: ignore[arg-type]
+
+        assert (result.downloaded, result.from_tmdb) == (2, 1)
+        sources = {
+            item.title_id: item.source_url for item in FakeApi._manifest(api.uploads[0]).items
+        }
+        assert sources == {1: TMDB_POSTER, 2: "https://image.example/2.jpg"}

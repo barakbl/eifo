@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.1](https://github.com/barakbl/eifo/compare/v0.25.0...v0.25.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* fall back to TMDB's poster when a source's artwork is gone ([#143](https://github.com/barakbl/eifo/issues/143)) ([c68a08c](https://github.com/barakbl/eifo/commit/c68a08ca3a4bd29959a0b67e02510ffcfc3c65aa))
+
 ## [0.25.0](https://github.com/barakbl/eifo/compare/v0.24.0...v0.25.0) (2026-10-05)
 
 

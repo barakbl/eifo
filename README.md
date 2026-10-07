@@ -50,6 +50,11 @@ people actually trust, and puts a search box in front of it.
   read - [Coverage](#coverage) says why.
 - **Filter by what you already pay for.** Tick your services once; the catalog narrows to
   what you can watch tonight without buying anything new. "Everything" stays one tap away.
+- **Picks for you, with the reason.** Rate what you loved and the home page offers titles
+  like them - on your services, available now, nothing you have seen - each saying why:
+  *because you rated Reservoir Dogs 10*. Every title page ends with **More like this**.
+  Worked out on your own server from ratings, genres, directors and cast; no AI, and
+  nothing leaves the machine.
 - **Filter by the evening you have.** Two hours free is a filter, not a guess: pick a
   ceiling - an hour and a half, two hours, two and a half - and the catalog keeps to films
   that fit it. A series' runtime is one episode, a different claim, so series stay out of
@@ -913,6 +918,7 @@ From a checkout, `uv run --directory /path/to/eifo eifo-mcp` does the same.
 
 | Tool | Answers |
 |---|---|
+| `recommendations` | picks from your favourites, on your services, available now, unseen - each with the favourite it came from |
 | `taste_profile` | what your ratings say you like: genres, directors, leads, countries, decades, and how you rate against the critics |
 | `similar_to` | titles like one you loved - shared genres, director and leads - with why, leaving out what you have |
 | `search_titles` | the catalog's filters - services (`mine` for yours), genre, years, score, length, a director or actor, country, language - with `skip="listed"` to leave out what you watched or saved |

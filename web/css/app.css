@@ -3426,3 +3426,91 @@ input {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* "For you" and "More like this": a row of cards that scrolls sideways inside
+ * itself, so a phone sees two and a half and knows to swipe, and the page
+ * never widens with it. Cards keep the grid's look at a fixed width. */
+.shelf {
+  margin-block: var(--space-5);
+}
+
+.shelf__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  margin-block-end: var(--space-3);
+}
+
+.shelf__title {
+  margin: 0;
+}
+
+.shelf__note,
+.shelf__empty {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+.shelf__list {
+  display: grid;
+  grid-auto-flow: column;
+  /* One fixed width, not a range: a range sized the columns by how many
+   * cards there were, so eight placeholders came out wider - and taller -
+   * than the twelve picks that replaced them, and the page jumped. */
+  grid-auto-columns: 9rem;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0 0 var(--space-2);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  list-style: none;
+}
+
+.shelf__list > li {
+  scroll-snap-align: start;
+  min-inline-size: 0;
+}
+
+/* Every card in a row the same height, whatever it says: a name always takes
+ * two lines' room and so does its reason. Otherwise a row's height depended
+ * on whether some title happened to wrap, and no placeholder could match it. */
+.shelf .card__title {
+  block-size: calc(2 * 1.35 * var(--text-sm));
+}
+
+.shelf__why {
+  block-size: calc(2 * 1.35 * var(--text-xs));
+  margin: var(--space-1) 0 0;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Stand-ins for a card's name, score line and reason while the row is
+ * worked out, each the height of the line it stands for, so the row is its
+ * final height from the first paint and the catalog below never moves. */
+.shelf__ghost {
+  border-radius: var(--radius-sm);
+}
+
+.shelf__ghost--name {
+  block-size: calc(2 * 1.35 * var(--text-sm));
+}
+
+.shelf__ghost--meta {
+  inline-size: 45%;
+  block-size: 1.3rem;
+}
+
+.shelf__ghost--why {
+  inline-size: 85%;
+  block-size: calc(2 * 1.35 * var(--text-xs));
+  margin-block-start: var(--space-1);
+}

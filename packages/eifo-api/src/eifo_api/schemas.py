@@ -251,6 +251,9 @@ class Because(BaseModel):
     """Why a title is like another: what the two share."""
 
     genres: list[str] = Field(default_factory=list)
+    #: The same genres in Hebrew where the catalog has them, English where it
+    #: does not - in the same order, for a client showing Hebrew.
+    genres_he: list[str] = Field(default_factory=list)
     people: list[PersonRef] = Field(default_factory=list)
 
 
@@ -260,6 +263,22 @@ class SimilarCard(TitleCard):
     #: Out of roughly a hundred, and comparable only within one answer.
     similarity: int
     because: Because = Field(default_factory=Because)
+
+
+class RatedTitleOut(BaseModel):
+    title_id: int
+    name: str
+    name_he: str | None = None
+    year: int | None = None
+    rating: int
+
+
+class Recommendation(TitleCard):
+    """A title for this member, and the favourite of theirs it came from."""
+
+    because: Because = Field(default_factory=Because)
+    #: The title they rated highly that this is like.
+    seed: RatedTitleOut
 
 
 class Leaning(BaseModel):
@@ -275,14 +294,6 @@ class Leaning(BaseModel):
     #: The average pulled toward the member's own, which is what the lists
     #: are ranked by: one title rated 10 does not make a favourite.
     weighted: float
-
-
-class RatedTitleOut(BaseModel):
-    title_id: int
-    name: str
-    name_he: str | None = None
-    year: int | None = None
-    rating: int
 
 
 class TasteOut(BaseModel):

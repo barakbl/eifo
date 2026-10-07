@@ -351,6 +351,7 @@ def similar(
     within: Select[tuple[int]] | None = None,
     limit: int = 20,
     offset: int = 0,
+    count: bool = True,
 ) -> tuple[list[Similar], int]:
     """Titles most like the seed, best first, and how many there are.
 
@@ -406,7 +407,11 @@ def similar(
     if within is not None:
         statement = statement.where(Title.id.in_(within))
 
-    total = session.scalar(select(func.count()).select_from(statement.subquery())) or 0
+    # The count is a second pass over every candidate; a caller merging
+    # several seeds' best few has no use for it.
+    total = (
+        session.scalar(select(func.count()).select_from(statement.subquery())) or 0 if count else -1
+    )
     rows = session.execute(
         statement.order_by(score.desc(), func.coalesce(AggregateScore.score, 0).desc(), Title.id)
         .limit(limit)
@@ -485,3 +490,105 @@ def _people_of(session: Session, ids: list[int]) -> dict[int, set[int]]:
     ):
         found[title_id].add(person_id)
     return found
+
+
+# -- recommendations --------------------------------------------------------
+
+#: Favourites a recommendation starts from: the best rated, newest first.
+SEEDS = 8
+#: Candidates read per favourite. Enough that the merge has a choice; past
+#: this a seed's suggestions are the genre rather than the film.
+PER_SEED = 40
+#: The most picks one favourite may account for. Without it a member who
+#: loved one film of a franchise gets the franchise.
+PER_SEED_PICKS = 3
+#: What a second, third... favourite agreeing on a candidate adds, as a share
+#: of its own match. Agreement is a signal; it is not a vote to be counted.
+AGREEMENT = 0.3
+
+
+@dataclass(frozen=True, slots=True)
+class Pick:
+    """One recommendation, and the favourite it came from."""
+
+    title_id: int
+    score: float
+    seed_id: int
+    seed_rating: int
+    shared_genres: tuple[int, ...]
+    shared_people: tuple[int, ...]
+
+
+def for_you(
+    session: Session,
+    user_id: int,
+    *,
+    within: Select[tuple[int]] | None = None,
+    limit: int = 12,
+) -> list[Pick]:
+    """Titles a member is likely to enjoy, from what they rated highly.
+
+    Each favourite (rated :data:`LIKED` or above) proposes the titles most
+    like it; a candidate keeps its best proposal, weighted by how much the
+    member liked the favourite, plus a little for every other favourite that
+    proposed it too. ``within`` is where to look - the member's services,
+    available now, nothing they already have - and is the caller's to decide.
+    """
+    seeds = session.execute(
+        select(Title, UserItem.rating)
+        .join(UserItem, UserItem.title_id == Title.id)
+        .where(UserItem.user_id == user_id, UserItem.rating >= LIKED)
+        .order_by(UserItem.rating.desc(), UserItem.updated_at.desc(), Title.id)
+        .limit(SEEDS)
+    ).all()
+
+    # Never what they rated: their favourites would otherwise recommend each
+    # other, whatever the caller narrowed to.
+    unrated = select(Title.id).where(
+        Title.id.not_in(
+            select(UserItem.title_id).where(
+                UserItem.user_id == user_id, UserItem.rating.is_not(None)
+            )
+        )
+    )
+    if within is not None:
+        unrated = unrated.where(Title.id.in_(within))
+
+    best: dict[int, Pick] = {}
+    agreeing: dict[int, float] = defaultdict(float)
+    for seed_title, rating in seeds:
+        found, _ = similar(
+            session, seed_of(session, seed_title), within=unrated, limit=PER_SEED, count=False
+        )
+        weight = rating / 10
+        for candidate in found:
+            score = candidate.similarity * weight
+            agreeing[candidate.title_id] += score
+            held = best.get(candidate.title_id)
+            if held is None or score > held.score:
+                best[candidate.title_id] = Pick(
+                    title_id=candidate.title_id,
+                    score=score,
+                    seed_id=seed_title.id,
+                    seed_rating=int(rating),
+                    shared_genres=candidate.shared_genres,
+                    shared_people=candidate.shared_people,
+                )
+
+    ranked = sorted(
+        best.values(),
+        key=lambda pick: (
+            -(pick.score + AGREEMENT * (agreeing[pick.title_id] - pick.score)),
+            pick.title_id,
+        ),
+    )
+    picks: list[Pick] = []
+    per_seed: dict[int, int] = defaultdict(int)
+    for pick in ranked:
+        if per_seed[pick.seed_id] >= PER_SEED_PICKS:
+            continue
+        per_seed[pick.seed_id] += 1
+        picks.append(pick)
+        if len(picks) >= limit:
+            break
+    return picks

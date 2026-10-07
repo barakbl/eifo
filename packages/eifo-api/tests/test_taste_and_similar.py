@@ -98,6 +98,8 @@ class TestSimilar:
         assert first["because"]["people"][0]["name_en"] == "An Auteur"
         assert first["because"]["genres"] == ["Drama"]
         assert page["items"][1]["because"]["genres"] == ["Crime", "Drama"]
+        # Hebrew where the catalog has it, English where it does not.
+        assert page["items"][1]["because"]["genres_he"] == ["Crime", "דרמה"]
         assert first["similarity"] > page["items"][1]["similarity"]
         assert films.seed not in ids(page)
 
@@ -237,4 +239,80 @@ class TestTaste:
         reader.headers["Authorization"] = f"Bearer {token}"
 
         assert reader.get("/api/v1/me/taste").status_code == 200
+        assert reader.get("/api/v1/me/for-you").status_code == 200
         assert reader.get(f"/api/v1/titles/{films.seed}/similar").status_code == 200
+
+
+class TestForYou:
+    def rate(self, client: TestClient, csrf: str, title_id: int, **body: object) -> None:
+        response = client.put(
+            f"/api/v1/me/items/{title_id}", json=body, headers={CSRF_HEADER: csrf}
+        )
+        assert response.status_code == 200, response.text
+
+    def test_needs_somebody(self, client: TestClient) -> None:
+        assert client.get("/api/v1/me/for-you").status_code == 401
+
+    def test_nothing_until_something_is_loved(
+        self, client: TestClient, csrf: str, films: Films
+    ) -> None:
+        self.rate(client, csrf, films.seed, rating=7)
+
+        assert client.get("/api/v1/me/for-you").json() == []
+
+    def test_picks_with_the_favourite_and_the_reason(
+        self, client: TestClient, csrf: str, films: Films
+    ) -> None:
+        self.rate(client, csrf, films.seed, rating=10)
+
+        picks = client.get("/api/v1/me/for-you").json()
+
+        assert picks[0]["id"] == films.same_director
+        assert picks[0]["seed"] == {
+            "title_id": films.seed,
+            "name": "Seed",
+            "name_he": None,
+            "year": 2000,
+            "rating": 10,
+        }
+        assert picks[0]["because"]["people"][0]["name_en"] == "An Auteur"
+        assert films.seed not in {pick["id"] for pick in picks}
+
+    def test_on_the_services_asked_about(self, client: TestClient, csrf: str, films: Films) -> None:
+        self.rate(client, csrf, films.seed, rating=10)
+
+        picks = client.get("/api/v1/me/for-you", params={"sources": "yes"}).json()
+
+        assert {pick["id"] for pick in picks} == {films.elsewhere, films.israeli}
+
+    def test_never_what_is_on_a_list(self, client: TestClient, csrf: str, films: Films) -> None:
+        self.rate(client, csrf, films.seed, rating=10)
+        self.rate(client, csrf, films.same_director, want_to_watch=True)
+
+        picks = client.get("/api/v1/me/for-you").json()
+
+        assert films.same_director not in {pick["id"] for pick in picks}
+
+    def test_a_new_rating_is_seen_at_once(
+        self, client: TestClient, csrf: str, films: Films
+    ) -> None:
+        """The answer is remembered, but never past a change to the lists."""
+        self.rate(client, csrf, films.seed, rating=10)
+        before = {pick["id"] for pick in client.get("/api/v1/me/for-you").json()}
+        assert films.same_genre in before
+
+        self.rate(client, csrf, films.same_genre, watched=True)
+        after = {pick["id"] for pick in client.get("/api/v1/me/for-you").json()}
+
+        assert films.same_genre not in after
+
+    def test_the_limit(self, client: TestClient, csrf: str, films: Films) -> None:
+        self.rate(client, csrf, films.seed, rating=10)
+
+        assert len(client.get("/api/v1/me/for-you", params={"limit": 1}).json()) == 1
+        assert client.get("/api/v1/me/for-you", params={"limit": 31}).status_code == 422
+
+    def test_never_cached_for_anybody_else(
+        self, client: TestClient, csrf: str, films: Films
+    ) -> None:
+        assert client.get("/api/v1/me/for-you").headers["Cache-Control"] == "no-store"

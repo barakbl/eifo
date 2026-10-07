@@ -29,6 +29,7 @@ EXPECTED_TOOLS = {
     "list_genres",
     "taste_profile",
     "similar_to",
+    "recommendations",
 }
 
 
@@ -357,3 +358,20 @@ class TestTasteAndSimilar:
         self, server: MCPServer, catalog: Catalog
     ) -> None:
         assert call(server, "search_titles", {"countries": ["KR"]})["total"] == 0
+
+    def test_recommendations_from_a_favourite(self, server: MCPServer, catalog: Catalog) -> None:
+        picks = call(server, "recommendations")["picks"]
+
+        assert {pick["id"] for pick in picks} == {catalog.broker, catalog.nobody_knows}
+        first = picks[0]
+        assert first["because_you_rated"] == {
+            "id": catalog.shoplifters,
+            "name": "Shoplifters",
+            "my_rating": 9,
+        }
+        assert first["shares"]["people"][0]["name"] == "Hirokazu Kore-eda"
+
+    def test_recommendations_on_my_services(self, server: MCPServer, catalog: Catalog) -> None:
+        picks = call(server, "recommendations", {"services": ["mine"]})["picks"]
+
+        assert [pick["id"] for pick in picks] == [catalog.broker]

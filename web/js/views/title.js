@@ -16,6 +16,7 @@ import {
   sourceColorVar,
 } from "../format.js";
 import { displayName, secondaryName } from "../i18n.js";
+import { fillMoreLikeThis } from "../picks.js";
 import { el, ratingChip, replace, scorePill, stateBlock } from "../ui.js";
 
 export function createTitleView({ mount, app, router, items }) {
@@ -53,8 +54,13 @@ export function createTitleView({ mount, app, router, items }) {
         .catch(() => {});
     }
 
-    replace(mount, buildDetail(title, { t, language, user, items, sources }));
+    const detail = buildDetail(title, { t, language, user, items, sources });
+    // Last on the page and filled after it: the title is what was asked for.
+    const moreLikeThis = el("section", { class: "shelf", hidden: true });
+    detail.append(moreLikeThis);
+    replace(mount, detail);
     document.title = `${displayName(title, language)} · ${t("app.name")}`;
+    fillMoreLikeThis(moreLikeThis, { titleId: title.id, signedIn: Boolean(user), language, t });
     return null;
   };
 }

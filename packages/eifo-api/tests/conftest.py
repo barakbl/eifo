@@ -25,7 +25,7 @@ from seed import Seeded, seed_catalog
 from sqlalchemy.orm import Session, sessionmaker
 
 from eifo_api.app import create_app
-from eifo_api.routers.catalog import forget_totals
+from eifo_api.routers.catalog import forget_recommendations, forget_totals
 from eifo_core.enums import AuthProvider, FetchPhase, FetchStatus, SourceKind
 from eifo_core.migrate import upgrade
 from eifo_core.models import FetchRun, Source
@@ -40,8 +40,10 @@ def _forget_totals() -> Iterator[None]:
     handed to the next as though it were about theirs.
     """
     forget_totals()
+    forget_recommendations()
     yield
     forget_totals()
+    forget_recommendations()
 
 
 @pytest.fixture

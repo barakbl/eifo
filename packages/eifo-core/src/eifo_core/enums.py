@@ -164,3 +164,23 @@ class EnrichOutcome(StrEnum):
     NO_DATA = "no_data"
     NO_MATCH = "no_match"
     ERROR = "error"
+
+
+class TokenScope(StrEnum):
+    """What an API token may do on its owner's behalf.
+
+    A token used to carry everything its owner could do, which is right for
+    the fetcher - it is an administrator's, and it writes the catalog - and
+    wrong for a token pasted into an AI assistant's configuration, where an
+    administrator's token would hand the assistant the Manage tab. The narrow
+    scopes are an allow-list, enforced where a token is resolved
+    (``eifo_api.scopes``), and a scoped token is never an administrator.
+    """
+
+    #: Everything the owner can do. What every token was before scopes, and
+    #: still the only kind that can feed the catalog.
+    FULL = "full"
+    #: The catalog, and the owner's own lists - looking only.
+    READ = "read"
+    #: As ``read``, and may change the owner's own lists and ratings.
+    LISTS = "lists"

@@ -51,6 +51,7 @@ def read_me(principal: PrincipalDep) -> MeResponse:
         user=to_user(principal.user),
         csrf_token=principal.csrf_token,
         is_admin=principal.is_admin,
+        token_scope=principal.scope,
     )
 
 
@@ -112,6 +113,7 @@ def list_my_tokens(principal: PrincipalDep, session: SessionDep) -> list[ApiToke
         ApiTokenOut(
             name=row.name,
             hint=row.token_hash[:HINT_LENGTH],
+            scope=row.scope,
             created_at=row.created_at,
             last_used_at=row.last_used_at,
         )
@@ -154,6 +156,7 @@ def create_my_token(
         token_hash=hash_token(token),
         user_id=principal.user.id,
         name=body.name.strip(),
+        scope=body.scope,
     )
     session.add(row)
     session.commit()
@@ -161,6 +164,7 @@ def create_my_token(
     return ApiTokenCreated(
         name=row.name,
         hint=row.token_hash[:HINT_LENGTH],
+        scope=row.scope,
         created_at=row.created_at,
         last_used_at=None,
         token=token,

@@ -324,8 +324,9 @@ export function listMyTokens() {
   return request("/me/tokens");
 }
 
-export function createMyToken(name) {
-  return request("/me/tokens", { method: "POST", body: { name } });
+/** `scope` is "read", "lists" or "full" (what every token used to be). */
+export function createMyToken(name, scope = "full") {
+  return request("/me/tokens", { method: "POST", body: { name, scope } });
 }
 
 export function revokeMyToken(hint) {

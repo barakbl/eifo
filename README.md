@@ -879,6 +879,59 @@ the first administrator is: whether the catalog is public is the deployment's de
 One consequence worth knowing: the list is keyed on the email address, and X does not always
 supply one. On an instance with a list, only Google sign-in can be matched against it.
 
+### Ask an AI assistant what to watch
+
+`eifo-mcp` connects Claude, Cursor or any [MCP](https://modelcontextprotocol.io) client to
+your instance, so you can ask it things like *"three films for tonight, under two hours, on
+my services, that I haven't seen"*, *"what else did the director of my favourite film make,
+and where can I watch it"*, or *"which subscription would clear most of my watchlist"*.
+
+It runs on your machine next to the assistant and talks to the instance over its API with a
+token, like any other client. Make a **read-only** token in Settings, then add it to your
+assistant. For Claude Code:
+
+```bash
+claude mcp add eifo -e EIFO_URL=eifo.example.com -e EIFO_TOKEN=eifo_pat_… \
+  -- uvx --from "git+https://github.com/barakbl/eifo#subdirectory=packages/eifo-mcp" eifo-mcp
+```
+
+For Claude Desktop and most other clients, the same in their MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "eifo": {
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/barakbl/eifo#subdirectory=packages/eifo-mcp", "eifo-mcp"],
+      "env": { "EIFO_URL": "eifo.example.com", "EIFO_TOKEN": "eifo_pat_…" }
+    }
+  }
+}
+```
+
+From a checkout, `uv run --directory /path/to/eifo eifo-mcp` does the same.
+
+| Tool | Answers |
+|---|---|
+| `search_titles` | the catalog's filters - services (`mine` for yours), genre, years, score, length - with `skip="listed"` to leave out what you watched or saved |
+| `get_title` | one title: where to watch and for how much, ratings, director, cast |
+| `find` | a title or a person by name, for their id |
+| `get_person` | what a director or actor made, and where it is |
+| `my_lists` | your watched list, watchlist and ratings - where your taste is |
+| `watchlist_by_service` | which service carries most of your watchlist |
+| `whats_new` | recent arrivals on your services |
+| `list_services`, `list_genres` | the names the other tools understand |
+
+It also offers three ready-made prompts: *what should I watch tonight*, *which subscription
+clears my watchlist*, and *catch me up*.
+
+**What it can and cannot do.** Every tool only reads, and says so to the client. It sees
+the catalog and the token owner's own lists - never another member's. It refuses to send
+the token over plain `http` anywhere but `localhost`, and warns in its log when it is given
+a full token. Titles, overviews and names come from catalogs and TMDB, not from you, and the
+assistant is told to treat them as data and never as instructions. Revoke the token in
+Settings and the assistant loses access on its next call.
+
 ### Using the API from a script
 
 Sign in, open **Settings**, and create a token. It is shown once:
@@ -888,8 +941,19 @@ curl -H "Authorization: Bearer eifo_pat_…" http://localhost:3436/api/v1/titles
 ```
 
 A token is a row, not a signed blob, so revoking one takes effect on the next request, and
-only its hash is stored - a copy of the database cannot be replayed as a login. It carries
-exactly the permissions of the account that made it, needs no CSRF header (nothing can make
+only its hash is stored - a copy of the database cannot be replayed as a login.
+
+Each token has a **scope**, picked when it is made:
+
+| Scope | May | For |
+|---|---|---|
+| `read` | read the catalog and your own lists | an AI assistant - the default in Settings |
+| `lists` | the above, and change your own lists and ratings | an assistant you let keep your watchlist |
+| `full` | everything your account can do | scripts, and the fetcher |
+
+The narrow scopes are an allow-list checked before any route runs, so a route added later is
+closed to them until somebody opens it, and a narrow token is never an administrator's - even
+one made by an administrator. A full token needs no CSRF header (nothing can make
 a browser attach somebody else's `Authorization`), and cannot mint another token: one leaked
 token should not become permanent access that revoking the original does not touch.
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.28.0](https://github.com/barakbl/eifo/compare/v0.27.0...v0.28.0) (2026-10-07)
+
+
+### Features
+
+* "For you" picks and "More like this", with no AI and nothing leaving the server ([#149](https://github.com/barakbl/eifo/issues/149)) ([c3b78f6](https://github.com/barakbl/eifo/commit/c3b78f67191752d66acd5b5e1c7ab4526428c54c))
+
 ## [0.27.0](https://github.com/barakbl/eifo/compare/v0.26.0...v0.27.0) (2026-10-07)
 
 

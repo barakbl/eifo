@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/barakbl/eifo/compare/v0.25.1...v0.26.0) (2026-10-07)
+
+
+### Features
+
+* eifo-mcp - ask an AI assistant what to watch, with read-only tokens ([#145](https://github.com/barakbl/eifo/issues/145)) ([b280d1d](https://github.com/barakbl/eifo/commit/b280d1d6cefcfcc4ef38502aa171daaab3dfbade))
+
 ## [0.25.1](https://github.com/barakbl/eifo/compare/v0.25.0...v0.25.1) (2026-10-07)
 
 

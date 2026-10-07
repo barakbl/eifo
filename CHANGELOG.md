@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.0](https://github.com/barakbl/eifo/compare/v0.26.0...v0.27.0) (2026-10-07)
+
+
+### Features
+
+* taste profile and "more like this" for assistants and the API ([#147](https://github.com/barakbl/eifo/issues/147)) ([de00030](https://github.com/barakbl/eifo/commit/de000305bc23d2fb5f5aa4fd3ab908a3c012137b))
+
 ## [0.26.0](https://github.com/barakbl/eifo/compare/v0.25.1...v0.26.0) (2026-10-07)
 
 

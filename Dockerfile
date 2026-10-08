@@ -12,8 +12,7 @@ COPY pyproject.toml uv.lock ./
 COPY packages/eifo-core/pyproject.toml packages/eifo-core/
 COPY packages/eifo-api/pyproject.toml packages/eifo-api/
 COPY packages/eifo-fetcher/pyproject.toml packages/eifo-fetcher/
-# Not installed (it is a dev dependency, and this builds --no-dev), but a
-# workspace member, and --locked checks the whole workspace against the lock.
+# The remote MCP connector serves eifo-mcp's tools, so the API depends on it.
 COPY packages/eifo-mcp/pyproject.toml packages/eifo-mcp/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-workspace --no-dev --no-editable

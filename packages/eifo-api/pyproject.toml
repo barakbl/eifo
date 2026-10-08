@@ -17,6 +17,10 @@ dependencies = [
     "joserfc>=1.0",
     "itsdangerous>=2.2",
     "httpx>=0.28",
+    # The remote MCP connector: the protocol, the OAuth server behind "Sign in
+    # with Eifo", and the same tools the local eifo-mcp serves.
+    "mcp>=2.3,<3",
+    "eifo-mcp",
 ]
 
 [project.scripts]
@@ -31,3 +35,4 @@ packages = ["src/eifo_api"]
 
 [tool.uv.sources]
 eifo-core = { workspace = true }
+eifo-mcp = { workspace = true }

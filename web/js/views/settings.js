@@ -4,6 +4,8 @@ import {
   ApiError,
   createMyToken,
   deleteMe,
+  disconnectApp,
+  listConnections,
   listMyTokens,
   patchMe,
   revokeMyToken,
@@ -13,7 +15,7 @@ import { el, replace, stateBlock } from "../ui.js";
 
 export function createSettingsView({ mount, app, router, onSignedOut }) {
   return async function render() {
-    const { t, sources, user } = app.get();
+    const { t, language, sources, user } = app.get();
 
     if (!user) {
       replace(
@@ -56,6 +58,7 @@ export function createSettingsView({ mount, app, router, onSignedOut }) {
         servicesSection({ user, sources, t, save }),
         profileSection({ user: () => app.get().user, t, save }),
         el("div", { class: "settings__status" }, [saved, problem]),
+        connectionsSection({ t, language }),
         tokensSection({ t }),
         dangerSection({ t, onSignedOut }),
       ]),
@@ -182,6 +185,76 @@ function dangerSection({ t, onSignedOut }) {
   ]);
 }
 
+
+/* Apps you connected with "Sign in with Eifo" - Claude on the web or a phone.
+ *
+ * Each is a connection rather than a token: the app refreshes an hour-long
+ * token on its own, so what a person can see and undo is the app itself.
+ * Disconnecting takes every token it holds with it, at once. The address to
+ * add Eifo to an assistant is here too, because this is where somebody looks
+ * for it. */
+function connectionsSection({ t, language }) {
+  const list = el("div", { class: "tokens__list" });
+  const problem = el("p", { class: "actions__problem", role: "alert" });
+  const address = `${window.location.origin}/mcp`;
+
+  async function refresh() {
+    problem.textContent = "";
+    let rows = [];
+    try {
+      rows = await listConnections();
+    } catch (error) {
+      problem.textContent = error?.detail || t("item.saveFailed");
+    }
+    replace(
+      list,
+      rows.length
+        ? rows.map((row) =>
+            el("div", { class: "tokens__row" }, [
+              el("span", { class: "tokens__name connections__name", text: row.client_name || t("connect.unnamed") }),
+              el("span", { class: "tokens__hint", text: row.redirect_host }),
+              el("span", {
+                class: "tokens__used",
+                text: t("connections.since", { when: formatDate(row.connected_at, language) }),
+              }),
+              el("button", {
+                class: "button button--quiet",
+                type: "button",
+                text: t("connections.disconnect"),
+                onClick: async () => {
+                  problem.textContent = "";
+                  try {
+                    await disconnectApp(row.client_id);
+                    await refresh();
+                  } catch (error) {
+                    problem.textContent = error?.detail || t("item.saveFailed");
+                  }
+                },
+              }),
+            ]),
+          )
+        : el("p", { class: "state__body", text: t("connections.none") }),
+    );
+  }
+
+  refresh();
+  return el("section", { class: "settings__section" }, [
+    el("h2", { class: "section__heading", text: t("connections.title") }),
+    el("p", { class: "state__body", text: t("connections.explain") }),
+    el("div", { class: "connections__address" }, [
+      el("span", { class: "muted", text: t("connections.address") }),
+      el("input", {
+        class: "input tokens__value",
+        readonly: true,
+        value: address,
+        "aria-label": t("connections.address"),
+        onFocus: (event) => event.target.select(),
+      }),
+    ]),
+    problem,
+    list,
+  ]);
+}
 
 /* Your API tokens.
  *

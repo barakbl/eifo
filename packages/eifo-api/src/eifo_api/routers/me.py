@@ -111,7 +111,9 @@ def list_my_tokens(principal: PrincipalDep, session: SessionDep) -> list[ApiToke
     """
     rows = session.scalars(
         select(ApiToken)
-        .where(ApiToken.user_id == principal.user.id)
+        # Only the ones made here. An app's hourly tokens belong to its
+        # connection, listed and revoked under "Connected apps".
+        .where(ApiToken.user_id == principal.user.id, ApiToken.client_id.is_(None))
         .order_by(ApiToken.created_at.desc())
     ).all()
     return [
@@ -150,7 +152,8 @@ def create_my_token(
             status_code=403,
             detail="Sign in to issue a token. A token cannot issue another one.",
         )
-    if len(principal.user.api_tokens) >= MAX_TOKENS:
+    made_here = [token for token in principal.user.api_tokens if token.client_id is None]
+    if len(made_here) >= MAX_TOKENS:
         raise HTTPException(
             status_code=409,
             detail=f"You already have {MAX_TOKENS} tokens. Revoke one first.",

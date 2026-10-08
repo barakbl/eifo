@@ -5,7 +5,7 @@
  * faster than the network answers.
  */
 
-import { deleteMyItem, listMyItems, loginUrl, putMyItem } from "./api.js";
+import { deleteMyItem, listMyItems, loginUrl, putMyItem, returnAfterSignIn } from "./api.js";
 import {
   NOTE_MAX_LENGTH,
   RATING_MAX,
@@ -57,7 +57,7 @@ export function accountMenu({ user, providers, t, onSignOut }) {
         providers.map((provider) =>
           el("a", {
             class: "account__item",
-            href: loginUrl(provider),
+            href: loginUrl(provider, returnAfterSignIn()),
             text: t("auth.signInWith", { provider: t(`auth.provider.${provider}`) }),
           }),
         ),

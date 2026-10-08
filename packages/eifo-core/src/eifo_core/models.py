@@ -759,11 +759,95 @@ class ApiToken(Base):
     #: read on every request, and a write per read would be a poor trade for a
     #: timestamp nobody reads to the second.
     last_used_at: Mapped[dt.datetime | None]
+    #: The app this token was issued to through "Sign in with Eifo", or null
+    #: for one a member made in Settings. An issued token is short-lived and
+    #: belongs to the connection: revoking the app takes its tokens with it.
+    client_id: Mapped[str | None] = mapped_column(
+        ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), index=True
+    )
+    #: When it stops working. Null for a token made in Settings, which lasts
+    #: until it is revoked; an hour for one issued to an app.
+    expires_at: Mapped[dt.datetime | None]
 
     user: Mapped[User] = relationship(back_populates="api_tokens")
 
     def __repr__(self) -> str:
         return f"<ApiToken {self.name!r} user={self.user_id}>"
+
+
+class OAuthClient(Base):
+    """An app that registered to ask members for access ("Sign in with Eifo").
+
+    Registering grants nothing: it lets the app send a member to the consent
+    page, and only a member's approval produces a token. Any MCP client may
+    register (dynamic client registration, RFC 7591); one nobody ever approves
+    is pruned.
+    """
+
+    __tablename__ = "oauth_clients"
+
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    #: The registration as the app sent it and the server completed it - the
+    #: shape the OAuth library reads back. Its redirect addresses are checked
+    #: at registration: https, or plain http to this machine only.
+    info: Mapped[dict[str, Any]]
+    #: What the app calls itself. Its own claim, which is why the consent page
+    #: shows where it sends you back as well.
+    client_name: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+    #: Last time a member approved it or it refreshed a token. Null for an app
+    #: no member ever approved - the ones pruned.
+    last_used_at: Mapped[dt.datetime | None]
+
+    def __repr__(self) -> str:
+        return f"<OAuthClient {self.client_id} {self.client_name!r}>"
+
+
+class OAuthCode(Base):
+    """A one-time code, handed to an app when a member approves it.
+
+    Lives minutes, is spent on first use, and is only good together with the
+    PKCE verifier the app kept to itself. Stored as a hash.
+    """
+
+    __tablename__ = "oauth_codes"
+
+    code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    client_id: Mapped[str] = mapped_column(
+        ForeignKey("oauth_clients.client_id", ondelete="CASCADE")
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    redirect_uri: Mapped[str] = mapped_column(String(2000))
+    redirect_uri_provided_explicitly: Mapped[bool]
+    code_challenge: Mapped[str] = mapped_column(String(200))
+    scopes: Mapped[list[Any]] = mapped_column(default=list)
+    resource: Mapped[str | None] = mapped_column(String(2000))
+    expires_at: Mapped[dt.datetime]
+
+
+class OAuthRefreshToken(Base):
+    """What an app trades for a fresh access token, for thirty days.
+
+    Rotated on every use: the old one is marked used and a new one issued. A
+    used one presented again means two parties hold it - one of them a thief -
+    and the whole connection is revoked. Stored as a hash.
+    """
+
+    __tablename__ = "oauth_refresh_tokens"
+    __table_args__ = (Index("ix_oauth_refresh_user_client", "user_id", "client_id"),)
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    client_id: Mapped[str] = mapped_column(
+        ForeignKey("oauth_clients.client_id", ondelete="CASCADE")
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    scopes: Mapped[list[Any]] = mapped_column(default=list)
+    resource: Mapped[str | None] = mapped_column(String(2000))
+    created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)
+    expires_at: Mapped[dt.datetime]
+    #: When it was traded in. A used token is kept until it expires so a
+    #: second use can be recognised as theft rather than as a stranger.
+    used_at: Mapped[dt.datetime | None]
 
 
 class UserSession(Base):

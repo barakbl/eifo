@@ -10,8 +10,12 @@ from helpers import SignIn
 from eifo_api.ratelimit import (
     ADDRESS,
     ANONYMOUS,
+    ASSISTANT,
+    IN_PROCESS,
     MEMBER,
+    REGISTER,
     SIGN_IN,
+    TOKEN,
     WRITES,
     Buckets,
     Draw,
@@ -110,6 +114,48 @@ class TestWhoIsWho:
     def test_the_fetcher_is_exempt_but_a_stranger_is_not(self) -> None:
         assert draws_for("POST", "/api/v1/ingest/runs", credential="abc", address="a") == []
         assert draws_for("POST", "/api/v1/ingest/runs", credential=None, address="a") != []
+
+
+class TestTheConnector:
+    def test_each_token_has_its_own_tool_call_bucket(self) -> None:
+        draws = draws_for("POST", "/mcp", credential="abc", address="a")
+
+        assert draws == [Draw("address:a", ADDRESS), Draw("mcp:cred:abc", ASSISTANT)]
+
+    def test_registering_is_slow(self) -> None:
+        assert draws_for("POST", "/register", credential=None, address="a") == [
+            Draw("oauth/register:a", REGISTER)
+        ]
+
+    def test_the_token_endpoint_is_roomy_per_address(self) -> None:
+        """Claude's servers refresh for every member from a few addresses."""
+        assert draws_for("POST", "/token", credential=None, address="a") == [
+            Draw("oauth/token:a", TOKEN)
+        ]
+
+    def test_authorizing_is_a_sign_in(self) -> None:
+        assert draws_for("GET", "/authorize", credential=None, address="a") == [
+            Draw("oauth/authorize:a", SIGN_IN)
+        ]
+
+    def test_discovery_is_limited_too(self) -> None:
+        assert draws_for(
+            "GET", "/.well-known/oauth-authorization-server", credential=None, address="a"
+        )
+
+    def test_a_tools_own_calls_skip_the_shared_address_ceiling(self) -> None:
+        """Every member's tool calls arrive "in process"; one ceiling for all
+        of them would let one member's assistant starve everybody else's."""
+        draws = draws_for("GET", "/api/v1/titles", credential="abc", address=IN_PROCESS)
+
+        assert draws == [Draw("cred:abc", MEMBER)]
+
+    def test_a_registration_flood_is_refused(self, client: TestClient, clock: Clock) -> None:
+        body = {"client_name": "x", "redirect_uris": ["https://example.com/cb"]}
+        codes = [client.post("/register", json=body).status_code for _ in range(REGISTER.burst + 1)]
+
+        assert codes[:-1] == [201] * REGISTER.burst
+        assert codes[-1] == 429
 
 
 class TestCredentials:

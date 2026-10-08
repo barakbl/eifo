@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import logging
 import secrets
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -31,6 +32,7 @@ from eifo_api.security import (
     OAuthHandoff,
     clear_oauth_cookie,
     clear_session_cookie,
+    safe_next,
     seal_handoff,
     set_oauth_cookie,
     set_session_cookie,
@@ -83,6 +85,10 @@ def login(
     provider: AuthProvider,
     request: Request,
     settings: SettingsDep,
+    next: Annotated[
+        str | None,
+        Query(max_length=3100, description="App page to return to, e.g. #/connect?request=..."),
+    ] = None,
 ) -> RedirectResponse:
     """Redirect to the provider, remembering state and PKCE on the way out."""
     secret = signing_secret(settings)
@@ -98,6 +104,7 @@ def login(
         provider=provider.value,
         state=secrets.token_urlsafe(STATE_BYTES),
         code_verifier=secrets.token_urlsafe(VERIFIER_BYTES),
+        next=safe_next(next),
     )
 
     url = build_provider(provider, settings).authorization_url(
@@ -152,7 +159,7 @@ def callback(
     user = _upsert_user(session, identity)
     token = start_session(session, user)
 
-    response = RedirectResponse(_app_url(settings), status_code=302)
+    response = RedirectResponse(_app_url(settings, safe_next(handoff.next)), status_code=302)
     set_session_cookie(response, token, settings)
     clear_oauth_cookie(response, settings)
     return response

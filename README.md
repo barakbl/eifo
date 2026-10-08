@@ -916,6 +916,26 @@ For Claude Desktop and most other clients, the same in their MCP settings:
 
 From a checkout, `uv run --directory /path/to/eifo eifo-mcp` does the same.
 
+**On claude.ai and the Claude phone app** there is nothing to install. The instance serves the
+same tools itself at `/mcp`, behind *Sign in with Eifo*:
+
+1. In Claude, open **Settings → Connectors → Add custom connector** and give it your
+   instance's address with `/mcp` on the end, e.g. `https://eifo.example.com/mcp`. Settings in
+   Eifo shows the exact address under *Connected apps*.
+2. Claude sends you to Eifo to sign in, and to a page that says which app is asking, where it
+   will send you back, and what it can and cannot do. Press **Allow**.
+3. That is all. Disconnect it any time from Eifo's Settings, and it loses access at once.
+
+A connection can only read - the catalog, your own lists, ratings and notes, and your taste.
+It cannot change anything, see other members, or reach your account, tokens or the Manage tab.
+Under the hood it is OAuth 2.1 with PKCE and dynamic client registration: any MCP client may
+register, but registering grants nothing - only a member's approval produces a token, which
+lasts an hour and is renewed with a refresh token that lasts thirty days and is replaced on
+every use. A refresh token used twice ends the whole connection, because it means somebody
+else has a copy. Removing somebody from the members list ends their connections at the next
+renewal. It needs `EIFO_PUBLIC_ORIGIN` set to the instance's https address;
+`EIFO_REMOTE_MCP=false` turns it off.
+
 | Tool | Answers |
 |---|---|
 | `recommendations` | picks from your favourites, on your services, available now, unseen - each with the favourite it came from |
@@ -974,6 +994,8 @@ so a page loading a dozen things at once never notices it, and a loop does:
 | Somebody not signed in, per address | 5/s | 20 |
 | Writes - ratings, lists, settings - on top of the above | 2/s | 10 |
 | Starting or finishing a sign-in, per address | 10/min | 10 |
+| An assistant's tool calls on the remote connector, per token | 5/s | 15 |
+| Registering an app for *Sign in with Eifo*, per address | 10/hour | 5 |
 | Everything from one address, whoever it claims to be | 30/s | 90 |
 
 Over a limit, the answer is `429` with a `Retry-After`. Only the API counts: pages, scripts,

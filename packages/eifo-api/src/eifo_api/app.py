@@ -16,11 +16,13 @@ from eifo_api.errors import install_error_handlers
 from eifo_api.logging_privacy import install_log_filters
 from eifo_api.oauth import configured_providers, redirect_uri
 from eifo_api.ratelimit import Buckets, RateLimitMiddleware
+from eifo_api.remote_mcp import mount_remote_mcp
 from eifo_api.routers import (
     additions,
     admin,
     auth,
     catalog,
+    connect,
     enriching,
     ingest,
     me,
@@ -72,7 +74,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     )
         logger.info("eifo-api %s ready", __version__)
         _say_where_sign_in_goes(settings)
-        yield
+        # The connector's sessions live as long as the app does.
+        sessions = app.state.mcp_sessions
+        if sessions is not None:
+            async with sessions.run():
+                yield
+        else:
+            yield
     finally:
         engine.dispose()
         if app.state.tmdb is not None:
@@ -141,6 +149,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth.router, prefix=API_PREFIX)
     app.include_router(me.router, prefix=API_PREFIX)
     app.include_router(additions.router, prefix=API_PREFIX)
+    app.include_router(connect.router, prefix=API_PREFIX)
     app.include_router(admin.router, prefix=API_PREFIX)
     # Not gated: `require_membership` refuses an anonymous caller, and every
     # route here already demands an administrator. Adding it would only mean a
@@ -150,6 +159,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(syncing.router, prefix=API_PREFIX)
     app.include_router(enriching.router, prefix=API_PREFIX)
     app.include_router(reviews.router, prefix=API_PREFIX, dependencies=gated)
+
+    # Before the client: its catch-all would otherwise answer /mcp and the
+    # OAuth endpoints with the web app.
+    app.state.mcp_sessions = mount_remote_mcp(app, settings)
 
     mount_images(app, Path(settings.images_dir))
     # Registered last: its catch-all route must not shadow the API.

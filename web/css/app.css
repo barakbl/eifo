@@ -3514,3 +3514,67 @@ input {
   block-size: calc(2 * 1.35 * var(--text-xs));
   margin-block-start: var(--space-1);
 }
+
+/* "Sign in with Eifo": who is asking, where it sends you, what it may do. */
+.connect {
+  max-inline-size: 34rem;
+  margin: var(--space-6) auto;
+  padding: var(--space-5);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+
+.connect__title {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-xl, 1.25rem);
+}
+
+.connect__claim,
+.connect__body {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.connect__host {
+  margin: 0 0 var(--space-4);
+}
+
+.connect__hostname {
+  font-family: var(--font-data);
+  word-break: break-all;
+}
+
+.connect__list {
+  margin: var(--space-2) 0 var(--space-4);
+  padding-inline-start: var(--space-5);
+}
+
+.connect__list li + li {
+  margin-block-start: var(--space-1);
+}
+
+.connect__list--no {
+  color: var(--fg-muted);
+}
+
+.connect__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.connect__actions .button {
+  min-block-size: 2.75rem;
+}
+
+.connections__address {
+  display: grid;
+  gap: var(--space-1);
+  margin-block: var(--space-3);
+}
+
+.connections__name {
+  font-family: inherit;
+}

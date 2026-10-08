@@ -9,6 +9,7 @@ was not already there.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -67,22 +68,20 @@ class EifoClient:
     def __init__(
         self,
         base_url: str,
-        token: str,
+        token: str | Callable[[], str],
         *,
         http: httpx.Client | None = None,
         clock: Any = time.monotonic,
     ) -> None:
-        if not token or not token.strip():
+        """``token`` is the token, or - for the remote connector, where every
+        call carries the token of whoever made it - a function returning it."""
+        if not callable(token) and (not token or not token.strip()):
             raise ConfigError(
                 "EIFO_TOKEN is not set. Create a read-only token in Eifo's Settings and use that."
             )
         self.base_url = normalise_base_url(base_url)
         self._http = http or httpx.Client(timeout=TIMEOUT_SECONDS)
-        self._headers = {
-            "Authorization": f"Bearer {token.strip()}",
-            "Accept": "application/json",
-            "User-Agent": "eifo-mcp",
-        }
+        self._token = token
         self._clock = clock
         self._reference: dict[str, tuple[float, Any]] = {}
 
@@ -92,9 +91,15 @@ class EifoClient:
     def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """One API call; ``path`` is relative to ``/api/v1``."""
         query = {key: value for key, value in (params or {}).items() if value is not None}
+        token = self._token() if callable(self._token) else self._token
+        headers = {
+            "Authorization": f"Bearer {token.strip()}",
+            "Accept": "application/json",
+            "User-Agent": "eifo-mcp",
+        }
         try:
             response = self._http.get(
-                f"{self.base_url}{API_PREFIX}{path}", params=query, headers=self._headers
+                f"{self.base_url}{API_PREFIX}{path}", params=query, headers=headers
             )
         except httpx.HTTPError as cause:
             raise EifoError(

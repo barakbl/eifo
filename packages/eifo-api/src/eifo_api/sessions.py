@@ -101,9 +101,11 @@ def resolve_api_token(
 ) -> ApiToken | None:
     """The API token a bearer header refers to, if it is a live one.
 
-    Tokens do not expire. They are named, listed and revocable, which is the
-    control a long-lived credential actually needs - an expiry would mostly
-    arrange for scripts to break at an hour nobody chose.
+    A token made in Settings does not expire. It is named, listed and
+    revocable, which is the control a long-lived credential actually needs -
+    an expiry would mostly arrange for scripts to break at an hour nobody
+    chose. One issued to an app through "Sign in with Eifo" does: an hour,
+    after which the app refreshes it.
     """
     if not token:
         return None
@@ -113,6 +115,8 @@ def resolve_api_token(
         return None
 
     moment = now or utcnow()
+    if row.expires_at is not None and row.expires_at <= moment:
+        return None
     if row.last_used_at is None or moment - row.last_used_at >= TOKEN_TOUCH_AFTER:
         row.last_used_at = moment
         session.commit()

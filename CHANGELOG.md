@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.30.0](https://github.com/barakbl/eifo/compare/v0.29.0...v0.30.0) (2026-10-08)
+
+
+### Features
+
+* Eifo on claude.ai and phones - a remote MCP connector behind "Sign in with Eifo" ([#154](https://github.com/barakbl/eifo/issues/154)) ([69b7445](https://github.com/barakbl/eifo/commit/69b7445f97cf069710650ddfe2e6fac8e8bfd00c))
+
 ## [0.29.0](https://github.com/barakbl/eifo/compare/v0.28.0...v0.29.0) (2026-10-08)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.0](https://github.com/barakbl/eifo/compare/v0.28.0...v0.29.0) (2026-10-08)
+
+
+### Features
+
+* rate-limit the API, and see real client addresses behind a proxy ([#151](https://github.com/barakbl/eifo/issues/151)) ([16e215d](https://github.com/barakbl/eifo/commit/16e215db0650ac5bc6c3d7267ceb9812f2da6987))
+
 ## [0.28.0](https://github.com/barakbl/eifo/compare/v0.27.0...v0.28.0) (2026-10-07)
 
 

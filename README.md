@@ -965,6 +965,26 @@ one made by an administrator. A full token needs no CSRF header (nothing can mak
 a browser attach somebody else's `Authorization`), and cannot mint another token: one leaked
 token should not become permanent access that revoking the original does not touch.
 
+**Rate limits.** Every caller has a bucket that refills steadily and allows a short burst,
+so a page loading a dozen things at once never notices it, and a loop does:
+
+| Who | Steady | Burst |
+|---|---|---|
+| A signed-in member, or a token (wherever it calls from) | 10/s | 30 |
+| Somebody not signed in, per address | 5/s | 20 |
+| Writes - ratings, lists, settings - on top of the above | 2/s | 10 |
+| Starting or finishing a sign-in, per address | 10/min | 10 |
+| Everything from one address, whoever it claims to be | 30/s | 90 |
+
+Over a limit, the answer is `429` with a `Retry-After`. Only the API counts: pages, scripts,
+styles and posters never do. The fetcher's ingest calls are exempt, so a sync runs as fast as
+it can. `EIFO_RATE_LIMIT=false` turns it off.
+
+Behind a reverse proxy, every request arrives from the proxy, and the limiter would see the
+whole internet as one visitor. `EIFO_TRUSTED_PROXIES` names who may say otherwise in
+`X-Forwarded-For` - only the proxy, as addresses or networks. The Docker image trusts the
+private ranges, which is where a proxy container sits; on a bare install it is `127.0.0.1`.
+
 **When Settings cannot be reached**, the fetcher issues one from the machine that holds the
 database:
 

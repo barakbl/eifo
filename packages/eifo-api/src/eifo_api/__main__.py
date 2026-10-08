@@ -59,6 +59,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         # workers=None differently, and None is the single-process path this
         # has always taken.
         workers=args.workers if args.workers > 1 else None,
+        # Who the client really is, when a proxy says so - and only when the
+        # one saying so is a proxy we trust. The rate limiter keys on it.
+        proxy_headers=True,
+        forwarded_allow_ips=settings.trusted_proxies,
     )
 
 

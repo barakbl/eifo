@@ -15,6 +15,7 @@ from eifo_api.deps import require_membership
 from eifo_api.errors import install_error_handlers
 from eifo_api.logging_privacy import install_log_filters
 from eifo_api.oauth import configured_providers, redirect_uri
+from eifo_api.ratelimit import Buckets, RateLimitMiddleware
 from eifo_api.routers import (
     additions,
     admin,
@@ -126,6 +127,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_error_handlers(app)
     install_log_filters()
     app.add_middleware(CatalogCacheMiddleware)
+    # Added last, so it runs first: a request over its caller's limit is
+    # turned away before anything else spends time on it.
+    app.state.rate_buckets = Buckets()
+    app.add_middleware(RateLimitMiddleware)
     # The catalog surface, closed on a members-only instance. `auth` is not
     # here and must never be: a gate somebody cannot reach the sign-in through
     # is a locked building with the key inside.

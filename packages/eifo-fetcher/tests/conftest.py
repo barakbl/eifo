@@ -48,12 +48,18 @@ def never_a_real_api(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(Settings.model_config, "env_file", None)
     monkeypatch.delenv("EIFO_API_TOKEN", raising=False)
     monkeypatch.delenv("EIFO_API_BASE_URL", raising=False)
+    # Every Settings a test builds, not only this file's fixture: the API in
+    # process otherwise rate-limits a test's bursts, and the client answers a
+    # 429 by retrying with real waits - a suite that crawls rather than fails.
+    monkeypatch.setenv("EIFO_RATE_LIMIT", "false")
 
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return Settings(
         _env_file=None,
+        # Tests send bursts on purpose; the limiter has its own tests.
+        rate_limit=False,
         db_url=f"sqlite:///{tmp_path / 'fetcher.db'}",
         images_dir=tmp_path / "images",
         # Every phase writes through the API, so a fetcher without one of these

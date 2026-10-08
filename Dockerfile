@@ -35,6 +35,7 @@ COPY --chown=eifo:eifo web/ web/
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
+    EIFO_TRUSTED_PROXIES="127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16" \
     EIFO_DB_URL="sqlite:///data/eifo.db" \
     EIFO_IMAGES_DIR="data/images"
 

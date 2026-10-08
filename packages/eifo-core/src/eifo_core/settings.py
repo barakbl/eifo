@@ -312,6 +312,19 @@ class Settings(BaseSettings):
     #: but each worker is a whole copy of the application in memory, so on a
     #: small box two is a considered choice and eight is not.
     serve_workers: int = 1
+    #: Addresses allowed to say who the real client is, in ``X-Forwarded-For``.
+    #:
+    #: Comma separated, single addresses or networks. Behind a reverse proxy
+    #: (Caddy, nginx) every request arrives from the proxy, so without this the
+    #: whole internet is one client to the rate limiter - and with the proxy's
+    #: network trusted, the address the proxy saw is used instead. Only ever
+    #: name the proxy: anything trusted here can claim to be anyone. The Docker
+    #: image trusts the private ranges, which is where a proxy container lives.
+    trusted_proxies: str = "127.0.0.1"
+    #: Limit how fast one member, token or address may call the API
+    #: (``eifo_api.ratelimit``). On unless switched off; off only makes sense
+    #: in a test suite that sends bursts on purpose.
+    rate_limit: bool = True
     stale_after_hours: int = 48
     #: Bring the schema to head as the API starts, so an upgrade is a
     #: restart rather than a restart plus a remembered command. Turn it off

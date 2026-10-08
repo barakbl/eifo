@@ -30,6 +30,12 @@ BASE = "https://testserver"
 
 
 @pytest.fixture(autouse=True)
+def _no_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Off for every Settings a test builds; its own tests switch it on."""
+    monkeypatch.setenv("EIFO_RATE_LIMIT", "false")
+
+
+@pytest.fixture(autouse=True)
 def _forget_totals() -> Iterator[None]:
     forget_totals()
     forget_recommendations()
@@ -44,6 +50,8 @@ def app(tmp_path: Path) -> Iterator[FastAPI]:
     upgrade(db_url)
     settings = Settings(
         _env_file=None,
+        # Tests send bursts on purpose; the limiter has its own tests.
+        rate_limit=False,
         db_url=db_url,
         images_dir=tmp_path / "images",
         public_origin=BASE,

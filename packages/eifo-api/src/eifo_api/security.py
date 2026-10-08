@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import hmac
+import re
 import secrets
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -107,6 +108,21 @@ class OAuthHandoff:
     provider: str
     state: str
     code_verifier: str
+    #: The app page to come back to, when it was not the home page - the
+    #: consent page an app sent the member to, say. Checked on the way in
+    #: (:func:`safe_next`), so it is only ever a page of this app.
+    next: str = ""
+
+
+#: A page of this app: a hash route and a query of plain characters. Nothing
+#: else gets through - no scheme, no host, no path - so ``next`` can never
+#: send anybody anywhere but here.
+_NEXT = re.compile(r"#/[a-z-]{1,30}(\?[A-Za-z0-9._~=&%-]{0,3000})?")
+
+
+def safe_next(value: str | None) -> str:
+    """``value`` if it is a page of this app, else nothing."""
+    return value if value and _NEXT.fullmatch(value) else ""
 
 
 def seal_handoff(handoff: OAuthHandoff, secret: str) -> str:

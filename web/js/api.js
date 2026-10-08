@@ -172,8 +172,41 @@ export function getMeta(options) {
 
 /** Where the login button points. A full navigation, not a fetch: OAuth is a
  * redirect dance the browser has to perform itself. */
-export function loginUrl(provider) {
-  return `${BASE}/auth/login/${encodeURIComponent(provider)}`;
+/**
+ * Where a sign-in starts. `next` is a page of this app to come back to - only
+ * the consent page an app sent the member to is ever passed, and the server
+ * accepts nothing but a page of this app anyway.
+ */
+export function loginUrl(provider, next = "") {
+  const url = `${BASE}/auth/login/${encodeURIComponent(provider)}`;
+  return next ? `${url}?${new URLSearchParams({ next })}` : url;
+}
+
+/** The consent page, when that is where the member is - so sign-in returns there. */
+export function returnAfterSignIn(hash = window.location.hash) {
+  return hash.startsWith("#/connect?") ? hash : "";
+}
+
+/* -- "Sign in with Eifo": connecting apps --------------------------------- */
+
+export function readConnectRequest(sealed, options) {
+  return request(`/connect/request?${new URLSearchParams({ sealed })}`, options);
+}
+
+export function approveConnect(sealed) {
+  return request("/connect/approve", { method: "POST", body: { request: sealed } });
+}
+
+export function denyConnect(sealed) {
+  return request("/connect/deny", { method: "POST", body: { request: sealed } });
+}
+
+export function listConnections(options) {
+  return request("/me/connections", options);
+}
+
+export function disconnectApp(clientId) {
+  return request(`/me/connections/${encodeURIComponent(clientId)}`, { method: "DELETE" });
 }
 
 /**

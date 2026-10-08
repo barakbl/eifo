@@ -77,13 +77,18 @@ Services = Annotated[
 _F = TypeVar("_F", bound=Callable[..., Any])
 
 
-def build_server(client: EifoClient) -> MCPServer:
-    """The server, bound to one instance and one token."""
+def build_server(client: EifoClient, **options: Any) -> MCPServer:
+    """The server, bound to one instance and one token.
+
+    ``options`` go to :class:`MCPServer` - how the remote connector adds its
+    OAuth settings and provider to the same tools.
+    """
     server: MCPServer = MCPServer(
         "eifo",
         title="Eifo",
         description="What to watch in Israel, and what you thought of it",
         instructions=INSTRUCTIONS,
+        **options,
     )
 
     def tool(function: _F) -> _F:

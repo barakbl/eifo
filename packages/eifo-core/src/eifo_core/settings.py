@@ -325,6 +325,10 @@ class Settings(BaseSettings):
     #: (``eifo_api.ratelimit``). On unless switched off; off only makes sense
     #: in a test suite that sends bursts on purpose.
     rate_limit: bool = True
+    #: Serve the remote MCP connector at ``/mcp``, behind "Sign in with Eifo"
+    #: (``eifo_api.remote_mcp``). Needs ``public_origin`` to be the instance's
+    #: https address, which OAuth discovery hands to apps.
+    remote_mcp: bool = True
     stale_after_hours: int = 48
     #: Bring the schema to head as the API starts, so an upgrade is a
     #: restart rather than a restart plus a remembered command. Turn it off

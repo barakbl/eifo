@@ -1,6 +1,15 @@
 /* The app shell: header, language and theme, routing, footer attribution. */
 
-import { getAuthContext, getMe, getMeta, listSources, loginUrl, logout, setCsrfToken } from "./api.js";
+import {
+  getAuthContext,
+  getMe,
+  getMeta,
+  listSources,
+  loginUrl,
+  logout,
+  returnAfterSignIn,
+  setCsrfToken,
+} from "./api.js";
 import { accountMenu } from "./account.js";
 import { DEFAULT_LANGUAGE, directionOf, isSupported, translator } from "./i18n.js";
 import { createItemStore } from "./items.js";
@@ -10,6 +19,7 @@ import { createSuggest } from "./suggest.js";
 import { QUERY_EVENT } from "./views/home.js";
 import { el, wallCopy, replace, stateBlock } from "./ui.js";
 import { createHomeView } from "./views/home.js";
+import { createConnectView } from "./views/connect.js";
 import { createManageView } from "./views/manage.js";
 import { createMyListView } from "./views/mylist.js";
 import { createPersonView } from "./views/person.js";
@@ -267,7 +277,7 @@ function signInWall() {
         loginProviders.map((provider) =>
           el("a", {
             class: copy.refused ? "button button--quiet" : "button",
-            href: loginUrl(provider),
+            href: loginUrl(provider, returnAfterSignIn()),
             text: t(copy.action, { provider: t(`auth.provider.${provider}`) }),
           }),
         ),
@@ -328,6 +338,7 @@ async function start() {
       me: (route) => mylist(route),
       settings: (route) => settings(route),
       manage: (route) => manage(route),
+      connect: (route) => connect(route),
       notFound: () => {
         const { t } = app.get();
         replace(
@@ -351,6 +362,7 @@ async function start() {
   const title = createTitleView({ mount: main, app, router, items });
   const mylist = createMyListView({ mount: main, app, router, items });
   const settings = createSettingsView({ mount: main, app, router, onSignedOut: () => signOut(router) });
+  const connect = createConnectView({ mount: main, app });
   const person = createPersonView({ mount: main, app, router });
   const manage = createManageView({ mount: main, app, router });
   const whatsNew = createWhatsNewView({ mount: main, app, router, items });

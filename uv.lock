@@ -491,10 +491,12 @@ source = { editable = "packages/eifo-api" }
 dependencies = [
     { name = "authlib" },
     { name = "eifo-core" },
+    { name = "eifo-mcp" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "itsdangerous" },
     { name = "joserfc" },
+    { name = "mcp" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -502,10 +504,12 @@ dependencies = [
 requires-dist = [
     { name = "authlib", specifier = ">=1.4" },
     { name = "eifo-core", editable = "packages/eifo-core" },
+    { name = "eifo-mcp", editable = "packages/eifo-mcp" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "itsdangerous", specifier = ">=2.2" },
     { name = "joserfc", specifier = ">=1.0" },
+    { name = "mcp", specifier = ">=2.3,<3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]
 

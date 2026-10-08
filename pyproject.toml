@@ -36,9 +36,8 @@ dev = [
     "respx>=0.22",
     "pre-commit>=4.0",
     "httpx2>=2.9.1",
-    # The assistant-side package. A workspace member like the rest, but not a
-    # dependency of the server: the image is built --no-dev and has no use for
-    # an MCP library. Here so a checkout can run and test it.
+    # The assistant-side package. The server depends on it too now (the remote
+    # connector serves the same tools); listed here so a checkout always has it.
     "eifo-mcp",
 ]
 

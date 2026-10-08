@@ -77,6 +77,32 @@ WRITES = Rate(per_second=2, burst=10)
 #: Starting or finishing a sign-in, per address: ten a minute.
 SIGN_IN = Rate(per_second=10 / 60, burst=10)
 
+#: An assistant's tool calls on the remote connector, per token. Each call may
+#: make a few API calls of its own, which count against the member too.
+ASSISTANT = Rate(per_second=5, burst=15)
+#: Apps registering for "Sign in with Eifo", per address: ten an hour.
+REGISTER = Rate(per_second=10 / 3600, burst=5)
+#: Trading codes and refresh tokens, per address. Claude's servers refresh for
+#: every member from a handful of addresses, so this is per address and roomy.
+TOKEN = Rate(per_second=1, burst=20)
+#: Revoking, and reading the discovery documents, per address.
+OAUTH_MISC = Rate(per_second=1, burst=10)
+
+#: The remote connector's paths, which live outside /api because OAuth
+#: discovery puts them at the root.
+MCP_PATH = "/mcp"
+OAUTH_PATHS = {
+    "/authorize": SIGN_IN,
+    "/register": REGISTER,
+    "/token": TOKEN,
+    "/revoke": OAUTH_MISC,
+}
+WELL_KNOWN = "/.well-known/"
+
+#: The tools' own calls to the API, made in process (``eifo_api.remote_mcp``).
+#: Every one of them would otherwise share this one "address" and its ceiling.
+IN_PROCESS = "in-process"
+
 #: Buckets kept before the least recently used is forgotten. A forgotten
 #: bucket is a full one, which only ever errs toward letting somebody in.
 MAX_BUCKETS = 20_000
@@ -145,6 +171,13 @@ def draws_for(method: str, path: str, *, credential: str | None, address: str) -
     ``credential`` is an opaque stand-in for the caller's session or token -
     a hash, never the thing itself.
     """
+    if path == MCP_PATH:
+        caller = f"cred:{credential}" if credential is not None else f"addr:{address}"
+        return [Draw(f"address:{address}", ADDRESS), Draw(f"mcp:{caller}", ASSISTANT)]
+    if path in OAUTH_PATHS:
+        return [Draw(f"oauth{path}:{address}", OAUTH_PATHS[path])]
+    if path.startswith(WELL_KNOWN):
+        return [Draw(f"oauth-meta:{address}", OAUTH_MISC)]
     if not path.startswith(API_PREFIX):
         return []
     if path.startswith(SIGN_IN_PREFIXES):
@@ -155,10 +188,9 @@ def draws_for(method: str, path: str, *, credential: str | None, address: str) -
         return []
 
     caller = f"cred:{credential}" if credential is not None else f"addr:{address}"
-    draws = [
-        Draw(f"address:{address}", ADDRESS),
-        Draw(caller, MEMBER if credential is not None else ANONYMOUS),
-    ]
+    draws = [Draw(caller, MEMBER if credential is not None else ANONYMOUS)]
+    if address != IN_PROCESS:
+        draws.insert(0, Draw(f"address:{address}", ADDRESS))
     if method.upper() not in READS:
         draws.append(Draw(f"write:{caller}", WRITES))
     return draws

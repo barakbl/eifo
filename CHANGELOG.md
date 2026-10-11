@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.30.0](https://github.com/barakbl/eifo/compare/v0.29.0...v0.30.0) (2026-10-11)
+
+
+### Features
+
+* Eifo on claude.ai and phones - a remote MCP connector behind "Sign in with Eifo" ([#154](https://github.com/barakbl/eifo/issues/154)) ([69b7445](https://github.com/barakbl/eifo/commit/69b7445f97cf069710650ddfe2e6fac8e8bfd00c))
+* picks weigh the member's whole taste, not only the one favourite ([#157](https://github.com/barakbl/eifo/issues/157)) ([1e1167b](https://github.com/barakbl/eifo/commit/1e1167be7846898862baf01d0495a67d60b787b6))
+* smarter picks - every favourite has a say, and sharing only "Drama" is no longer a match ([#156](https://github.com/barakbl/eifo/issues/156)) ([8870092](https://github.com/barakbl/eifo/commit/88700923254d38849236fe427748c52e0c652f6e))
+
 ## [0.29.0](https://github.com/barakbl/eifo/compare/v0.28.0...v0.29.0) (2026-10-08)
 
 

@@ -413,8 +413,8 @@ def for_you(
 ) -> list[Recommendation]:
     """Picks from what you rated highly, available now, that you do not have.
 
-    Each of your favourites (rated 8 or more) proposes the titles most like
-    it; the best proposals win, a little more when several favourites agree,
+    Each of your favourites (rated 8 or more, or 9 or more if you rate most
+    things 9) proposes the titles most like it; the best proposals win, a little more when several favourites agree,
     and no single favourite supplies more than a few. Each pick says which
     favourite it came from and what the two share. Empty until you have
     rated something 8 or more.

@@ -19,6 +19,7 @@ filtered by service and availability before any of them is worth loading.
 from __future__ import annotations
 
 import datetime as dt
+import math
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -293,6 +294,12 @@ QUALITY_WEIGHT = 15
 #: Years apart at which era stops counting at all.
 ERA_SPAN = 30
 
+#: How much shared genre - in rarity, see :func:`genre_rarity` - makes a
+#: match certain. Drama alone is about one, so two titles that are only both
+#: dramas share a third of what this asks; crime and drama, or science
+#: fiction, share all of it.
+GENRE_EVIDENCE = 3.0
+
 
 @dataclass(frozen=True, slots=True)
 class Seed:
@@ -352,6 +359,7 @@ def similar(
     limit: int = 20,
     offset: int = 0,
     count: bool = True,
+    rarity: dict[int, float] | None = None,
 ) -> tuple[list[Similar], int]:
     """Titles most like the seed, best first, and how many there are.
 
@@ -359,15 +367,23 @@ def similar(
     own filters, so "like this, on my services, available now, unseen" is one
     question. A candidate has to share at least a genre, a director or a lead:
     a film from the same year in the same language is not "like" anything.
+    ``rarity`` is :func:`genre_rarity`, for a caller asking about many seeds.
     """
+    if rarity is None:
+        rarity = genre_rarity(session)
+    weight = _rarity_of(rarity)
     shared_genres = (
-        select(TitleGenre.title_id, func.count().label("shared"))
+        select(
+            TitleGenre.title_id,
+            func.count().label("shared"),
+            func.sum(weight).label("rarity"),
+        )
         .where(TitleGenre.genre_id.in_(seed.genres or [-1]))
         .group_by(TitleGenre.title_id)
         .subquery()
     )
     genre_counts = (
-        select(TitleGenre.title_id, func.count().label("count"))
+        select(TitleGenre.title_id, func.sum(weight).label("rarity"))
         .group_by(TitleGenre.title_id)
         .subquery()
     )
@@ -379,8 +395,14 @@ def similar(
     leads = func.coalesce(shared_leads.c.shared, 0)
 
     score = (
-        _genre_term(genres, func.coalesce(genre_counts.c.count, 0), len(seed.genres))
-        + case((directors >= 2, 2 * DIRECTOR_WEIGHT), else_=directors * DIRECTOR_WEIGHT)
+        _genre_term(
+            func.coalesce(shared_genres.c.rarity, 0),
+            func.coalesce(genre_counts.c.rarity, 0),
+            sum(rarity.get(genre, 0.0) for genre in seed.genres),
+        )
+        # One director's worth however many are shared: co-directors are one
+        # hand, and so is a person the catalog holds twice under two names.
+        + case((directors > 0, DIRECTOR_WEIGHT), else_=0)
         + case((leads >= 3, 3 * LEAD_WEIGHT), else_=leads * LEAD_WEIGHT)
         + _era_term(seed.year)
         + (
@@ -448,12 +470,38 @@ def _shared_people(role: CreditRole, people: frozenset[int], *, leads_only: bool
     )
 
 
-def _genre_term(shared: Any, count: Any, seed_count: int) -> Any:
-    """Jaccard overlap of genres, times the weight: shared over their union."""
-    if not seed_count:
+def genre_rarity(session: Session) -> dict[int, float]:
+    """How telling each genre is: the log of how few titles carry it.
+
+    Half the catalog is drama, so two titles both being dramas says little;
+    two westerns say a lot. Inverse document frequency, in other words.
+    """
+    titles = session.scalar(select(func.count(func.distinct(TitleGenre.title_id)))) or 0
+    return {
+        genre_id: math.log(titles / carrying)
+        for genre_id, carrying in session.execute(
+            select(TitleGenre.genre_id, func.count()).group_by(TitleGenre.genre_id)
+        ).tuples()
+        if carrying
+    }
+
+
+def _rarity_of(rarity: dict[int, float]) -> Any:
+    if not rarity:
+        return literal(0.0)
+    return case(rarity, value=TitleGenre.genre_id, else_=0.0)
+
+
+def _genre_term(shared: Any, candidate: Any, seed_total: float) -> Any:
+    """Genre overlap, times the weight: rarity shared over rarity in either,
+    and scaled down when what is shared is too common to tell much
+    (:data:`GENRE_EVIDENCE`).
+    """
+    if seed_total <= 0:
         return literal(0)
-    union = count + seed_count - shared
-    return case((union > 0, shared * GENRE_WEIGHT * 1.0 / union), else_=0)
+    union = candidate + seed_total - shared
+    certainty = case((shared >= GENRE_EVIDENCE, 1.0), else_=shared * 1.0 / GENRE_EVIDENCE)
+    return case((union > 0, shared * GENRE_WEIGHT * certainty / union), else_=0)
 
 
 def _era_term(year: int | None) -> Any:
@@ -495,7 +543,9 @@ def _people_of(session: Session, ids: list[int]) -> dict[int, set[int]]:
 # -- recommendations --------------------------------------------------------
 
 #: Favourites a recommendation starts from: the best rated, newest first.
-SEEDS = 8
+#: Enough that a member's every 10 has a say - a favourite director whose
+#: films all sat ninth in line used to recommend nothing.
+SEEDS = 16
 #: Candidates read per favourite. Enough that the merge has a choice; past
 #: this a seed's suggestions are the genre rather than the film.
 PER_SEED = 40
@@ -519,6 +569,21 @@ class Pick:
     shared_people: tuple[int, ...]
 
 
+def favourite_floor(session: Session, user_id: int) -> int:
+    """The lowest rating that makes a title a member's favourite.
+
+    :data:`LIKED`, or the member's own average if that is higher: to somebody
+    who gives most films a 9, an 8 is a disappointment. Never above one more
+    than :data:`LIKED`, though - a 9 is a favourite whoever gave it.
+    """
+    mean = session.scalar(
+        select(func.avg(UserItem.rating)).where(
+            UserItem.user_id == user_id, UserItem.rating.is_not(None)
+        )
+    )
+    return max(LIKED, min(round(mean), LIKED + 1)) if mean is not None else LIKED
+
+
 def for_you(
     session: Session,
     user_id: int,
@@ -528,7 +593,7 @@ def for_you(
 ) -> list[Pick]:
     """Titles a member is likely to enjoy, from what they rated highly.
 
-    Each favourite (rated :data:`LIKED` or above) proposes the titles most
+    Each favourite (see :func:`favourite_floor`) proposes the titles most
     like it; a candidate keeps its best proposal, weighted by how much the
     member liked the favourite, plus a little for every other favourite that
     proposed it too. ``within`` is where to look - the member's services,
@@ -537,7 +602,16 @@ def for_you(
     seeds = session.execute(
         select(Title, UserItem.rating)
         .join(UserItem, UserItem.title_id == Title.id)
-        .where(UserItem.user_id == user_id, UserItem.rating >= LIKED)
+        .where(
+            UserItem.user_id == user_id,
+            UserItem.rating >= favourite_floor(session, user_id),
+            # A favourite with no genres and no credits - a film a member
+            # added by hand, say - is like nothing, and would waste a seat.
+            or_(
+                select(TitleGenre.title_id).where(TitleGenre.title_id == Title.id).exists(),
+                select(Credit.title_id).where(Credit.title_id == Title.id).exists(),
+            ),
+        )
         .order_by(UserItem.rating.desc(), UserItem.updated_at.desc(), Title.id)
         .limit(SEEDS)
     ).all()
@@ -554,11 +628,17 @@ def for_you(
     if within is not None:
         unrated = unrated.where(Title.id.in_(within))
 
+    rarity = genre_rarity(session)
     best: dict[int, Pick] = {}
     agreeing: dict[int, float] = defaultdict(float)
     for seed_title, rating in seeds:
         found, _ = similar(
-            session, seed_of(session, seed_title), within=unrated, limit=PER_SEED, count=False
+            session,
+            seed_of(session, seed_title),
+            within=unrated,
+            limit=PER_SEED,
+            count=False,
+            rarity=rarity,
         )
         weight = rating / 10
         for candidate in found:

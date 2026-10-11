@@ -22,7 +22,7 @@ import datetime as dt
 import math
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sqlalchemy import ColumnElement, Integer, Select, and_, case, cast, func, literal, or_, select
@@ -555,6 +555,34 @@ PER_SEED_PICKS = 3
 #: What a second, third... favourite agreeing on a candidate adds, as a share
 #: of its own match. Agreement is a signal; it is not a vote to be counted.
 AGREEMENT = 0.3
+#: The most agreement can add. With a dozen favourites, half of them crime,
+#: every crime drama is proposed six times over and would fill the row on
+#: votes alone; what the member leans toward is :class:`Profile`'s to say.
+AGREEMENT_CAP = 15
+
+#: How far the member's whole taste moves a pick, in match points per unit of
+#: lean (see :class:`Profile`). Leans are small - a member's favourite
+#: director is about half a spread above their average - so a pick by them,
+#: in genres and a decade they favour, rises by a director's worth of match;
+#: an animated film, to somebody who rates animation lowest, sinks as far.
+PROFILE_WEIGHT = 20
+#: What each facet of a candidate counts for in its lean. Directors and
+#: genres say most; a decade or a country is a hint.
+FACET_WEIGHTS = {
+    "directors": 1.0,
+    "genres": 1.0,
+    "cast": 0.5,
+    "decades": 0.5,
+    "kinds": 0.5,
+    "countries": 0.3,
+    "languages": 0.3,
+}
+#: A title on the watchlist, unrated, counts as this share of a rating at the
+#: member's favourite floor: wanting to see something is a mild "like".
+WATCHLIST_WEIGHT = 0.5
+#: The least spread a member's ratings are taken to have. Somebody who gave
+#: three films a 9 has no spread, and every difference would be infinite.
+MIN_SPREAD = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -584,6 +612,90 @@ def favourite_floor(session: Session, user_id: int) -> int:
     return max(LIKED, min(round(mean), LIKED + 1)) if mean is not None else LIKED
 
 
+@dataclass(frozen=True, slots=True)
+class Profile:
+    """How a member leans on every facet of what they rated or want to see.
+
+    A lean is how far their ratings of a facet's titles sit from their own
+    average, pulled toward it by :data:`PRIOR_WEIGHT` imaginary ratings, in
+    units of their own spread: +1 is "a spread above what I usually give".
+    Only facets they have rated anything of are here; the rest lean nothing.
+    """
+
+    leans: dict[str, dict[str, float]] = field(default_factory=dict)
+
+    def lean(self, facets: dict[str, set[str]], rarity: dict[int, float]) -> float:
+        """How the member leans toward a title with these facets."""
+        total = 0.0
+        for facet, weight in FACET_WEIGHTS.items():
+            leans = self.leans.get(facet, {})
+            known = [key for key in facets.get(facet, ()) if key in leans]
+            if not known:
+                continue
+            if facet == "genres":
+                # Weighed by rarity: a disliked animation says more about a
+                # title than a liked drama does.
+                weights = [rarity.get(int(key), 0.0) for key in known]
+                if sum(weights) <= 0:
+                    continue
+                value = sum(leans[key] * w for key, w in zip(known, weights, strict=True)) / sum(
+                    weights
+                )
+            elif facet == "cast":
+                # Leads add up - two loved actors are more than one - up to a
+                # director's worth.
+                value = max(-2.0, min(2.0, sum(leans[key] for key in known)))
+            else:
+                value = sum(leans[key] for key in known) / len(known)
+            total += weight * value
+        return total
+
+
+def profile(session: Session, user_id: int) -> Profile:
+    """Read a member's leanings from their ratings and their watchlist."""
+    rows = session.execute(
+        select(UserItem.title_id, UserItem.rating, UserItem.want_to_watch).where(
+            UserItem.user_id == user_id,
+            or_(UserItem.rating.is_not(None), UserItem.want_to_watch),
+        )
+    ).all()
+    rated = [int(row.rating) for row in rows if row.rating is not None]
+    if not rated:
+        return Profile()
+    mean = sum(rated) / len(rated)
+    spread = max(MIN_SPREAD, (sum((r - mean) ** 2 for r in rated) / len(rated)) ** 0.5)
+    floor = favourite_floor(session, user_id)
+
+    # Every title as (rating, how much it counts).
+    counted: dict[int, tuple[float, float]] = {
+        row.title_id: (
+            (float(row.rating), 1.0) if row.rating is not None else (float(floor), WATCHLIST_WEIGHT)
+        )
+        for row in rows
+    }
+    titles = session.scalars(select(Title).where(Title.id.in_(list(counted)))).all()
+    leans: dict[str, dict[str, float]] = {}
+    for facet, by_key in _facets(session, titles).items():
+        leans[facet] = {}
+        for key, (_, title_ids) in by_key.items():
+            total = sum(counted[t][0] * counted[t][1] for t in title_ids)
+            weight = sum(counted[t][1] for t in title_ids)
+            weighted = (total + PRIOR_WEIGHT * mean) / (weight + PRIOR_WEIGHT)
+            leans[facet][key] = (weighted - mean) / spread
+    return Profile(leans=leans)
+
+
+def _facets_by_title(session: Session, title_ids: Sequence[int]) -> dict[int, dict[str, set[str]]]:
+    """Every facet of each title, as ``title id -> facet -> keys``."""
+    titles = session.scalars(select(Title).where(Title.id.in_(list(title_ids)))).all()
+    found: dict[int, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+    for facet, by_key in _facets(session, titles).items():
+        for key, (_, held) in by_key.items():
+            for title_id in held:
+                found[title_id][facet].add(key)
+    return found
+
+
 def for_you(
     session: Session,
     user_id: int,
@@ -596,8 +708,11 @@ def for_you(
     Each favourite (see :func:`favourite_floor`) proposes the titles most
     like it; a candidate keeps its best proposal, weighted by how much the
     member liked the favourite, plus a little for every other favourite that
-    proposed it too. ``within`` is where to look - the member's services,
-    available now, nothing they already have - and is the caller's to decide.
+    proposed it too, plus how the member leans toward everything the
+    candidate is (:class:`Profile`) - its director, leads, genres, decade -
+    across all they rated, not only the one favourite. ``within`` is where
+    to look - the member's services, available now, nothing they already
+    have - and is the caller's to decide.
     """
     seeds = session.execute(
         select(Title, UserItem.rating)
@@ -655,12 +770,19 @@ def for_you(
                     shared_people=candidate.shared_people,
                 )
 
+    taste_of = profile(session, user_id)
+    facets = _facets_by_title(session, list(best))
     ranked = sorted(
-        best.values(),
-        key=lambda pick: (
-            -(pick.score + AGREEMENT * (agreeing[pick.title_id] - pick.score)),
-            pick.title_id,
+        (
+            replace(
+                pick,
+                score=pick.score
+                + min(AGREEMENT_CAP, AGREEMENT * (agreeing[pick.title_id] - pick.score))
+                + PROFILE_WEIGHT * taste_of.lean(facets.get(pick.title_id, {}), rarity),
+            )
+            for pick in best.values()
         ),
+        key=lambda pick: (-pick.score, pick.title_id),
     )
     picks: list[Pick] = []
     per_seed: dict[int, int] = defaultdict(int)

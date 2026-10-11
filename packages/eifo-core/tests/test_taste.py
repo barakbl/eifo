@@ -18,6 +18,7 @@ from eifo_core.taste import (
     favourite_floor,
     for_you,
     genre_rarity,
+    profile,
     seed_of,
     similar,
     taste,
@@ -194,6 +195,53 @@ class TestTaste:
         world.rate(other, world.film("Theirs"), 10)
 
         assert taste(session, user.id).rated == 0
+
+
+class TestProfile:
+    def test_nothing_rated_leans_nowhere(self, session: Session, user: User) -> None:
+        assert profile(session, user.id).leans == {}
+
+    def test_leans_from_the_members_own_average(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        for index in range(3):
+            world.rate(user, world.film(f"Loved {index}", director="Auteur"), 10)
+            world.rate(user, world.film(f"Cartoon {index}", genres=("Animation",)), 4)
+        world.rate(user, world.film("Plain"), 7)
+
+        leans = profile(session, user.id).leans
+        auteur = str(world.people["Auteur"].id)
+
+        assert leans["directors"][auteur] > 0
+        assert leans["genres"][str(world.genres["Animation"].id)] < 0
+
+    def test_one_title_leans_less_than_several(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        world.rate(user, world.film("Once", director="One Hit"), 10)
+        for index in range(3):
+            world.rate(user, world.film(f"Steady {index}", director="Steady Hand"), 10)
+        for index in range(4):
+            world.rate(user, world.film(f"Filler {index}"), 5)
+
+        directors = profile(session, user.id).leans["directors"]
+
+        assert (
+            directors[str(world.people["Steady Hand"].id)]
+            > directors[str(world.people["One Hit"].id)]
+            > 0
+        )
+
+    def test_the_watchlist_is_a_mild_like(self, session: Session, user: User, world: World) -> None:
+        for index in range(3):
+            world.rate(user, world.film(f"Rated {index}"), 6 + index)
+        wanted = world.film("Wanted", director="Hoped For")
+        session.add(UserItem(user_id=user.id, title_id=wanted.id, want_to_watch=True))
+        session.flush()
+
+        leans = profile(session, user.id).leans
+
+        assert leans["directors"][str(world.people["Hoped For"].id)] > 0
 
 
 class TestSimilar:
@@ -410,6 +458,42 @@ class TestForYou:
         world.film("Another western", genres=("Western",))
 
         assert self._names(session, for_you(session, user.id)) == ["Another western"]
+
+    def test_a_director_wanted_elsewhere_lifts_a_pick(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        """Equally like the favourite; one is by a director the member wants
+        to see more of - which the favourite alone does not know, and which
+        no other favourite proposes."""
+        world.rate(user, world.film("Favourite", genres=("Western",)), 10)
+        for index in range(3):
+            world.rate(user, world.film(f"Fine {index}", genres=("Comedy",)), 6)
+        for index in range(3):
+            wanted = world.film(f"Wanted {index}", genres=("Noir",), director="Auteur")
+            session.add(UserItem(user_id=user.id, title_id=wanted.id, want_to_watch=True))
+        # The stranger's first, so a tie would go to it.
+        world.film("Western by a stranger", genres=("Western",), director="Stranger")
+        world.film("Western by the auteur", genres=("Western",), director="Auteur")
+        session.flush()
+
+        names = self._names(session, for_you(session, user.id))
+
+        assert names.index("Western by the auteur") < names.index("Western by a stranger")
+
+    def test_a_disliked_genre_sinks_a_pick(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        world.rate(user, world.film("Favourite", genres=("Western",)), 10)
+        for index in range(3):
+            world.rate(user, world.film(f"Cartoon {index}", genres=("Animation",)), 3)
+        world.film("Animated western", genres=("Western", "Animation"))
+        world.film("Musical western", genres=("Western", "Musical"))
+        for index in range(3):
+            world.film(f"Musical {index}", genres=("Musical",))
+
+        names = self._names(session, for_you(session, user.id))
+
+        assert names.index("Musical western") < names.index("Animated western")
 
     def test_never_what_the_member_rated(self, session: Session, user: User, world: World) -> None:
         """Two favourites alike would otherwise recommend each other."""

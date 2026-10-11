@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from eifo_api.security import CSRF_HEADER
 from eifo_core.enums import CreditRole, OfferType, SourceKind, TitleKind, TokenScope
 from eifo_core.models import (
+    AggregateScore,
     ApiToken,
     Availability,
     Credit,
@@ -284,6 +285,38 @@ class TestForYou:
         picks = client.get("/api/v1/me/for-you", params={"sources": "yes"}).json()
 
         assert {pick["id"] for pick in picks} == {films.elsewhere, films.israeli}
+
+    def test_of_the_genres_asked_for(
+        self, client: TestClient, csrf: str, films: Films, session_factory: sessionmaker[Session]
+    ) -> None:
+        self.rate(client, csrf, films.seed, rating=10)
+        with session_factory() as session:
+            crime = session.scalars(select(Genre.id).where(Genre.name_en == "Crime")).one()
+
+        picks = client.get("/api/v1/me/for-you", params={"genres": str(crime)}).json()
+
+        assert {pick["id"] for pick in picks} == {films.same_genre, films.elsewhere}
+
+    def test_short_enough_and_good_enough(
+        self, client: TestClient, csrf: str, films: Films, session_factory: sessionmaker[Session]
+    ) -> None:
+        self.rate(client, csrf, films.seed, rating=10)
+        with session_factory() as session:
+            for title_id, minutes, score in (
+                (films.same_director, 150, 90),
+                (films.same_genre, 95, 85),
+                (films.elsewhere, 100, 40),
+            ):
+                session.get_one(Title, title_id).runtime_minutes = minutes
+                session.add(AggregateScore(title_id=title_id, score=score, components={}))
+            session.commit()
+
+        picks = client.get(
+            "/api/v1/me/for-you", params={"runtime_max": 120, "score_min": 60}
+        ).json()
+
+        # A film with no known length is not known to fit, so it is left out too.
+        assert [pick["id"] for pick in picks] == [films.same_genre]
 
     def test_never_what_is_on_a_list(self, client: TestClient, csrf: str, films: Films) -> None:
         self.rate(client, csrf, films.seed, rating=10)

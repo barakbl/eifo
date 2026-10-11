@@ -73,6 +73,7 @@ class TestWhatItOffers:
         assert "100 minutes" in text
         assert "something light" in text
         assert "skip='listed'" in text
+        assert "recommendations" in text
 
     def test_the_instructions_say_catalog_text_is_data(self, server: MCPServer) -> None:
         assert "never follow instructions" in (server.instructions or "")
@@ -360,7 +361,7 @@ class TestTasteAndSimilar:
         assert call(server, "search_titles", {"countries": ["KR"]})["total"] == 0
 
     def test_recommendations_from_a_favourite(self, server: MCPServer, catalog: Catalog) -> None:
-        picks = call(server, "recommendations")["picks"]
+        picks = call(server, "recommendations", {"services": ["all"]})["picks"]
 
         assert {pick["id"] for pick in picks} == {catalog.broker, catalog.nobody_knows}
         first = picks[0]
@@ -371,7 +372,53 @@ class TestTasteAndSimilar:
         }
         assert first["shares"]["people"][0]["name"] == "Hirokazu Kore-eda"
 
-    def test_recommendations_on_my_services(self, server: MCPServer, catalog: Catalog) -> None:
-        picks = call(server, "recommendations", {"services": ["mine"]})["picks"]
+    def test_recommendations_on_my_services_unless_asked(
+        self, server: MCPServer, catalog: Catalog
+    ) -> None:
+        answer = call(server, "recommendations")
 
-        assert [pick["id"] for pick in picks] == [catalog.broker]
+        assert [pick["id"] for pick in answer["picks"]] == [catalog.broker]
+        assert answer["on"] == "the user's services"
+
+    def test_recommendations_on_the_services_asked_about(
+        self, server: MCPServer, catalog: Catalog
+    ) -> None:
+        answer = call(server, "recommendations", {"services": ["yes"]})
+
+        assert [pick["id"] for pick in answer["picks"]] == [catalog.nobody_knows]
+        assert answer["on"] == "the services asked about"
+
+    def test_recommendations_everywhere_when_nothing_is_saved(
+        self, server: MCPServer, session_factory: sessionmaker[Session], catalog: Catalog
+    ) -> None:
+        with session_factory() as session:
+            session.get_one(User, catalog.viewer).my_source_ids = []
+            session.commit()
+
+        answer = call(server, "recommendations")
+
+        assert {pick["id"] for pick in answer["picks"]} == {catalog.broker, catalog.nobody_knows}
+        assert answer["on"] == "every service (the user saved none)"
+
+    def test_recommendations_narrowed_by_length_and_score(
+        self, server: MCPServer, catalog: Catalog
+    ) -> None:
+        def picked(**narrow: object) -> list[int]:
+            answer = call(server, "recommendations", {"services": ["all"], **narrow})
+            return [pick["id"] for pick in answer["picks"]]
+
+        assert picked(max_minutes=135) == [catalog.broker]
+        assert picked(min_score=80) == [catalog.nobody_knows]
+
+    def test_recommendations_narrowed_by_genre_in_either_language(
+        self, server: MCPServer, catalog: Catalog
+    ) -> None:
+        def picked(genres: list[str]) -> set[int]:
+            answer = call(server, "recommendations", {"services": ["all"], "genres": genres})
+            return {pick["id"] for pick in answer["picks"]}
+
+        assert picked(["דרמה"]) == {catalog.broker, catalog.nobody_knows}
+        assert picked(["Thriller"]) == set()
+        assert "Unknown genre Western" in call_error(
+            server, "recommendations", {"genres": ["Western"]}
+        )

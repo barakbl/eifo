@@ -938,7 +938,7 @@ renewal. It needs `EIFO_PUBLIC_ORIGIN` set to the instance's https address;
 
 | Tool | Answers |
 |---|---|
-| `recommendations` | picks from your favourites, on your services, available now, unseen - each with the favourite it came from |
+| `recommendations` | picks from your favourites, on your services, available now, unseen - each with the favourite it came from; narrowed by genre, length and score |
 | `taste_profile` | what your ratings say you like: genres, directors, leads, countries, decades, and how you rate against the critics |
 | `similar_to` | titles like one you loved - shared genres, director and leads - with why, leaving out what you have |
 | `search_titles` | the catalog's filters - services (`mine` for yours), genre, years, score, length, a director or actor, country, language - with `skip="listed"` to leave out what you watched or saved |

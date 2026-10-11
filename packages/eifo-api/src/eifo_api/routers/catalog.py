@@ -409,6 +409,11 @@ def for_you(
     session: SessionDep,
     sources: Annotated[str | None, Query(description="Comma-separated source keys")] = None,
     type: Annotated[TitleKind | None, Query()] = None,
+    genres: Annotated[
+        str | None, Query(description="Comma-separated genre ids; a pick has all of them")
+    ] = None,
+    runtime_max: Annotated[int | None, Query(ge=1, description="Longest film, minutes")] = None,
+    score_min: Annotated[int | None, Query(ge=0, le=100)] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_FOR_YOU)] = 12,
 ) -> list[Recommendation]:
     """Picks from what you rated highly, available now, that you do not have.
@@ -418,9 +423,22 @@ def for_you(
     little more when several favourites agree, and no single favourite
     supplies more than a few. Each pick says which favourite it came from
     and what the two share. Empty until you have rated something 8 or more.
+
+    ``genres``, ``runtime_max`` and ``score_min`` narrow where the picks come
+    from - "a comedy under two hours" - so the row is the best of those, not
+    the best overall with most of it then thrown away.
     """
     user_id = principal.user.id
-    key = (user_id, sources, type, limit, _lists_fingerprint(session, user_id))
+    key = (
+        user_id,
+        sources,
+        type,
+        genres,
+        runtime_max,
+        score_min,
+        limit,
+        _lists_fingerprint(session, user_id),
+    )
     now = dt.datetime.now(dt.UTC)
     held = _for_you.get(key)
     if held is not None and held[0] > now:
@@ -433,11 +451,11 @@ def for_you(
         source_keys=_csv(sources),
         available=AvailabilityFilter.CURRENT,
         kind=type,
-        genre_ids=[],
+        genre_ids=_int_csv(genres),
         year_min=None,
         year_max=None,
-        score_min=None,
-        runtime_max=None,
+        score_min=score_min,
+        runtime_max=runtime_max,
     ).where(Title.id.not_in(_own_titles(user_id, Exclude.LISTED)))
 
     picks = taste.for_you(session, user_id, within=within, limit=limit, day=now.date())

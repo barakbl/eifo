@@ -19,6 +19,7 @@ filtered by service and availability before any of them is worth loading.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import math
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
@@ -560,6 +561,27 @@ AGREEMENT = 0.3
 #: votes alone; what the member leans toward is :class:`Profile`'s to say.
 AGREEMENT_CAP = 15
 
+#: How much a pick pays for each one like it already in the row, per unit of
+#: likeness (genres and film-or-series in common, over all they have). Three
+#: crime dramas in, a fourth costs about as much as a favourite director
+#: earns: it can still come, if it is that good.
+VARIETY = 8
+#: And whatever they would pay, no more than this many of one exact mix.
+PER_MIX_PICKS = 2
+#: The most a day's shuffle moves a pick. Near-equal picks trade places from
+#: day to day; a pick far ahead stays ahead.
+SHUFFLE = 8
+#: Points per score point above (or below) :func:`quality_floor`: of two
+#: equally fitting picks, the better film by twenty points comes first by six.
+QUALITY_PICK_WEIGHT = 0.3
+#: How far under the median score of a member's favourites the floor sits,
+#: and the range it is kept in.
+QUALITY_MARGIN = 15
+QUALITY_FLOOR_RANGE = (55, 75)
+#: How many of a member's favourites need a score before their floor means
+#: anything.
+QUALITY_FLOOR_EVIDENCE = 3
+
 #: How far the member's whole taste moves a pick, in match points per unit of
 #: lean (see :class:`Profile`). Leans are small - a member's favourite
 #: director is about half a spread above their average - so a pick by them,
@@ -696,12 +718,41 @@ def _facets_by_title(session: Session, title_ids: Sequence[int]) -> dict[int, di
     return found
 
 
+def quality_floor(session: Session, user_id: int) -> float | None:
+    """The least score a pick sharing nobody with its favourite should have.
+
+    :data:`QUALITY_MARGIN` under the median score of the member's own
+    favourites, within :data:`QUALITY_FLOOR_RANGE`: somebody whose favourites
+    are classics in the high eighties is not served a 60 for its genres.
+    None while too few of their favourites have a score to say.
+    """
+    scores = sorted(
+        score
+        for score in session.scalars(
+            select(AggregateScore.score)
+            .join(UserItem, UserItem.title_id == AggregateScore.title_id)
+            .where(
+                UserItem.user_id == user_id,
+                UserItem.rating >= favourite_floor(session, user_id),
+                AggregateScore.score.is_not(None),
+            )
+        )
+        if score is not None
+    )
+    if len(scores) < QUALITY_FLOOR_EVIDENCE:
+        return None
+    median = scores[len(scores) // 2]
+    low, high = QUALITY_FLOOR_RANGE
+    return max(low, min(high, median - QUALITY_MARGIN))
+
+
 def for_you(
     session: Session,
     user_id: int,
     *,
     within: Select[tuple[int]] | None = None,
     limit: int = 12,
+    day: dt.date | None = None,
 ) -> list[Pick]:
     """Titles a member is likely to enjoy, from what they rated highly.
 
@@ -710,12 +761,17 @@ def for_you(
     member liked the favourite, plus a little for every other favourite that
     proposed it too, plus how the member leans toward everything the
     candidate is (:class:`Profile`) - its director, leads, genres, decade -
-    across all they rated, not only the one favourite. ``within`` is where
-    to look - the member's services, available now, nothing they already
-    have - and is the caller's to decide.
+    across all they rated, not only the one favourite, plus a little for
+    being good (:func:`quality_floor`). The row is then filled for variety
+    (:data:`VARIETY`). ``within`` is where to look - the member's services,
+    available now, nothing they already have - and is the caller's to decide.
+
+    ``day`` turns the row over daily: favourites equally loved take turns,
+    and near-equal picks trade places, the same way all day. None keeps
+    the order fixed.
     """
-    seeds = session.execute(
-        select(Title, UserItem.rating)
+    favourites = session.execute(
+        select(Title, UserItem.rating, UserItem.updated_at)
         .join(UserItem, UserItem.title_id == Title.id)
         .where(
             UserItem.user_id == user_id,
@@ -727,9 +783,15 @@ def for_you(
                 select(Credit.title_id).where(Credit.title_id == Title.id).exists(),
             ),
         )
-        .order_by(UserItem.rating.desc(), UserItem.updated_at.desc(), Title.id)
-        .limit(SEEDS)
     ).all()
+    seeds = sorted(
+        favourites,
+        key=lambda row: (
+            -row.rating,
+            _dice(user_id, day, row.Title.id) if day else -_epoch(row.updated_at),
+            row.Title.id,
+        ),
+    )[:SEEDS]
 
     # Never what they rated: their favourites would otherwise recommend each
     # other, whatever the caller narrowed to.
@@ -746,7 +808,7 @@ def for_you(
     rarity = genre_rarity(session)
     best: dict[int, Pick] = {}
     agreeing: dict[int, float] = defaultdict(float)
-    for seed_title, rating in seeds:
+    for seed_title, rating, _ in seeds:
         found, _ = similar(
             session,
             seed_of(session, seed_title),
@@ -772,25 +834,84 @@ def for_you(
 
     taste_of = profile(session, user_id)
     facets = _facets_by_title(session, list(best))
-    ranked = sorted(
-        (
-            replace(
-                pick,
-                score=pick.score
-                + min(AGREEMENT_CAP, AGREEMENT * (agreeing[pick.title_id] - pick.score))
-                + PROFILE_WEIGHT * taste_of.lean(facets.get(pick.title_id, {}), rarity),
+    quality = dict(
+        session.execute(
+            select(AggregateScore.title_id, AggregateScore.score).where(
+                AggregateScore.title_id.in_(list(best)), AggregateScore.score.is_not(None)
             )
-            for pick in best.values()
-        ),
-        key=lambda pick: (-pick.score, pick.title_id),
+        )
+        .tuples()
+        .all()
     )
+    floor = quality_floor(session, user_id)
+
+    scored: list[Pick] = []
+    for pick in best.values():
+        known = quality.get(pick.title_id)
+        # Sharing a director or a lead earns a weaker film its place - a
+        # lesser Tarkovsky is still a Tarkovsky; sharing genres does not.
+        if floor is not None and known is not None and known < floor and not pick.shared_people:
+            continue
+        score = (
+            pick.score
+            + min(AGREEMENT_CAP, AGREEMENT * (agreeing[pick.title_id] - pick.score))
+            + PROFILE_WEIGHT * taste_of.lean(facets.get(pick.title_id, {}), rarity)
+        )
+        if floor is not None and known is not None:
+            score += QUALITY_PICK_WEIGHT * (known - floor)
+        if day is not None:
+            score += SHUFFLE * _dice(user_id, day, pick.title_id)
+        scored.append(replace(pick, score=score))
+
+    return _varied(scored, facets, limit)
+
+
+def _varied(
+    candidates: list[Pick], facets: dict[int, dict[str, set[str]]], limit: int
+) -> list[Pick]:
+    """The best row, filled one pick at a time, each paying for its likeness
+    to those already in it (:data:`VARIETY`), no favourite supplying more
+    than :data:`PER_SEED_PICKS` and no mix more than :data:`PER_MIX_PICKS`."""
+
+    def mix(title_id: int) -> frozenset[str]:
+        held = facets.get(title_id, {})
+        return frozenset(held.get("genres", set())) | {
+            f"kind:{kind}" for kind in held.get("kinds", set())
+        }
+
+    mixes = {pick.title_id: mix(pick.title_id) for pick in candidates}
+    left = sorted(candidates, key=lambda pick: (-pick.score, pick.title_id))
     picks: list[Pick] = []
     per_seed: dict[int, int] = defaultdict(int)
-    for pick in ranked:
-        if per_seed[pick.seed_id] >= PER_SEED_PICKS:
-            continue
-        per_seed[pick.seed_id] += 1
-        picks.append(pick)
-        if len(picks) >= limit:
+    per_mix: dict[frozenset[str], int] = defaultdict(int)
+    while left and len(picks) < limit:
+        left = [
+            pick
+            for pick in left
+            if per_seed[pick.seed_id] < PER_SEED_PICKS
+            and per_mix[mixes[pick.title_id]] < PER_MIX_PICKS
+        ]
+        if not left:
             break
+
+        def worth(pick: Pick) -> float:
+            alike = sum(_jaccard(mixes[pick.title_id], mixes[held.title_id]) for held in picks)
+            return pick.score - VARIETY * alike
+
+        chosen = max(left, key=lambda pick: (worth(pick), -pick.title_id))
+        left.remove(chosen)
+        per_seed[chosen.seed_id] += 1
+        per_mix[mixes[chosen.title_id]] += 1
+        picks.append(chosen)
     return picks
+
+
+def _jaccard(first: frozenset[str], second: frozenset[str]) -> float:
+    union = first | second
+    return len(first & second) / len(union) if union else 0.0
+
+
+def _dice(user_id: int, day: dt.date | None, title_id: int) -> float:
+    """A number in [0, 1) fixed for one member, one day and one title."""
+    digest = hashlib.blake2b(f"{user_id}:{day}:{title_id}".encode(), digest_size=8).digest()
+    return int.from_bytes(digest) / 2**64

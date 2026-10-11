@@ -11,7 +11,17 @@ from sqlalchemy.orm import Session
 
 from eifo_core.enums import CreditRole, TitleKind
 from eifo_core.models import AggregateScore, Credit, Genre, Person, Title, User, UserItem
-from eifo_core.taste import PER_SEED_PICKS, for_you, seed_of, similar, taste
+from eifo_core.taste import (
+    GENRE_WEIGHT,
+    PER_SEED_PICKS,
+    SEEDS,
+    favourite_floor,
+    for_you,
+    genre_rarity,
+    seed_of,
+    similar,
+    taste,
+)
 
 
 @pytest.fixture
@@ -260,6 +270,67 @@ class TestSimilar:
         assert self._names(session, first) == ["Like 0", "Like 1"]
         assert self._names(session, second) == ["Like 2", "Like 3"]
 
+    def test_a_common_genre_alone_is_a_weak_match(self, session: Session, world: World) -> None:
+        """Both dramas says little when most of the catalog is drama."""
+        seed = world.film("Seed", genres=("Drama", "Crime"))
+        world.film("Only a drama", genres=("Drama",), score=95)
+        world.film("Crime too", genres=("Drama", "Crime"), score=50)
+        for index in range(40):
+            world.film(f"Filler {index}", genres=("Drama", "Comedy"))
+
+        found, _ = similar(session, seed_of(session, seed))
+
+        assert self._names(session, found)[0] == "Crime too"
+        alike = {self._names(session, [entry])[0]: entry.similarity for entry in found}
+        assert alike["Crime too"] - alike["Only a drama"] > 25
+
+    def test_a_shared_rare_genre_is_a_strong_match(self, session: Session, world: World) -> None:
+        seed = world.film("Seed", genres=("Western",))
+        world.film("Another western", genres=("Western",))
+        for index in range(40):
+            world.film(f"Filler {index}", genres=("Drama",))
+
+        found, _ = similar(session, seed_of(session, seed))
+
+        assert found[0].similarity >= GENRE_WEIGHT
+
+    def test_rarity(self, session: Session, world: World) -> None:
+        for index in range(4):
+            world.film(f"Drama {index}", genres=("Drama",))
+        world.film("Western", genres=("Drama", "Western"))
+
+        rarity = genre_rarity(session)
+
+        assert rarity[world.genres["Drama"].id] == 0
+        assert rarity[world.genres["Western"].id] > 1.5
+
+    def test_two_shared_directors_count_once(self, session: Session, world: World) -> None:
+        """Co-directors are one hand - and so is a person held twice."""
+        seed = world.film("Seed", genres=("Western",), director="Chaplin")
+        session.add(
+            Credit(
+                title_id=seed.id,
+                person_id=world.person("צ'פלין").id,
+                role=CreditRole.DIRECTOR,
+                source="lev",
+            )
+        )
+        both = world.film("Both", genres=("Comedy",), director="Chaplin")
+        session.add(
+            Credit(
+                title_id=both.id,
+                person_id=world.people["צ'פלין"].id,
+                role=CreditRole.DIRECTOR,
+                source="lev",
+            )
+        )
+        world.film("One", genres=("Comedy",), director="Chaplin")
+        session.flush()
+
+        found, _ = similar(session, seed_of(session, seed))
+
+        assert [entry.similarity for entry in found] == [found[0].similarity] * 2
+
     def test_a_title_with_nothing_to_go_on(self, session: Session, world: World) -> None:
         seed = world.film("Bare", genres=())
         world.film("Anything")
@@ -301,10 +372,44 @@ class TestForYou:
     ) -> None:
         world.rate(user, world.film("Ten", genres=("Western",)), 10)
         world.rate(user, world.film("Eight", genres=("Comedy",)), 8)
+        world.rate(user, world.film("Meh", genres=("Horror",)), 5)
         world.film("Like the ten", genres=("Western",))
         world.film("Like the eight", genres=("Comedy",))
 
         assert self._names(session, for_you(session, user.id)) == ["Like the ten", "Like the eight"]
+
+    def test_a_favourite_is_judged_against_the_members_own_ratings(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        """To somebody who gives most films a 9, an 8 is a disappointment."""
+        world.rate(user, world.film("Ten", genres=("Western",)), 10)
+        for index in range(3):
+            world.rate(user, world.film(f"Nine {index}", genres=("Noir",)), 9)
+        world.rate(user, world.film("Eight", genres=("Comedy",)), 8)
+        world.film("Like the eight", genres=("Comedy",))
+        world.film("Like the ten", genres=("Western",))
+
+        assert favourite_floor(session, user.id) == 9
+        assert self._names(session, for_you(session, user.id)) == ["Like the ten"]
+
+    def test_the_floor_never_asks_for_a_ten(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        for index in range(3):
+            world.rate(user, world.film(f"Ten {index}"), 10)
+
+        assert favourite_floor(session, user.id) == 9
+
+    def test_a_favourite_with_nothing_to_go_on_takes_no_seat(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        """A film a member added by hand has no genres or credits to compare."""
+        for index in range(SEEDS):
+            world.rate(user, world.film(f"Bare {index}", genres=()), 10)
+        world.rate(user, world.film("Western love", genres=("Western",)), 9)
+        world.film("Another western", genres=("Western",))
+
+        assert self._names(session, for_you(session, user.id)) == ["Another western"]
 
     def test_never_what_the_member_rated(self, session: Session, user: User, world: World) -> None:
         """Two favourites alike would otherwise recommend each other."""

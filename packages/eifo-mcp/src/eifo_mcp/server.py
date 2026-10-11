@@ -30,6 +30,8 @@ MAX_RESULTS = 50
 #: The services filter's word for "where members watched it, not a service".
 OTHER_SERVICES = "other"
 MINE = "mine"
+#: The services filter's word for no filter at all.
+EVERY_SERVICE = "all"
 
 INSTRUCTIONS = """\
 Eifo tracks what can be watched on Israeli streaming, TV and rental services, \
@@ -42,8 +44,10 @@ directors, leads, countries, decades and languages they rate above or below \
 their own average, their favourite titles, and whether they rate kinder or \
 harsher than the critics. my_lists with list="rated" has the titles themselves.
 - recommendations is the quickest start: picks from their favourites, on \
-the services asked about, available now, unseen - each with the favourite it \
-came from. Judge them against what they asked for; do not just list them.
+their own services unless they ask about others, available now, unseen - \
+each with the favourite it came from. Pass what they asked for (genres for a \
+mood, max_minutes, min_score) rather than filtering the picks afterwards. \
+Judge them against what they asked for; do not just list them.
 - similar_to(title_id) on one of their favourites is the strongest lead: it \
 returns titles sharing genres, director and leads, each with why. It already \
 leaves out what they have seen or saved.
@@ -196,20 +200,63 @@ def build_server(client: EifoClient, **options: Any) -> MCPServer:
 
     @tool
     def recommendations(
-        services: Services = None,
+        services: Annotated[
+            list[str] | None,
+            Field(
+                description=(
+                    'Service names or keys, e.g. ["Netflix", "yes"]. Omit for the services '
+                    'the user saved as theirs; ["all"] for every service.'
+                )
+            ),
+        ] = None,
         type: Literal["movie", "series"] | None = None,
+        genres: Annotated[
+            list[str] | None,
+            Field(
+                description=(
+                    "Only picks with all of these genres, English or Hebrew. For a mood, "
+                    'the genre it means: "something light" is ["Comedy"], "edge of my '
+                    'seat" ["Thriller"].'
+                )
+            ),
+        ] = None,
+        max_minutes: Annotated[
+            int | None, Field(ge=1, le=1000, description="Longest film; films only")
+        ] = None,
+        min_score: Annotated[
+            int | None, Field(ge=0, le=100, description="Eifo's combined score, 0-100")
+        ] = None,
         limit: Annotated[int, Field(ge=1, le=30)] = 12,
     ) -> dict[str, Any]:
         """Picks for the user from their favourites: available now, not seen or saved.
 
-        Each pick names the favourite it came from (and the user's rating of it)
-        and what the two share. A good first call for "what should I watch?".
+        On the user's own services unless others are asked for. Each pick names
+        the favourite it came from (and the user's rating of it) and what the
+        two share. Genres, length and score narrow where picks come from, so
+        "a comedy under two hours" gets the best of those, not a few leftovers.
+        A good first call for "what should I watch?".
         """
+        if services is None:
+            keys = _my_keys(client) or None
+            on = "the user's services" if keys else "every service (the user saved none)"
+        else:
+            keys = _service_keys(client, services)
+            on = "every service" if keys is None else "the services asked about"
         picks = client.get(
             "/me/for-you",
-            {"sources": _csv(_service_keys(client, services)), "type": type, "limit": limit},
+            {
+                "sources": _csv(keys),
+                "type": type,
+                "genres": _csv(str(genre_id) for genre_id in _genre_ids(client, genres)),
+                "runtime_max": max_minutes,
+                "score_min": min_score,
+                "limit": limit,
+            },
         )
-        return {"picks": [shaping.pick(pick, client.link(pick["id"])) for pick in picks]}
+        return {
+            "on": on,
+            "picks": [shaping.pick(pick, client.link(pick["id"])) for pick in picks],
+        }
 
     @tool
     def similar_to(
@@ -384,9 +431,10 @@ def build_server(client: EifoClient, **options: Any) -> MCPServer:
             limits.append(f"In the mood for: {mood.strip()}.")
         return (
             "Recommend three things for me to watch tonight using Eifo. First read my "
-            "taste (taste_profile). Then look for titles like my favourites (similar_to) "
-            "and search my services (search_titles, services=['mine']) for titles "
-            "available now that I have not seen or saved (skip='listed'). "
+            "taste (taste_profile) and get picks from my favourites (recommendations, "
+            "with max_minutes and genres for the mood if I gave them). If they are thin, "
+            "look for titles like my favourites (similar_to) and search my services "
+            "(search_titles, services=['mine'], skip='listed'). "
             + " ".join(limits)
             + " For each pick: why it fits my taste, its score, length, where to watch it, "
             "and the link."
@@ -446,6 +494,8 @@ def _service_keys(client: EifoClient, wanted: list[str] | None) -> list[str] | N
                 )
             keys.extend(mine)
             continue
+        if folded == EVERY_SERVICE:
+            return None
         if folded == OTHER_SERVICES:
             keys.append(OTHER_SERVICES)
             continue

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.31.0](https://github.com/barakbl/eifo/compare/v0.30.0...v0.31.0) (2026-10-11)
+
+
+### Features
+
+* picks worth watching, a row that varies, and a new one every day ([#158](https://github.com/barakbl/eifo/issues/158)) ([eacdf52](https://github.com/barakbl/eifo/commit/eacdf52736c9981889d29fbc8985a273538a6f09))
+
 ## [0.30.0](https://github.com/barakbl/eifo/compare/v0.29.0...v0.30.0) (2026-10-11)
 
 

@@ -440,7 +440,7 @@ def for_you(
         runtime_max=None,
     ).where(Title.id.not_in(_own_titles(user_id, Exclude.LISTED)))
 
-    picks = taste.for_you(session, user_id, within=within, limit=limit)
+    picks = taste.for_you(session, user_id, within=within, limit=limit, day=now.date())
     answer = _recommendations(session, picks)
 
     _for_you[key] = (now + FOR_YOU_TTL, answer)

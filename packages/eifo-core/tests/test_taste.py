@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any
 
 import pytest
@@ -13,12 +14,14 @@ from eifo_core.enums import CreditRole, TitleKind
 from eifo_core.models import AggregateScore, Credit, Genre, Person, Title, User, UserItem
 from eifo_core.taste import (
     GENRE_WEIGHT,
+    PER_MIX_PICKS,
     PER_SEED_PICKS,
     SEEDS,
     favourite_floor,
     for_you,
     genre_rarity,
     profile,
+    quality_floor,
     seed_of,
     similar,
     taste,
@@ -495,6 +498,73 @@ class TestForYou:
 
         assert names.index("Musical western") < names.index("Animated western")
 
+    def test_a_weak_film_needs_more_than_genres(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        """Favourites in the high eighties: a 50 sharing only genres is out,
+        a 50 by the favourite's own director is in."""
+        world.rate(
+            user, world.film("Favourite", genres=("Western",), director="Auteur", score=88), 10
+        )
+        for index in range(3):
+            world.rate(user, world.film(f"Classic {index}", genres=("Noir",), score=86), 9)
+        world.film("Weak western", genres=("Western",), score=50)
+        world.film("Weak but his", genres=("Comedy",), director="Auteur", score=50)
+        world.film("Good western", genres=("Western",), score=80)
+        world.film("Unscored western", genres=("Western",))
+
+        assert quality_floor(session, user.id) == 71
+        names = self._names(session, for_you(session, user.id))
+        assert "Weak western" not in names
+        assert {"Weak but his", "Good western", "Unscored western"} <= set(names)
+
+    def test_no_quality_floor_without_scored_favourites(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        world.rate(user, world.film("Unscored favourite"), 10)
+
+        assert quality_floor(session, user.id) is None
+
+    def test_one_mix_cannot_fill_the_row(self, session: Session, user: User, world: World) -> None:
+        for index in range(3):
+            world.rate(user, world.film(f"Love {index}", genres=("Western",)), 10)
+        for index in range(5):
+            world.film(f"Western {index}", genres=("Western",), score=90)
+        world.film("Something else", genres=("Western", "Comedy"), score=40)
+
+        names = self._names(session, for_you(session, user.id))
+
+        assert len([name for name in names if name.startswith("Western")]) == PER_MIX_PICKS
+        assert "Something else" in names
+
+    def test_variety_beats_a_near_twin(self, session: Session, user: User, world: World) -> None:
+        """After one crime drama, a slightly weaker match of another kind goes
+        before a second crime drama."""
+        world.rate(user, world.film("Love", genres=("Crime", "Drama", "Mystery")), 10)
+        world.film("Crime drama 1", genres=("Crime", "Drama"), score=90)
+        world.film("Crime drama 2", genres=("Crime", "Drama"), score=90)
+        world.film("Mystery drama", genres=("Mystery", "Drama"), score=90)
+        # Mystery as common as crime, so the two dramas match equally, and
+        # the one made first - the crime drama - would win a tie.
+        world.film("Mystery horror", genres=("Mystery", "Horror"))
+
+        names = self._names(session, for_you(session, user.id))
+
+        assert names.index("Mystery drama") < names.index("Crime drama 2")
+
+    def test_the_row_turns_over_by_day(self, session: Session, user: User, world: World) -> None:
+        world.rate(user, world.film("Love", genres=("Western",)), 10)
+        for index in range(12):
+            world.film(f"Western {index}", genres=("Western", f"Flavour {index}"))
+        first, second = dt.date(2026, 10, 12), dt.date(2026, 10, 13)
+
+        def row(day: dt.date) -> list[int]:
+            return [pick.title_id for pick in for_you(session, user.id, limit=3, day=day)]
+
+        assert row(first) == row(first), "the same all day"
+        assert row(first) != row(second)
+        assert row(first) != [pick.title_id for pick in for_you(session, user.id, limit=3)]
+
     def test_never_what_the_member_rated(self, session: Session, user: User, world: World) -> None:
         """Two favourites alike would otherwise recommend each other."""
         first, second = world.film("First"), world.film("Second")
@@ -523,7 +593,8 @@ class TestForYou:
         world.rate(user, world.film("Franchise", genres=("Action",)), 10)
         world.rate(user, world.film("Other love", genres=("Romance",)), 9)
         for number in range(6):
-            world.film(f"Sequel {number}", genres=("Action",), score=90)
+            # Each its own mix, so only the per-favourite limit binds.
+            world.film(f"Sequel {number}", genres=("Action", f"Flavour {number}"), score=90)
         world.film("Something else", genres=("Romance",), score=50)
 
         picks = for_you(session, user.id)

@@ -295,6 +295,30 @@ export function forYou({ sources = [], type = null, limit = 12 } = {}, options) 
   return request(`/me/for-you?${params}`, options);
 }
 
+/**
+ * Build a recommendations query from filter state plus paging.
+ *
+ * The page's own subset of the catalog's filters: picks are always available
+ * now and never searched by name, so those are not sent.
+ */
+export function recommendationsQuery(filters = {}, { page = 1, pageSize = 24 } = {}) {
+  const params = new URLSearchParams();
+  if (filters.sources?.length) params.set("sources", filters.sources.join(","));
+  if (filters.type) params.set("type", filters.type);
+  if (filters.genres?.length) params.set("genres", filters.genres.join(","));
+  if (filters.scoreMin) params.set("score_min", String(filters.scoreMin));
+  if (filters.runtimeMax) params.set("runtime_max", String(filters.runtimeMax));
+  if (filters.sort) params.set("sort", filters.sort);
+  params.set("page", String(page));
+  params.set("page_size", String(pageSize));
+  return params.toString();
+}
+
+/** Every pick for the member, a page at a time, each with its favourite. */
+export function listRecommendations(filters, paging, options) {
+  return request(`/me/recommendations?${recommendationsQuery(filters, paging)}`, options);
+}
+
 /** Titles like one title, each with what it shares with it. */
 export function similarTitles(titleId, { exclude = null, pageSize = 12 } = {}, options) {
   const params = new URLSearchParams({ page_size: String(pageSize) });

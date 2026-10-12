@@ -81,7 +81,7 @@ const AVAILABILITY = ["current", "any", "gone"];
 // live - so a viewer's chosen services default back on their next visit.
 const STORAGE_SOURCES = "eifo.sources";
 
-function saveSources(keys) {
+export function saveSources(keys) {
   try {
     window.localStorage.setItem(STORAGE_SOURCES, JSON.stringify(keys));
   } catch {
@@ -90,13 +90,26 @@ function saveSources(keys) {
 }
 
 /** The remembered service keys, or null if nothing was ever saved. */
-function readSavedSources() {
+export function readSavedSources() {
   try {
     const value = JSON.parse(window.localStorage.getItem(STORAGE_SOURCES) ?? "null");
     return Array.isArray(value) ? value.filter((key) => typeof key === "string") : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * The services last chosen, in the catalog or on the page of picks: one
+ * selection, so the two never disagree about what "my grid" is showing.
+ *
+ * Only services still tracked, so a retired one never filters a page down to
+ * nothing. Empty - every service - when nothing was ever chosen.
+ */
+export function rememberedSources(sources) {
+  return (readSavedSources() ?? []).filter((key) =>
+    sources.some((source) => source.key === key && source.title_count > 0),
+  );
 }
 
 export function createHomeView({ mount, app, router, items }) {
@@ -106,15 +119,9 @@ export function createHomeView({ mount, app, router, items }) {
     const filters = paramsToFilters(route.search);
 
     // An explicit ?sources= in the URL wins (shared/deep links); otherwise fall
-    // back to the viewer's remembered selection, keeping only services we still
-    // track so a retired one never filters the catalog down to nothing.
+    // back to the viewer's remembered selection.
     if (!new URLSearchParams(route.search).has("sources")) {
-      const saved = readSavedSources();
-      if (saved) {
-        filters.sources = saved.filter((key) =>
-          sources.some((s) => s.key === key && s.title_count > 0),
-        );
-      }
+      filters.sources = rememberedSources(sources);
     }
 
     const state = {
@@ -339,9 +346,27 @@ export function createHomeView({ mount, app, router, items }) {
   };
 }
 
-function buildFilterBar({ state, sources, genres, language, user, t, onChange, onSaveMine }) {
+/**
+ * The bar of filters above a grid.
+ *
+ * `picks` is the page of recommendations: `{ sorts, sortLabel }`. A pick is
+ * always available now and is ordered one way round, and its year is not
+ * something the picking narrows by, so those controls are left out there
+ * rather than shown and ignored.
+ */
+export function buildFilterBar({
+  state,
+  sources,
+  genres,
+  language,
+  user,
+  t,
+  onChange,
+  onSaveMine,
+  picks = null,
+}) {
   const combo = serviceCombo({ state, sources, user, t, onChange, onSaveMine });
-  const more = moreFilters({ state, genres, language, t, onChange });
+  const more = moreFilters({ state, genres, language, t, onChange, years: !picks });
   const direction = sortDirection({ state, t, onChange });
 
   const type = select({
@@ -360,9 +385,9 @@ function buildFilterBar({ state, sources, genres, language, user, t, onChange, o
     onChange: (value) => onChange({ available: value }),
   });
   const sort = select({
-    values: SORTS,
+    values: picks?.sorts ?? SORTS,
     current: state.filters.sort,
-    label: (value) => t(`filters.sort.${value}`),
+    label: picks?.sortLabel ?? ((value) => t(`filters.sort.${value}`)),
     // A new field starts the way it reads best; the arrow is for arguing
     // with that, not something to re-argue on every change.
     onChange: (value) => onChange({ sort: value, order: "" }),
@@ -374,16 +399,10 @@ function buildFilterBar({ state, sources, genres, language, user, t, onChange, o
     el("div", { class: "filters__row shell" }, [
       combo.node,
       type,
-      available,
+      picks ? null : available,
       sort,
-      direction.node,
+      picks ? null : direction.node,
       more.node,
-      // A way out of the catalog rather than another way through it, so it sits
-      // at the end of the row and is a link: what is new is a page, not a
-      // filter, and something to come back from.
-      el("a", { class: "control control--new", href: "#/new", text: t("filters.whatsNew") }),
-      // Beside it, and for the same reason: somewhere to go, not a filter.
-      el("a", { class: "control control--new", href: "#/stats", text: t("filters.stats") }),
     ]),
   );
 
@@ -446,7 +465,7 @@ function sortDirection({ state, t, onChange }) {
  * Folded away behind a disclosure because they are the second question, not the
  * first: the bar stays as short as it was for anybody who does not want them.
  */
-function moreFilters({ state, genres, language, t, onChange }) {
+function moreFilters({ state, genres, language, t, onChange, years: withYears = true }) {
   const years = yearRange({ state, t, onChange });
   const length = runtimeChips({ state, t, onChange });
   const chosenGenres = () => new Set(state.filters.genres);
@@ -497,11 +516,13 @@ function moreFilters({ state, genres, language, t, onChange }) {
         length.node,
         el("p", { class: "morefilters__note", text: t("filters.lengthNote") }),
       ]),
-      el("div", { class: "morefilters__group" }, [
-        el("h3", { class: "morefilters__heading", text: t("filters.years") }),
-        years.node,
-        el("p", { class: "morefilters__note", text: t("filters.yearsNote") }),
-      ]),
+      withYears
+        ? el("div", { class: "morefilters__group" }, [
+            el("h3", { class: "morefilters__heading", text: t("filters.years") }),
+            years.node,
+            el("p", { class: "morefilters__note", text: t("filters.yearsNote") }),
+          ])
+        : null,
       genreOptions.length
         ? el("div", { class: "morefilters__group" }, [
             el("h3", { class: "morefilters__heading", text: t("filters.genres") }),

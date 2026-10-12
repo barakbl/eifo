@@ -105,6 +105,41 @@ img {
   min-height: var(--header-height);
 }
 
+/* The pages, in the header so they are on every one of them: a row of words,
+ * the current one underlined in the accent. It scrolls sideways inside itself
+ * on a phone rather than wrapping the header a third time. */
+.pages__row {
+  display: flex;
+  gap: var(--space-5);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.pages__row::-webkit-scrollbar {
+  display: none;
+}
+
+.pages__link {
+  flex: none;
+  padding-block: var(--space-2);
+  border-block-end: 2px solid transparent;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.pages__link:hover,
+.pages__link:focus-visible {
+  color: var(--fg);
+}
+
+.pages__link[aria-current="page"] {
+  border-block-end-color: var(--accent);
+  color: var(--fg);
+}
+
 .wordmark {
   display: inline-flex;
   align-items: baseline;
@@ -682,21 +717,6 @@ img {
   border-radius: var(--radius-pill);
   font: inherit;
   font-size: var(--text-sm);
-}
-
-/* Not a filter: the way to the arrivals page, at the end of the row. Outlined
-   in the accent so it reads as somewhere to go rather than something to set. */
-.control--new {
-  border-color: color-mix(in oklab, var(--accent) 45%, var(--line));
-  color: var(--accent);
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.control--new:hover,
-.control--new:focus-visible {
-  border-color: var(--accent);
-  background: color-mix(in oklab, var(--accent) 10%, var(--surface));
 }
 
 /* -- grid ----------------------------------------------------------------- */
@@ -3285,11 +3305,6 @@ input {
     min-block-size: var(--tap-compact);
   }
 
-  .control--new {
-    display: inline-flex;
-    align-items: center;
-  }
-
   .control--order {
     inline-size: var(--tap-compact);
   }
@@ -3444,6 +3459,33 @@ input {
 
 .shelf__title {
   margin: 0;
+}
+
+/* The way to the whole list, at the far end of the row's heading. */
+.shelf__more {
+  margin-inline-start: auto;
+  color: var(--accent);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.shelf__more:hover,
+.shelf__more:focus-visible {
+  text-decoration: underline;
+}
+
+/* The page of picks: a title and a line about it, then the catalog's own
+ * bar and grid. */
+.foryou__head .page__title {
+  margin-block-end: var(--space-2);
+}
+
+.foryou__note {
+  margin: 0 0 var(--space-4);
+  max-inline-size: 60ch;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
 }
 
 .shelf__note,

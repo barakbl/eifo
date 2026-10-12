@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { forYouReason, sharedReason } from "../js/picks.js";
+import { forYouReason, picksFilters, sharedReason } from "../js/picks.js";
 
 const t = (key, values = {}) =>
   `${key}:${Object.entries(values)
@@ -58,5 +58,34 @@ describe("sharedReason", () => {
 
   it("says nothing rather than something empty", () => {
     assert.equal(sharedReason({}, "en", t), "");
+  });
+});
+
+describe("picksFilters", () => {
+  const remembered = ["netflix_il", "yes"];
+
+  it("opens on the services the catalog is showing", () => {
+    assert.deepEqual(picksFilters("", remembered).sources, remembered);
+    assert.deepEqual(picksFilters("sort=score", []).sources, []);
+  });
+
+  it("lets the address name its own", () => {
+    assert.deepEqual(picksFilters("sources=hot", remembered).sources, ["hot"]);
+  });
+
+  it("keeps only what a pick is narrowed and ordered by", () => {
+    const filters = picksFilters(
+      "q=heat&type=movie&genres=3,9&score_min=70&runtime_max=120&sort=year&year_min=1990&order=asc",
+      [],
+    );
+    assert.deepEqual(
+      [filters.type, filters.genres, filters.scoreMin, filters.runtimeMax, filters.sort],
+      ["movie", ["3", "9"], "70", "120", "year"],
+    );
+    assert.deepEqual([filters.q, filters.yearMin, filters.order], ["", "", ""]);
+  });
+
+  it("falls back to best match for an order it does not have", () => {
+    assert.equal(picksFilters("sort=name", []).sort, "");
   });
 });

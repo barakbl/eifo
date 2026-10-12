@@ -241,6 +241,7 @@ class TestTaste:
 
         assert reader.get("/api/v1/me/taste").status_code == 200
         assert reader.get("/api/v1/me/for-you").status_code == 200
+        assert reader.get("/api/v1/me/recommendations").status_code == 200
         assert reader.get(f"/api/v1/titles/{films.seed}/similar").status_code == 200
 
 
@@ -349,3 +350,109 @@ class TestForYou:
         self, client: TestClient, csrf: str, films: Films
     ) -> None:
         assert client.get("/api/v1/me/for-you").headers["Cache-Control"] == "no-store"
+
+
+class TestRecommendations:
+    """The page behind the row: every pick, paged, sorted and narrowed."""
+
+    URL = "/api/v1/me/recommendations"
+
+    def rate(self, client: TestClient, csrf: str, title_id: int, **body: object) -> None:
+        response = client.put(
+            f"/api/v1/me/items/{title_id}", json=body, headers={CSRF_HEADER: csrf}
+        )
+        assert response.status_code == 200, response.text
+
+    def test_needs_somebody(self, client: TestClient) -> None:
+        assert client.get(self.URL).status_code == 401
+
+    def test_nothing_until_something_is_loved(
+        self, client: TestClient, csrf: str, films: Films
+    ) -> None:
+        page = client.get(self.URL).json()
+
+        assert (page["items"], page["total"]) == ([], 0)
+
+    def test_every_pick_best_first_with_its_reason(
+        self, client: TestClient, csrf: str, films: Films
+    ) -> None:
+        self.rate(client, csrf, films.seed, rating=10)
+
+        page = client.get(self.URL).json()
+
+        assert ids(page)[0] == films.same_director
+        assert set(ids(page)) == {
+            films.same_director,
+            films.same_genre,
+            films.elsewhere,
+            films.israeli,
+        }
+        assert page["total"] == 4
+        assert page["items"][0]["seed"]["title_id"] == films.seed
+        assert page["items"][0]["because"]["people"][0]["name_en"] == "An Auteur"
+
+    def test_a_page_at_a_time(self, client: TestClient, csrf: str, films: Films) -> None:
+        self.rate(client, csrf, films.seed, rating=10)
+        everything = ids(client.get(self.URL).json())
+
+        first = client.get(self.URL, params={"page_size": 3}).json()
+        second = client.get(self.URL, params={"page_size": 3, "page": 2}).json()
+
+        assert ids(first) + ids(second) == everything
+        assert (second["page"], second["page_size"], second["total"]) == (2, 3, 4)
+
+    def test_sorted_without_changing_what_is_picked(
+        self, client: TestClient, csrf: str, films: Films, session_factory: sessionmaker[Session]
+    ) -> None:
+        self.rate(client, csrf, films.seed, rating=10)
+        with session_factory() as session:
+            session.get_one(Title, films.israeli).year = 2020
+            session.get_one(Title, films.elsewhere).year = 2010
+            session.add(AggregateScore(title_id=films.same_genre, score=95, components={}))
+            session.add(AggregateScore(title_id=films.israeli, score=70, components={}))
+            session.commit()
+        picked = set(ids(client.get(self.URL).json()))
+
+        newest = client.get(self.URL, params={"sort": "year"}).json()
+        best = client.get(self.URL, params={"sort": "score"}).json()
+        latest = client.get(self.URL, params={"sort": "recently_added"}).json()
+
+        assert ids(newest)[:2] == [films.israeli, films.elsewhere]
+        # What nobody has scored comes after what somebody has.
+        assert ids(best)[:2] == [films.same_genre, films.israeli]
+        assert set(ids(newest)) == set(ids(best)) == set(ids(latest)) == picked
+        assert client.get(self.URL, params={"sort": "name"}).status_code == 422
+
+    def test_sorted_pages_follow_on(self, client: TestClient, csrf: str, films: Films) -> None:
+        self.rate(client, csrf, films.seed, rating=10)
+        params = {"sort": "year", "page_size": 3}
+
+        first = client.get(self.URL, params=params).json()
+        second = client.get(self.URL, params={**params, "page": 2}).json()
+
+        assert len(ids(first) + ids(second)) == len(set(ids(first) + ids(second))) == 4
+
+    def test_narrowed_like_the_row(
+        self, client: TestClient, csrf: str, films: Films, session_factory: sessionmaker[Session]
+    ) -> None:
+        self.rate(client, csrf, films.seed, rating=10)
+        with session_factory() as session:
+            crime = session.scalars(select(Genre.id).where(Genre.name_en == "Crime")).one()
+
+        on_yes = client.get(self.URL, params={"sources": "yes"}).json()
+        crimes = client.get(self.URL, params={"genres": str(crime), "type": "movie"}).json()
+        series = client.get(self.URL, params={"type": "series"}).json()
+
+        assert set(ids(on_yes)) == {films.elsewhere, films.israeli}
+        assert set(ids(crimes)) == {films.same_genre, films.elsewhere}
+        assert (series["items"], series["total"]) == ([], 0)
+
+    def test_never_what_is_on_a_list_and_seen_at_once(
+        self, client: TestClient, csrf: str, films: Films
+    ) -> None:
+        self.rate(client, csrf, films.seed, rating=10)
+        assert films.same_genre in ids(client.get(self.URL).json())
+
+        self.rate(client, csrf, films.same_genre, want_to_watch=True)
+
+        assert films.same_genre not in ids(client.get(self.URL).json())

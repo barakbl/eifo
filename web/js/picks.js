@@ -8,10 +8,37 @@
 
 import { forYou, similarTitles } from "./api.js";
 
+import { DEFAULT_FILTERS, paramsToFilters } from "./format.js";
 import { el, replace, titleCard } from "./ui.js";
 
 /** How many picks a row shows. One scroll on a phone, a glance on a desk. */
 export const SHELF_SIZE = 12;
+
+/**
+ * How the page of picks can be ordered. The empty one is the order they are
+ * worked out in - best match first - and the default.
+ */
+export const PICK_SORTS = ["", "score", "year", "recently_added"];
+
+/**
+ * The page's filters from its URL: only what a pick can be narrowed by.
+ *
+ * `remembered` is the services the catalog is showing - the one selection a
+ * viewer makes, wherever they made it - and an address that names its own
+ * services wins, as it does there.
+ */
+export function picksFilters(search, remembered = []) {
+  const read = paramsToFilters(search);
+  return {
+    ...DEFAULT_FILTERS,
+    sources: new URLSearchParams(search).has("sources") ? read.sources : [...remembered],
+    type: read.type,
+    genres: read.genres,
+    scoreMin: read.scoreMin,
+    runtimeMax: read.runtimeMax,
+    sort: PICK_SORTS.includes(read.sort) ? read.sort : "",
+  };
+}
 
 /** "Because you rated Reservoir Dogs 10" - the favourite a pick came from. */
 export function forYouReason(pick, language, t) {
@@ -38,17 +65,18 @@ export function sharedReason(card, language, t) {
 }
 
 /** A titled, horizontally scrolling row of cards, each with its reason. */
-export function shelf({ heading, note, cards }) {
+export function shelf({ heading, note, more = null, cards }) {
   return [
     el("div", { class: "shelf__head" }, [
       el("h2", { class: "section__heading shelf__title", text: heading }),
       note ? el("p", { class: "shelf__note", text: note }) : null,
+      more ? el("a", { class: "shelf__more", href: more.href, text: more.label }) : null,
     ]),
     el("ul", { class: "shelf__list" }, cards),
   ];
 }
 
-function cardWithReason(title, language, index, t, reason, actionsFor = null) {
+export function cardWithReason(title, language, index, t, reason, actionsFor = null) {
   const card = titleCard(title, language, index, actionsFor ? actionsFor(title.id) : null, t);
   if (reason) card.append(el("p", { class: "shelf__why", text: reason }));
   return card;
@@ -95,6 +123,8 @@ export async function fillForYou(
     shelf({
       heading: t("forYou.title"),
       note: t("forYou.note"),
+      // The row is a dozen of them; the page is the rest.
+      more: { href: "#/for-you", label: t("forYou.all") },
       cards: picks.map((pick, index) =>
         // The watch-later toggle on each: saving a pick for the weekend is
         // the most likely thing to do with one.

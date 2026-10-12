@@ -753,6 +753,7 @@ def for_you(
     within: Select[tuple[int]] | None = None,
     limit: int = 12,
     day: dt.date | None = None,
+    varied: bool = True,
 ) -> list[Pick]:
     """Titles a member is likely to enjoy, from what they rated highly.
 
@@ -769,6 +770,11 @@ def for_you(
     ``day`` turns the row over daily: favourites equally loved take turns,
     and near-equal picks trade places, the same way all day. None keeps
     the order fixed.
+
+    ``varied`` is for a row, where a dozen seats have to show a member's
+    whole taste. A page of picks is read to the end and sorted and narrowed
+    by its reader, so without it this is simply the best matches first, as
+    many from one favourite as earn it.
     """
     favourites = session.execute(
         select(Title, UserItem.rating, UserItem.updated_at)
@@ -863,6 +869,8 @@ def for_you(
             score += SHUFFLE * _dice(user_id, day, pick.title_id)
         scored.append(replace(pick, score=score))
 
+    if not varied:
+        return sorted(scored, key=lambda pick: (-pick.score, pick.title_id))[:limit]
     return _varied(scored, facets, limit)
 
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.32.0](https://github.com/barakbl/eifo/compare/v0.31.0...v0.32.0) (2026-10-11)
+
+
+### Features
+
+* one person once - a TMDB director and a catalogue's Hebrew name for them are joined ([#160](https://github.com/barakbl/eifo/issues/160)) ([b403128](https://github.com/barakbl/eifo/commit/b403128f2eaa8dc449c829c6c675e62497245b8f))
+* picks on your own services, for a mood and a length ([#162](https://github.com/barakbl/eifo/issues/162)) ([795e34c](https://github.com/barakbl/eifo/commit/795e34cd28c3146a85484f3e32ee95fb50031c10))
+
 ## [0.31.0](https://github.com/barakbl/eifo/compare/v0.30.0...v0.31.0) (2026-10-11)
 
 

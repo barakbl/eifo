@@ -8,10 +8,59 @@
 
 import { forYou, similarTitles } from "./api.js";
 
+import { DEFAULT_FILTERS, filtersToParams, paramsToFilters } from "./format.js";
 import { el, replace, titleCard } from "./ui.js";
 
 /** How many picks a row shows. One scroll on a phone, a glance on a desk. */
 export const SHELF_SIZE = 12;
+
+/**
+ * How the page of picks can be ordered. The empty one is the order they are
+ * worked out in - best match first - and the default.
+ */
+export const PICK_SORTS = ["", "score", "year", "recently_added"];
+
+/**
+ * In the page's URL, "every service" - said out loud.
+ *
+ * The page opens on the member's own services, so an address with no services
+ * in it means those. A member who then asks about everywhere needs that to
+ * survive opening a title and coming back, and "nothing" is already taken.
+ */
+export const ANY_SERVICE = "any";
+
+/**
+ * The page's filters from its URL: the member's own services unless it says
+ * otherwise, and only what a pick can be narrowed by.
+ */
+export function picksFilters(search, preset = []) {
+  const read = paramsToFilters(search);
+  const params = new URLSearchParams(search);
+  let sources = read.sources;
+  if (!params.has("sources")) sources = [...preset];
+  else if (params.get("sources") === ANY_SERVICE) sources = [];
+  return {
+    ...DEFAULT_FILTERS,
+    sources,
+    type: read.type,
+    genres: read.genres,
+    scoreMin: read.scoreMin,
+    runtimeMax: read.runtimeMax,
+    sort: PICK_SORTS.includes(read.sort) ? read.sort : "",
+  };
+}
+
+/** The query string that reads back as these filters, shortest form. */
+export function picksSearch(filters, preset = []) {
+  const params = filtersToParams(filters);
+  const chosen = new Set(filters.sources);
+  if (preset.length && chosen.size === preset.length && preset.every((key) => chosen.has(key))) {
+    params.delete("sources");
+  } else if (!chosen.size && preset.length) {
+    params.set("sources", ANY_SERVICE);
+  }
+  return params.toString();
+}
 
 /** "Because you rated Reservoir Dogs 10" - the favourite a pick came from. */
 export function forYouReason(pick, language, t) {
@@ -38,17 +87,18 @@ export function sharedReason(card, language, t) {
 }
 
 /** A titled, horizontally scrolling row of cards, each with its reason. */
-export function shelf({ heading, note, cards }) {
+export function shelf({ heading, note, more = null, cards }) {
   return [
     el("div", { class: "shelf__head" }, [
       el("h2", { class: "section__heading shelf__title", text: heading }),
       note ? el("p", { class: "shelf__note", text: note }) : null,
+      more ? el("a", { class: "shelf__more", href: more.href, text: more.label }) : null,
     ]),
     el("ul", { class: "shelf__list" }, cards),
   ];
 }
 
-function cardWithReason(title, language, index, t, reason, actionsFor = null) {
+export function cardWithReason(title, language, index, t, reason, actionsFor = null) {
   const card = titleCard(title, language, index, actionsFor ? actionsFor(title.id) : null, t);
   if (reason) card.append(el("p", { class: "shelf__why", text: reason }));
   return card;
@@ -95,6 +145,8 @@ export async function fillForYou(
     shelf({
       heading: t("forYou.title"),
       note: t("forYou.note"),
+      // The row is a dozen of them; the page is the rest.
+      more: { href: "#/for-you", label: t("forYou.all") },
       cards: picks.map((pick, index) =>
         // The watch-later toggle on each: saving a pick for the weekend is
         // the most likely thing to do with one.

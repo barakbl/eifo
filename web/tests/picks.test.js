@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { forYouReason, sharedReason } from "../js/picks.js";
+import {
+  ANY_SERVICE,
+  forYouReason,
+  picksFilters,
+  picksSearch,
+  sharedReason,
+} from "../js/picks.js";
 
 const t = (key, values = {}) =>
   `${key}:${Object.entries(values)
@@ -58,5 +64,57 @@ describe("sharedReason", () => {
 
   it("says nothing rather than something empty", () => {
     assert.equal(sharedReason({}, "en", t), "");
+  });
+});
+
+describe("picksFilters", () => {
+  const mine = ["netflix_il", "yes"];
+
+  it("opens on the member's own services", () => {
+    assert.deepEqual(picksFilters("", mine).sources, mine);
+  });
+
+  it("lets the address say otherwise, including everywhere", () => {
+    assert.deepEqual(picksFilters("sources=hot", mine).sources, ["hot"]);
+    assert.deepEqual(picksFilters(`sources=${ANY_SERVICE}`, mine).sources, []);
+  });
+
+  it("keeps only what a pick is narrowed and ordered by", () => {
+    const filters = picksFilters(
+      "q=heat&type=movie&genres=3,9&score_min=70&runtime_max=120&sort=year&year_min=1990&order=asc",
+      [],
+    );
+    assert.deepEqual(
+      [filters.type, filters.genres, filters.scoreMin, filters.runtimeMax, filters.sort],
+      ["movie", ["3", "9"], "70", "120", "year"],
+    );
+    assert.deepEqual([filters.q, filters.yearMin, filters.order], ["", "", ""]);
+  });
+
+  it("falls back to best match for an order it does not have", () => {
+    assert.equal(picksFilters("sort=name", []).sort, "");
+  });
+});
+
+describe("picksSearch", () => {
+  const mine = ["netflix_il", "yes"];
+  const round = (search) => picksSearch(picksFilters(search, mine), mine);
+
+  it("says nothing about services while they are the member's own", () => {
+    assert.equal(round(""), "");
+    assert.equal(round("sort=score"), "sort=score");
+  });
+
+  it("says everywhere out loud, so it survives coming back", () => {
+    assert.equal(picksSearch({ ...picksFilters("", mine), sources: [] }, mine), "sources=any");
+    assert.equal(round("sources=any"), "sources=any");
+  });
+
+  it("has nothing to say for a member with no services saved", () => {
+    assert.equal(picksSearch(picksFilters("", []), []), "");
+  });
+
+  it("carries any other choice as it is", () => {
+    assert.equal(round("sources=hot&type=series"), "sources=hot&type=series");
   });
 });

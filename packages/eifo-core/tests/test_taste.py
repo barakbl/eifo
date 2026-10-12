@@ -603,6 +603,22 @@ class TestForYou:
         assert len(sequels) == PER_SEED_PICKS
         assert "Something else" in self._names(session, picks)
 
+    def test_a_page_of_picks_is_every_match_best_first(
+        self, session: Session, user: User, world: World
+    ) -> None:
+        """Unvaried, a favourite supplies as many as earn it: a page is read
+        to the end, and is the reader's to sort and narrow."""
+        world.rate(user, world.film("Loved", director="Auteur", genres=("Western",)), 10)
+        for number in range(PER_SEED_PICKS + 2):
+            world.film(f"Like it {number}", genres=("Western",))
+        world.film("By the same hand", director="Auteur", genres=("Western",))
+
+        picks = for_you(session, user.id, limit=50, varied=False)
+
+        assert len(picks) == PER_SEED_PICKS + 3
+        assert self._names(session, picks)[0] == "By the same hand"
+        assert [pick.score for pick in picks] == sorted((p.score for p in picks), reverse=True)
+
     def test_within_is_the_callers_to_decide(
         self, session: Session, user: User, world: World
     ) -> None:

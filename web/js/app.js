@@ -13,7 +13,7 @@ import {
 import { accountMenu } from "./account.js";
 import { DEFAULT_LANGUAGE, directionOf, isSupported, translator } from "./i18n.js";
 import { createItemStore } from "./items.js";
-import { createRouter, parseHash } from "./router.js";
+import { buildHash, createRouter, pageTabs, parseHash } from "./router.js";
 import { createStore, debounce } from "./store.js";
 import { createSuggest } from "./suggest.js";
 import { QUERY_EVENT } from "./views/home.js";
@@ -21,6 +21,7 @@ import { el, wallCopy, replace, stateBlock } from "./ui.js";
 import { createHomeView } from "./views/home.js";
 import { createConnectView } from "./views/connect.js";
 import { createManageView } from "./views/manage.js";
+import { createForYouView } from "./views/foryou.js";
 import { createMyListView } from "./views/mylist.js";
 import { createPersonView } from "./views/person.js";
 import { createSettingsView } from "./views/settings.js";
@@ -114,7 +115,41 @@ function queryInHash() {
 }
 
 
-function buildHeader({ router }) {
+/**
+ * The pages, as tabs under the header, the one on screen marked.
+ *
+ * They were two links at the end of the catalog's filter bar - reachable from
+ * the catalog only, and saying nothing about where you were once you had
+ * followed one. A title or a person is under none of them, and none is marked.
+ */
+function buildTabs({ t, user }) {
+  return el(
+    "nav",
+    { class: "pages", "aria-label": t("nav.label") },
+    el(
+      "div",
+      { class: "pages__row shell" },
+      pageTabs({ signedIn: Boolean(user) }).map((tab) =>
+        el("a", {
+          class: "pages__link",
+          href: buildHash(tab.route),
+          text: t(tab.label),
+          dataset: { route: tab.route },
+        }),
+      ),
+    ),
+  );
+}
+
+/** Mark the tab for the page now on screen. The header outlives every view. */
+function markTab(route) {
+  for (const link of document.querySelectorAll(".pages__link")) {
+    if (link.dataset.route === route.name) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
+}
+
+function buildHeader({ router, tabs = true }) {
   const { t } = app.get();
 
   const input = el("input", {
@@ -133,11 +168,15 @@ function buildHeader({ router }) {
   // One request per keystroke would be slow for the viewer and rude to the
   // server; a quarter second is long enough to finish a word.
   const onInput = debounce((value) => {
-    const params = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+    const onCatalog = parseHash(window.location.hash).name === "home";
+    // Another page's query is that page's: the picks' "every service" and
+    // "newest first" are not filters the catalog has, and carried over they
+    // answered a search with an empty grid.
+    const params = new URLSearchParams(onCatalog ? (window.location.hash.split("?")[1] ?? "") : "");
     if (value) params.set("q", value);
     else params.delete("q");
 
-    if (parseHash(window.location.hash).name === "home") {
+    if (onCatalog) {
       // Already looking at the catalog: change the query in place. Navigating
       // would add a history entry per debounced keystroke - typing "fauda"
       // left two or three of them in the back button - and rebuild the whole
@@ -161,9 +200,7 @@ function buildHeader({ router }) {
 
   const { language, user, loginProviders } = app.get();
 
-  return el(
-    "header",
-    { class: "header" },
+  return el("header", { class: "header" }, [
     el("div", { class: "header__inner shell" }, [
       el("a", { class: "wordmark", href: "#/", text: t("app.name") }),
       el("div", { class: "search" }, [
@@ -196,7 +233,9 @@ function buildHeader({ router }) {
         accountMenu({ user, providers: loginProviders, t, onSignOut: () => signOut(router) }),
       ]),
     ]),
-  );
+    // Not on the wall: every one of them would lead back to it.
+    tabs ? buildTabs({ t, user }) : null,
+  ]);
 }
 
 async function signOut(router) {
@@ -336,6 +375,7 @@ async function start() {
       title: (route) => title(route),
       people: (route) => person(route),
       me: (route) => mylist(route),
+      "for-you": (route) => forYou(route),
       settings: (route) => settings(route),
       manage: (route) => manage(route),
       connect: (route) => connect(route),
@@ -353,7 +393,10 @@ async function start() {
       },
     },
     {
-      onChange: () => window.scrollTo({ top: 0 }),
+      onChange: (route) => {
+        window.scrollTo({ top: 0 });
+        markTab(route);
+      },
     },
   );
   const router = activeRouter;
@@ -361,6 +404,7 @@ async function start() {
   const home = createHomeView({ mount: main, app, router, items });
   const title = createTitleView({ mount: main, app, router, items });
   const mylist = createMyListView({ mount: main, app, router, items });
+  const forYou = createForYouView({ mount: main, app, router, items });
   const settings = createSettingsView({ mount: main, app, router, onSignedOut: () => signOut(router) });
   const connect = createConnectView({ mount: main, app });
   const person = createPersonView({ mount: main, app, router });
@@ -391,7 +435,7 @@ async function start() {
   if (context?.members_only && !user) {
     replace(
       root,
-      buildHeader({ router }),
+      buildHeader({ router, tabs: false }),
       loginNotice(app.get().t, { silence: "not_invited" }),
       signInWall(),
       buildFooter(null),

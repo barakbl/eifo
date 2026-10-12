@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 
-import { buildHash, createRouter, parseHash } from "../js/router.js";
+import { buildHash, createRouter, pageTabs, parseHash } from "../js/router.js";
 
 /** A window stand-in: records listeners so a test can fire `hashchange` itself. */
 function fakeWindow() {
@@ -143,5 +143,21 @@ describe("createRouter", () => {
 
     assert.deepEqual(seen, ["second"]);
     assert.equal(window.listenerCount("hashchange"), 1);
+  });
+});
+
+describe("pageTabs", () => {
+  it("offers the catalog, what is new and the stats to anybody", () => {
+    assert.deepEqual(
+      pageTabs().map((tab) => tab.route),
+      ["home", "new", "stats"],
+    );
+  });
+
+  it("adds the picks for a member, beside the catalog", () => {
+    assert.deepEqual(
+      pageTabs({ signedIn: true }).map((tab) => tab.route),
+      ["home", "for-you", "new", "stats"],
+    );
   });
 });

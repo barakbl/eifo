@@ -37,6 +37,7 @@ _READ: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         r"/me/items/services",
         r"/me/taste",
         r"/me/for-you",
+        r"/me/recommendations",
     )
 )
 

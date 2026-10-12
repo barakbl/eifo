@@ -339,9 +339,27 @@ export function createHomeView({ mount, app, router, items }) {
   };
 }
 
-function buildFilterBar({ state, sources, genres, language, user, t, onChange, onSaveMine }) {
+/**
+ * The bar of filters above a grid.
+ *
+ * `picks` is the page of recommendations: `{ sorts, sortLabel }`. A pick is
+ * always available now and is ordered one way round, and its year is not
+ * something the picking narrows by, so those controls are left out there
+ * rather than shown and ignored.
+ */
+export function buildFilterBar({
+  state,
+  sources,
+  genres,
+  language,
+  user,
+  t,
+  onChange,
+  onSaveMine,
+  picks = null,
+}) {
   const combo = serviceCombo({ state, sources, user, t, onChange, onSaveMine });
-  const more = moreFilters({ state, genres, language, t, onChange });
+  const more = moreFilters({ state, genres, language, t, onChange, years: !picks });
   const direction = sortDirection({ state, t, onChange });
 
   const type = select({
@@ -360,9 +378,9 @@ function buildFilterBar({ state, sources, genres, language, user, t, onChange, o
     onChange: (value) => onChange({ available: value }),
   });
   const sort = select({
-    values: SORTS,
+    values: picks?.sorts ?? SORTS,
     current: state.filters.sort,
-    label: (value) => t(`filters.sort.${value}`),
+    label: picks?.sortLabel ?? ((value) => t(`filters.sort.${value}`)),
     // A new field starts the way it reads best; the arrow is for arguing
     // with that, not something to re-argue on every change.
     onChange: (value) => onChange({ sort: value, order: "" }),
@@ -374,16 +392,10 @@ function buildFilterBar({ state, sources, genres, language, user, t, onChange, o
     el("div", { class: "filters__row shell" }, [
       combo.node,
       type,
-      available,
+      picks ? null : available,
       sort,
-      direction.node,
+      picks ? null : direction.node,
       more.node,
-      // A way out of the catalog rather than another way through it, so it sits
-      // at the end of the row and is a link: what is new is a page, not a
-      // filter, and something to come back from.
-      el("a", { class: "control control--new", href: "#/new", text: t("filters.whatsNew") }),
-      // Beside it, and for the same reason: somewhere to go, not a filter.
-      el("a", { class: "control control--new", href: "#/stats", text: t("filters.stats") }),
     ]),
   );
 
@@ -446,7 +458,7 @@ function sortDirection({ state, t, onChange }) {
  * Folded away behind a disclosure because they are the second question, not the
  * first: the bar stays as short as it was for anybody who does not want them.
  */
-function moreFilters({ state, genres, language, t, onChange }) {
+function moreFilters({ state, genres, language, t, onChange, years: withYears = true }) {
   const years = yearRange({ state, t, onChange });
   const length = runtimeChips({ state, t, onChange });
   const chosenGenres = () => new Set(state.filters.genres);
@@ -497,11 +509,13 @@ function moreFilters({ state, genres, language, t, onChange }) {
         length.node,
         el("p", { class: "morefilters__note", text: t("filters.lengthNote") }),
       ]),
-      el("div", { class: "morefilters__group" }, [
-        el("h3", { class: "morefilters__heading", text: t("filters.years") }),
-        years.node,
-        el("p", { class: "morefilters__note", text: t("filters.yearsNote") }),
-      ]),
+      withYears
+        ? el("div", { class: "morefilters__group" }, [
+            el("h3", { class: "morefilters__heading", text: t("filters.years") }),
+            years.node,
+            el("p", { class: "morefilters__note", text: t("filters.yearsNote") }),
+          ])
+        : null,
       genreOptions.length
         ? el("div", { class: "morefilters__group" }, [
             el("h3", { class: "morefilters__heading", text: t("filters.genres") }),

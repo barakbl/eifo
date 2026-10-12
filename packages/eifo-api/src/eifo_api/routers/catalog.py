@@ -470,6 +470,112 @@ def for_you(
 def forget_recommendations() -> None:
     """Drop every remembered answer. For tests."""
     _for_you.clear()
+    _recommended.clear()
+
+
+#: How many picks the page of recommendations ranks. Every candidate a
+#: member's favourites propose is in the running; past the best couple of
+#: hundred a pick shares a genre with something they liked and little else.
+MAX_RECOMMENDED = 200
+
+_recommended: OrderedDict[Any, tuple[dt.datetime, list[taste.Pick]]] = OrderedDict()
+
+
+class RecommendationSort(StrEnum):
+    """How a page of recommendations is ordered."""
+
+    #: How well each fits the member. The order the picks are worked out in.
+    MATCH = "match"
+    SCORE = "score"
+    YEAR = "year"
+    RECENTLY_ADDED = "recently_added"
+
+
+@router.get(
+    "/me/recommendations",
+    response_model=Page[Recommendation],
+    summary="Every title picked for you, a page at a time",
+)
+def recommendations(
+    principal: PrincipalDep,
+    session: SessionDep,
+    sources: Annotated[str | None, Query(description="Comma-separated source keys")] = None,
+    type: Annotated[TitleKind | None, Query()] = None,
+    genres: Annotated[
+        str | None, Query(description="Comma-separated genre ids; a pick has all of them")
+    ] = None,
+    runtime_max: Annotated[
+        int | None, Query(ge=1, le=1000, description="Longest film, minutes")
+    ] = None,
+    score_min: Annotated[int | None, Query(ge=0, le=100)] = None,
+    sort: Annotated[
+        RecommendationSort, Query(description="Ordering; best match unless said")
+    ] = RecommendationSort.MATCH,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
+) -> Page[Recommendation]:
+    """The picks behind ``/me/for-you``, all of them, to page through.
+
+    The row is a dozen seats arranged for variety, no favourite supplying
+    more than a few. This is the list it was chosen from: the best
+    :data:`MAX_RECOMMENDED` matches, best first, each still saying which
+    favourite it came from. ``sort`` reorders those same picks - by score,
+    year or how lately they arrived - rather than picking different ones, so
+    "newest" is the newest of what suits you and not the newest of everything.
+    """
+    user_id = principal.user.id
+    key = (
+        user_id,
+        sources,
+        type,
+        genres,
+        runtime_max,
+        score_min,
+        _lists_fingerprint(session, user_id),
+    )
+    now = dt.datetime.now(dt.UTC)
+    held = _recommended.get(key)
+    if held is not None and held[0] > now:
+        _recommended.move_to_end(key)
+        picks = held[1]
+    else:
+        within = _filtered_ids(
+            session,
+            q=None,
+            source_keys=_csv(sources),
+            available=AvailabilityFilter.CURRENT,
+            kind=type,
+            genre_ids=_int_csv(genres),
+            year_min=None,
+            year_max=None,
+            score_min=score_min,
+            runtime_max=runtime_max,
+        ).where(Title.id.not_in(_own_titles(user_id, Exclude.LISTED)))
+        picks = taste.for_you(
+            session, user_id, within=within, limit=MAX_RECOMMENDED, day=now.date(), varied=False
+        )
+        _recommended[key] = (now + FOR_YOU_TTL, picks)
+        while len(_recommended) > FOR_YOU_CACHE_SIZE:
+            _recommended.popitem(last=False)
+
+    start = (page - 1) * page_size
+    if sort is RecommendationSort.MATCH:
+        shown = picks[start : start + page_size]
+    else:
+        by_id = {pick.title_id: pick for pick in picks}
+        ordered = (
+            _apply_sort(select(Title.id).where(Title.id.in_(list(by_id))), Sort(sort.value))
+            .limit(page_size)
+            .offset(start)
+        )
+        shown = [by_id[title_id] for title_id in session.scalars(ordered)]
+
+    return Page(
+        items=_recommendations(session, shown),
+        page=page,
+        page_size=page_size,
+        total=len(picks),
+    )
 
 
 def _because(

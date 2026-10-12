@@ -22,6 +22,22 @@ export function parseHash(hash = "") {
   };
 }
 
+/**
+ * The pages the header offers, in order: `{ route, label }`, the label a
+ * translation key.
+ *
+ * "For you" only for a member - there is nobody to pick for otherwise, and a
+ * tab that answers "sign in" is a door painted on a wall.
+ */
+export function pageTabs({ signedIn = false } = {}) {
+  return [
+    { route: "home", label: "nav.search" },
+    signedIn ? { route: "for-you", label: "forYou.title" } : null,
+    { route: "new", label: "filters.whatsNew" },
+    { route: "stats", label: "filters.stats" },
+  ].filter(Boolean);
+}
+
 /** Build a hash from a route name, parts and query state. */
 export function buildHash(name, params = [], search = "") {
   const path = [name === "home" ? "" : name, ...params].filter(Boolean).join("/");

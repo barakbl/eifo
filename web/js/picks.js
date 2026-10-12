@@ -8,7 +8,7 @@
 
 import { forYou, similarTitles } from "./api.js";
 
-import { DEFAULT_FILTERS, filtersToParams, paramsToFilters } from "./format.js";
+import { DEFAULT_FILTERS, paramsToFilters } from "./format.js";
 import { el, replace, titleCard } from "./ui.js";
 
 /** How many picks a row shows. One scroll on a phone, a glance on a desk. */
@@ -21,45 +21,23 @@ export const SHELF_SIZE = 12;
 export const PICK_SORTS = ["", "score", "year", "recently_added"];
 
 /**
- * In the page's URL, "every service" - said out loud.
+ * The page's filters from its URL: only what a pick can be narrowed by.
  *
- * The page opens on the member's own services, so an address with no services
- * in it means those. A member who then asks about everywhere needs that to
- * survive opening a title and coming back, and "nothing" is already taken.
+ * `remembered` is the services the catalog is showing - the one selection a
+ * viewer makes, wherever they made it - and an address that names its own
+ * services wins, as it does there.
  */
-export const ANY_SERVICE = "any";
-
-/**
- * The page's filters from its URL: the member's own services unless it says
- * otherwise, and only what a pick can be narrowed by.
- */
-export function picksFilters(search, preset = []) {
+export function picksFilters(search, remembered = []) {
   const read = paramsToFilters(search);
-  const params = new URLSearchParams(search);
-  let sources = read.sources;
-  if (!params.has("sources")) sources = [...preset];
-  else if (params.get("sources") === ANY_SERVICE) sources = [];
   return {
     ...DEFAULT_FILTERS,
-    sources,
+    sources: new URLSearchParams(search).has("sources") ? read.sources : [...remembered],
     type: read.type,
     genres: read.genres,
     scoreMin: read.scoreMin,
     runtimeMax: read.runtimeMax,
     sort: PICK_SORTS.includes(read.sort) ? read.sort : "",
   };
-}
-
-/** The query string that reads back as these filters, shortest form. */
-export function picksSearch(filters, preset = []) {
-  const params = filtersToParams(filters);
-  const chosen = new Set(filters.sources);
-  if (preset.length && chosen.size === preset.length && preset.every((key) => chosen.has(key))) {
-    params.delete("sources");
-  } else if (!chosen.size && preset.length) {
-    params.set("sources", ANY_SERVICE);
-  }
-  return params.toString();
 }
 
 /** "Because you rated Reservoir Dogs 10" - the favourite a pick came from. */

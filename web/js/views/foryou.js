@@ -8,10 +8,10 @@
 
 import { ApiError, listGenres, listRecommendations, patchMe } from "../api.js";
 import { cardActions, loadMineFor } from "../account.js";
-import { DEFAULT_FILTERS } from "../format.js";
-import { PICK_SORTS, cardWithReason, forYouReason, picksFilters, picksSearch } from "../picks.js";
+import { DEFAULT_FILTERS, filtersToParams } from "../format.js";
+import { PICK_SORTS, cardWithReason, forYouReason, picksFilters } from "../picks.js";
 import { el, replace, skeletonCards, stateBlock } from "../ui.js";
-import { buildFilterBar, presetKeys, withOtherServices } from "./home.js";
+import { buildFilterBar, rememberedSources, saveSources, withOtherServices } from "./home.js";
 
 const PAGE_SIZE = 24;
 
@@ -36,12 +36,9 @@ export function createForYouView({ mount, app, router, items }) {
     }
 
     const sources = withOtherServices(app.get().sources, { count: userAddedCount, t });
-    // The member's services as they are now: editing them in the bar changes
-    // what an address with no services in it means.
-    const mine = () => presetKeys(app.get().user, sources);
-
     const state = {
-      filters: picksFilters(route.search, mine()),
+      // The services the catalog is showing, unless the address names its own.
+      filters: picksFilters(route.search, rememberedSources(sources)),
       page: 1,
       total: 0,
       loaded: [],
@@ -94,9 +91,11 @@ export function createForYouView({ mount, app, router, items }) {
       state.page = 1;
       state.loaded = [];
       state.done = false;
+      // And the catalog shows these in turn: it is the same selection.
+      if ("sources" in patch) saveSources([...state.filters.sources]);
       filterBar.sync();
       // Filters live in the URL so a narrowed list survives a visit to a title.
-      router.replaceSearch(picksSearch(state.filters, mine()));
+      router.replaceSearch(filtersToParams(state.filters).toString());
       load({ reset: true });
     }
 

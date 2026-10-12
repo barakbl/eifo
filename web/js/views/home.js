@@ -81,7 +81,7 @@ const AVAILABILITY = ["current", "any", "gone"];
 // live - so a viewer's chosen services default back on their next visit.
 const STORAGE_SOURCES = "eifo.sources";
 
-function saveSources(keys) {
+export function saveSources(keys) {
   try {
     window.localStorage.setItem(STORAGE_SOURCES, JSON.stringify(keys));
   } catch {
@@ -90,13 +90,26 @@ function saveSources(keys) {
 }
 
 /** The remembered service keys, or null if nothing was ever saved. */
-function readSavedSources() {
+export function readSavedSources() {
   try {
     const value = JSON.parse(window.localStorage.getItem(STORAGE_SOURCES) ?? "null");
     return Array.isArray(value) ? value.filter((key) => typeof key === "string") : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * The services last chosen, in the catalog or on the page of picks: one
+ * selection, so the two never disagree about what "my grid" is showing.
+ *
+ * Only services still tracked, so a retired one never filters a page down to
+ * nothing. Empty - every service - when nothing was ever chosen.
+ */
+export function rememberedSources(sources) {
+  return (readSavedSources() ?? []).filter((key) =>
+    sources.some((source) => source.key === key && source.title_count > 0),
+  );
 }
 
 export function createHomeView({ mount, app, router, items }) {
@@ -106,15 +119,9 @@ export function createHomeView({ mount, app, router, items }) {
     const filters = paramsToFilters(route.search);
 
     // An explicit ?sources= in the URL wins (shared/deep links); otherwise fall
-    // back to the viewer's remembered selection, keeping only services we still
-    // track so a retired one never filters the catalog down to nothing.
+    // back to the viewer's remembered selection.
     if (!new URLSearchParams(route.search).has("sources")) {
-      const saved = readSavedSources();
-      if (saved) {
-        filters.sources = saved.filter((key) =>
-          sources.some((s) => s.key === key && s.title_count > 0),
-        );
-      }
+      filters.sources = rememberedSources(sources);
     }
 
     const state = {

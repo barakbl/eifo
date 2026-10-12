@@ -1,13 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import {
-  ANY_SERVICE,
-  forYouReason,
-  picksFilters,
-  picksSearch,
-  sharedReason,
-} from "../js/picks.js";
+import { forYouReason, picksFilters, sharedReason } from "../js/picks.js";
 
 const t = (key, values = {}) =>
   `${key}:${Object.entries(values)
@@ -68,15 +62,15 @@ describe("sharedReason", () => {
 });
 
 describe("picksFilters", () => {
-  const mine = ["netflix_il", "yes"];
+  const remembered = ["netflix_il", "yes"];
 
-  it("opens on the member's own services", () => {
-    assert.deepEqual(picksFilters("", mine).sources, mine);
+  it("opens on the services the catalog is showing", () => {
+    assert.deepEqual(picksFilters("", remembered).sources, remembered);
+    assert.deepEqual(picksFilters("sort=score", []).sources, []);
   });
 
-  it("lets the address say otherwise, including everywhere", () => {
-    assert.deepEqual(picksFilters("sources=hot", mine).sources, ["hot"]);
-    assert.deepEqual(picksFilters(`sources=${ANY_SERVICE}`, mine).sources, []);
+  it("lets the address name its own", () => {
+    assert.deepEqual(picksFilters("sources=hot", remembered).sources, ["hot"]);
   });
 
   it("keeps only what a pick is narrowed and ordered by", () => {
@@ -93,28 +87,5 @@ describe("picksFilters", () => {
 
   it("falls back to best match for an order it does not have", () => {
     assert.equal(picksFilters("sort=name", []).sort, "");
-  });
-});
-
-describe("picksSearch", () => {
-  const mine = ["netflix_il", "yes"];
-  const round = (search) => picksSearch(picksFilters(search, mine), mine);
-
-  it("says nothing about services while they are the member's own", () => {
-    assert.equal(round(""), "");
-    assert.equal(round("sort=score"), "sort=score");
-  });
-
-  it("says everywhere out loud, so it survives coming back", () => {
-    assert.equal(picksSearch({ ...picksFilters("", mine), sources: [] }, mine), "sources=any");
-    assert.equal(round("sources=any"), "sources=any");
-  });
-
-  it("has nothing to say for a member with no services saved", () => {
-    assert.equal(picksSearch(picksFilters("", []), []), "");
-  });
-
-  it("carries any other choice as it is", () => {
-    assert.equal(round("sources=hot&type=series"), "sources=hot&type=series");
   });
 });

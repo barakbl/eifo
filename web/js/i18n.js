@@ -127,10 +127,8 @@ const STRINGS = {
     "suggest.credits": "{count} כותרים",
     "suggest.empty": "אין הצעות",
     "forYou.title": "בשבילך",
-    "forYou.note": "לפי מה שדירגת גבוה, זמין עכשיו, ממה שעוד לא ראית.",
     "forYou.because": "כי נתת ל{title} {rating}",
     "forYou.empty": "דרגו כמה כותרים שאהבתם ב-8 ומעלה, ונציע כאן מה לראות.",
-    "forYou.all": "לכל ההמלצות",
     "forYou.pageNote":
       "כל מה שמתאים לכם לפי מה שדירגתם גבוה: זמין עכשיו, ממה שעוד לא ראיתם, ולצד כל כותר - הסיבה.",
     "forYou.sort.match": "הכי מתאים",
@@ -575,10 +573,8 @@ const STRINGS = {
     "suggest.credits": "{count} titles",
     "suggest.empty": "No suggestions",
     "forYou.title": "For you",
-    "forYou.note": "From what you rated highly, available now, that you haven't seen.",
     "forYou.because": "Because you rated {title} {rating}",
     "forYou.empty": "Rate a few titles you loved 8 or more, and picks for you will appear here.",
-    "forYou.all": "See all picks",
     "forYou.pageNote":
       "Everything that suits you, from what you rated highly: available now, not yet seen, each with the reason it is here.",
     "forYou.sort.match": "Best match",

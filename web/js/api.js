@@ -287,14 +287,6 @@ export function deleteMyItem(titleId) {
 
 /* -- recommendations ------------------------------------------------------ */
 
-/** Picks from the member's favourites; `sources` narrows them like the grid. */
-export function forYou({ sources = [], type = null, limit = 12 } = {}, options) {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (sources.length) params.set("sources", sources.join(","));
-  if (type) params.set("type", type);
-  return request(`/me/for-you?${params}`, options);
-}
-
 /**
  * Build a recommendations query from filter state plus paging.
  *

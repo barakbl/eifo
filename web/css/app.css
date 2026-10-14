@@ -3461,20 +3461,6 @@ input {
   margin: 0;
 }
 
-/* The way to the whole list, at the far end of the row's heading. */
-.shelf__more {
-  margin-inline-start: auto;
-  color: var(--accent);
-  font-size: var(--text-sm);
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.shelf__more:hover,
-.shelf__more:focus-visible {
-  text-decoration: underline;
-}
-
 /* The page of picks: a title and a line about it, then the catalog's own
  * bar and grid. */
 .foryou__head .page__title {
@@ -3484,13 +3470,6 @@ input {
 .foryou__note {
   margin: 0 0 var(--space-4);
   max-inline-size: 60ch;
-  color: var(--fg-muted);
-  font-size: var(--text-sm);
-}
-
-.shelf__note,
-.shelf__empty {
-  margin: 0;
   color: var(--fg-muted);
   font-size: var(--text-sm);
 }
@@ -3533,28 +3512,6 @@ input {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-}
-
-/* Stand-ins for a card's name, score line and reason while the row is
- * worked out, each the height of the line it stands for, so the row is its
- * final height from the first paint and the catalog below never moves. */
-.shelf__ghost {
-  border-radius: var(--radius-sm);
-}
-
-.shelf__ghost--name {
-  block-size: calc(2 * 1.35 * var(--text-sm));
-}
-
-.shelf__ghost--meta {
-  inline-size: 45%;
-  block-size: 1.3rem;
-}
-
-.shelf__ghost--why {
-  inline-size: 85%;
-  block-size: calc(2 * 1.35 * var(--text-xs));
-  margin-block-start: var(--space-1);
 }
 
 /* "Sign in with Eifo": who is asking, where it sends you, what it may do. */

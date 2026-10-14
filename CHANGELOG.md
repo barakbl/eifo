@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.33.0](https://github.com/barakbl/eifo/compare/v0.32.0...v0.33.0) (2026-10-12)
+
+
+### Features
+
+* a page of every pick for you, and the pages as tabs in the header ([#163](https://github.com/barakbl/eifo/issues/163)) ([9bbc102](https://github.com/barakbl/eifo/commit/9bbc102392d94c4f26cc8dff8fe4b930ee5d05d3))
+
 ## [0.32.0](https://github.com/barakbl/eifo/compare/v0.31.0...v0.32.0) (2026-10-11)
 
 

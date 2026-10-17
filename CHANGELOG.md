@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.34.0](https://github.com/barakbl/eifo/compare/v0.33.0...v0.34.0) (2026-10-14)
+
+
+### Features
+
+* the catalog no longer opens with a row of picks ([#165](https://github.com/barakbl/eifo/issues/165)) ([2c879ca](https://github.com/barakbl/eifo/commit/2c879cac0b0ef8c6ef96d87dd691749cf5214d3b))
+
 ## [0.33.0](https://github.com/barakbl/eifo/compare/v0.32.0...v0.33.0) (2026-10-12)
 
 

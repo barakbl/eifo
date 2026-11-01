@@ -189,6 +189,23 @@ class TestTheWorkList:
 
         assert client.get(PENDING).json() == []
 
+    def test_it_carries_the_listings_other_sizes(
+        self,
+        client: TestClient,
+        operator: str,
+        titles: list[int],
+        session_factory: sessionmaker[Session],
+    ) -> None:
+        backups = ["https://image.example/0-34.jpg", "https://image.example/0-169.jpg"]
+        with session_factory() as session:
+            session.get(Title, titles[0]).poster_backup_urls = backups  # type: ignore[union-attr]
+            session.commit()
+
+        rows = client.get(PENDING).json()
+
+        assert rows[0]["backup_urls"] == backups
+        assert rows[1]["backup_urls"] == []
+
 
 class TestStoringABatch:
     def test_it_writes_both_renditions_and_records_the_largest(

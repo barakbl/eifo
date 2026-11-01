@@ -158,3 +158,29 @@ class TestPendingPosters:
             ("https://cdn.example/matador", TitleKind.MOVIE, 4271),
             ("https://cdn.example/local", TitleKind.SERIES, None),
         ]
+
+    def test_each_carries_its_listings_other_sizes(
+        self, live_api: LiveApi, api: IngestClient
+    ) -> None:
+        backups = ["https://cdn.example/grace-34.jpg", "https://cdn.example/grace-169.jpg"]
+        with live_api.session() as session:
+            session.add_all(
+                [
+                    Title(
+                        type=TitleKind.MOVIE,
+                        name_he="לאהוב את גרייס",
+                        poster_source_url="https://cdn.example/grace-23.jpg",
+                        poster_backup_urls=backups,
+                    ),
+                    Title(
+                        type=TitleKind.MOVIE,
+                        name_en="One size only",
+                        poster_source_url="https://cdn.example/one.jpg",
+                    ),
+                ]
+            )
+            session.commit()
+
+        pending = api.pending_posters(limit=10)
+
+        assert [p.backup_urls for p in pending] == [tuple(backups), ()]

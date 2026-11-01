@@ -443,6 +443,28 @@ class TestCreateAndReview:
         assert result.title is not None
         assert result.title.poster_source_url == "https://img.example/p.jpg"
 
+    def test_stores_the_listings_other_sizes_beside_it(self, session: Session) -> None:
+        result = TitleMatcher(session).match(
+            item(
+                poster_url="https://img.example/p.jpg",
+                poster_backups=("https://img.example/b.jpg",),
+            )
+        )
+
+        assert result.title is not None
+        assert result.title.poster_backup_urls == ["https://img.example/b.jpg"]
+
+    def test_a_parked_item_keeps_its_poster_backups(self, session: Session) -> None:
+        session.add(Title(type=TitleKind.SERIES, name_en="Srugim", year=2008))
+        session.flush()
+
+        TitleMatcher(session).match(
+            item(name="Srugim 2", year=2008, poster_backups=("https://img.example/b.jpg",))
+        )
+
+        review = session.scalars(select(MatchReview)).one()
+        assert review.raw_payload["poster_backups"] == ["https://img.example/b.jpg"]
+
 
 class TestHonouringReviewDecisions:
     """A ruling in the review queue has to survive the next sync.

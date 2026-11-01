@@ -201,6 +201,26 @@ class TestCreate:
 
         assert reviews.create(session, review).imdb_id is None
 
+    def test_the_posters_backups_come_across(self, session: Session) -> None:
+        session.add(make_source())
+        session.flush()
+        review = park(
+            session,
+            poster_url="https://img.example/p.jpg",
+            poster_backups=["https://img.example/p.jpg", "https://img.example/b.jpg"],
+        )
+
+        title = reviews.create(session, review)
+
+        assert title.poster_backup_urls == ["https://img.example/b.jpg"]
+
+    def test_a_listing_parked_before_backups_has_none(self, session: Session) -> None:
+        session.add(make_source())
+        session.flush()
+        review = park(session, poster_url="https://img.example/p.jpg")
+
+        assert reviews.create(session, review).poster_backup_urls is None
+
 
 class TestDismiss:
     def test_it_records_the_ruling_and_creates_nothing(self, session: Session) -> None:

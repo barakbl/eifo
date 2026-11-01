@@ -107,6 +107,7 @@ def pending_posters(
         PendingPoster(
             title_id=title.id,
             source_url=title.poster_source_url,
+            backup_urls=list(title.poster_backup_urls or ()),
             kind=title.type,
             tmdb_id=title.tmdb_id,
         )

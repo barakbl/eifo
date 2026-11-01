@@ -23,7 +23,7 @@ import pytest
 from eifo_core import ingest as wire
 from eifo_core.enums import OfferType, RatingProvider, TitleKind
 from eifo_core.findings import EnrichResult, Rating, TitleView
-from eifo_core.items import RawItem, TmdbTitle
+from eifo_core.items import MAX_POSTER_BACKUPS, RawItem, TmdbTitle
 
 
 def item(**overrides: Any) -> RawItem:
@@ -47,6 +47,7 @@ class TestListings:
             deep_link_url="https://cellcomtv.co.il/fauda",
             source_ref="s-991",
             poster_url="https://i.example/p.jpg",
+            poster_backups=("https://i.example/p34.jpg", "https://i.example/p169.jpg"),
             offer_type=OfferType.RENT,
             price_minor=1990,
             price_currency="ILS",
@@ -60,6 +61,45 @@ class TestListings:
     def test_a_bare_listing_does_too(self) -> None:
         """Most of a scraped catalog is a name and a link and nothing else."""
         assert wire.item_from_wire(wire.item_to_wire(item())) == item()
+
+    def test_a_sender_from_before_poster_backups_has_none(self) -> None:
+        payload = wire.item_to_wire(item(poster_url="https://i.example/p.jpg"))
+        del payload["poster_backups"]
+
+        assert wire.item_from_wire(payload).poster_backups == ()
+
+
+class TestPosterBackups:
+    """What a listing keeps as backups for a poster that may be a dead link."""
+
+    def test_kept_in_order(self) -> None:
+        backups = ("https://i.example/b.jpg", "https://i.example/a.jpg")
+
+        listing = item(poster_url="https://i.example/p.jpg", poster_backups=backups)
+
+        assert listing.poster_backups == backups
+
+    def test_the_poster_itself_and_repeats_are_dropped(self) -> None:
+        listing = item(
+            poster_url="https://i.example/p.jpg",
+            poster_backups=(
+                "https://i.example/p.jpg",
+                "https://i.example/b.jpg",
+                " https://i.example/b.jpg ",
+            ),
+        )
+
+        assert listing.poster_backups == ("https://i.example/b.jpg",)
+
+    def test_what_cannot_be_fetched_is_dropped(self) -> None:
+        listing = item(poster_backups=("", "//i.example/b.jpg", "/b.jpg", 7, "http://i.example/b"))
+
+        assert listing.poster_backups == ("http://i.example/b",)
+
+    def test_a_handful_at_most(self) -> None:
+        many = tuple(f"https://i.example/{n}.jpg" for n in range(MAX_POSTER_BACKUPS + 3))
+
+        assert item(poster_backups=many).poster_backups == many[:MAX_POSTER_BACKUPS]
 
     def test_the_offer_type_defaults_to_a_stream(self) -> None:
         """An older sender that has not heard of the field is not wrong, only quiet."""

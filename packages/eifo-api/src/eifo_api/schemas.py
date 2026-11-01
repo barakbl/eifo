@@ -1002,6 +1002,10 @@ class PendingPoster(BaseModel):
 
     title_id: int
     source_url: str
+    #: The same listing's other artwork, best first: tried before TMDB's when
+    #: ``source_url`` is gone, because the source's own picture is still the
+    #: one wanted.
+    backup_urls: list[str] = Field(default_factory=list)
     #: What TMDB knows the title as, when it does: where the sender turns for
     #: artwork when the source's own is gone. A listing's poster can vanish
     #: from under it - Lev VOD has films whose image is a dead link on its own

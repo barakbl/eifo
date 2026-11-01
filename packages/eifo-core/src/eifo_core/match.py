@@ -944,6 +944,7 @@ class TitleMatcher:
             name_en=english,
             year=item.year,
             poster_source_url=item.poster_url,
+            poster_backup_urls=list(item.poster_backups) or None,
         )
         self._session.add(title)
         self._session.flush()
@@ -1034,6 +1035,7 @@ class TitleMatcher:
                     "imdb_id": item.imdb_id,
                     "deep_link_url": item.deep_link_url,
                     "poster_url": item.poster_url,
+                    "poster_backups": list(item.poster_backups),
                     "extra": dict(item.extra),
                 },
                 candidates=candidates,

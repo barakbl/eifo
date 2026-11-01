@@ -112,6 +112,9 @@ class Title(TimestampMixin, Base):
     # Where the artwork can be downloaded from; the image pipeline reads this
     # and writes the stored location to poster_path.
     poster_source_url: Mapped[str | None] = mapped_column(String(1000))
+    #: Other artwork from the listing that gave ``poster_source_url``, best
+    #: first, tried before TMDB's when that one is a dead link.
+    poster_backup_urls: Mapped[list[Any] | None]
 
     runtime_minutes: Mapped[int | None]
     seasons: Mapped[int | None]

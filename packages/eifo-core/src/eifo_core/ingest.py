@@ -350,6 +350,7 @@ def item_to_wire(item: RawItem) -> dict[str, Any]:
         "deep_link_url": item.deep_link_url,
         "source_ref": item.source_ref,
         "poster_url": item.poster_url,
+        "poster_backups": list(item.poster_backups),
         "price_minor": item.price_minor,
         "price_currency": item.price_currency,
         "credits": [dict(entry) for entry in item.credits],
@@ -381,6 +382,8 @@ def item_from_wire(payload: Any) -> RawItem:
             deep_link_url=_optional_str(payload.get("deep_link_url")),
             source_ref=_optional_str(payload.get("source_ref")),
             poster_url=_optional_str(payload.get("poster_url")),
+            # A sender from before backups existed simply has none.
+            poster_backups=tuple(payload.get("poster_backups") or ()),
             price_minor=_optional_int(payload.get("price_minor")),
             price_currency=_optional_str(payload.get("price_currency")),
             credits=tuple(payload.get("credits") or ()),

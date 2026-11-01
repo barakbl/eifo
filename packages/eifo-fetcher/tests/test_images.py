@@ -499,3 +499,95 @@ class TestWhenTheArtworkIsGone:
             item.title_id: item.source_url for item in FakeApi._manifest(api.uploads[0]).items
         }
         assert sources == {1: TMDB_POSTER, 2: "https://image.example/2.jpg"}
+
+
+BACKUP = "https://cdn.example/1-3x4.jpg"
+OTHER_BACKUP = "https://cdn.example/1-16x9.jpg"
+
+
+class TestTheListingsOtherSizes:
+    """FreeTV's dead 2x3 poster, with a 3x4 and a 16x9 that load fine."""
+
+    def test_another_size_is_used_before_tmdb(self, respx_mock: Any) -> None:
+        respx_mock.get("https://cdn.example/1").mock(return_value=httpx.Response(404))
+        respx_mock.get(BACKUP).mock(return_value=httpx.Response(200, content=png_bytes()))
+        api = FakeApi(gone(1, backup_urls=[BACKUP, OTHER_BACKUP]))
+        tmdb = FakeTmdb()
+
+        with HttpClient() as http, api.client() as client:
+            result = ImageFetcher(http, client, tmdb=tmdb).fetch_missing()  # type: ignore[arg-type]
+
+        assert (result.downloaded, result.failed, result.from_backup) == (1, 0, 1)
+        assert result.as_stats()["from_backup"] == 1
+        assert result.from_tmdb == 0
+        assert tmdb.asked == []
+        assert FakeApi._manifest(api.uploads[0]).items[0].source_url == BACKUP
+
+    def test_a_dead_backup_moves_on_to_the_next(self, respx_mock: Any) -> None:
+        respx_mock.get("https://cdn.example/1").mock(return_value=httpx.Response(404))
+        respx_mock.get(BACKUP).mock(return_value=httpx.Response(404))
+        respx_mock.get(OTHER_BACKUP).mock(return_value=httpx.Response(200, content=png_bytes()))
+        api = FakeApi(gone(1, backup_urls=[BACKUP, OTHER_BACKUP]))
+
+        with HttpClient() as http, api.client() as client:
+            result = ImageFetcher(http, client, tmdb=FakeTmdb()).fetch_missing()  # type: ignore[arg-type]
+
+        assert (result.downloaded, result.from_backup) == (1, 1)
+        assert FakeApi._manifest(api.uploads[0]).items[0].source_url == OTHER_BACKUP
+
+    def test_tmdb_when_every_size_is_gone(self, respx_mock: Any) -> None:
+        respx_mock.get("https://cdn.example/1").mock(return_value=httpx.Response(404))
+        respx_mock.get(BACKUP).mock(return_value=httpx.Response(410))
+        respx_mock.get(TMDB_POSTER).mock(return_value=httpx.Response(200, content=png_bytes()))
+        api = FakeApi(gone(1, backup_urls=[BACKUP]))
+
+        with HttpClient() as http, api.client() as client:
+            result = ImageFetcher(http, client, tmdb=FakeTmdb()).fetch_missing()  # type: ignore[arg-type]
+
+        assert (result.downloaded, result.from_backup, result.from_tmdb) == (1, 0, 1)
+
+    def test_still_a_failure_when_nothing_is_left(self, respx_mock: Any) -> None:
+        """No TMDB match, as with the FreeTV film: every size gone is a failure."""
+        respx_mock.get("https://cdn.example/1").mock(return_value=httpx.Response(404))
+        respx_mock.get(BACKUP).mock(return_value=httpx.Response(404))
+        api = FakeApi(gone(1, backup_urls=[BACKUP], tmdb_id=None))
+
+        with HttpClient() as http, api.client() as client:
+            result = ImageFetcher(http, client, tmdb=FakeTmdb()).fetch_missing()  # type: ignore[arg-type]
+
+        assert (result.downloaded, result.failed) == (0, 1)
+        assert api.uploads == []
+
+    def test_a_backup_having_a_bad_night_is_not_replaced_by_tmdb(self, respx_mock: Any) -> None:
+        """Storing TMDB's poster is for good, so a backup that may come back wins."""
+        respx_mock.get("https://cdn.example/1").mock(return_value=httpx.Response(404))
+        respx_mock.get(BACKUP).mock(return_value=httpx.Response(503))
+        api = FakeApi(gone(1, backup_urls=[BACKUP]))
+        tmdb = FakeTmdb()
+
+        with HttpClient(attempts=1) as http, api.client() as client:
+            result = ImageFetcher(http, client, tmdb=tmdb).fetch_missing()  # type: ignore[arg-type]
+
+        assert (result.failed, result.from_tmdb) == (1, 0)
+        assert tmdb.asked == []
+
+    def test_backups_are_not_touched_while_the_poster_loads(self, respx_mock: Any) -> None:
+        respx_mock.get("https://cdn.example/1").mock(
+            return_value=httpx.Response(200, content=png_bytes())
+        )
+        api = FakeApi(gone(1, backup_urls=[BACKUP]))
+
+        with HttpClient() as http, api.client() as client:
+            result = ImageFetcher(http, client, tmdb=FakeTmdb()).fetch_missing()  # type: ignore[arg-type]
+
+        assert (result.downloaded, result.from_backup) == (1, 0)
+        assert respx_mock.calls.call_count == 1
+
+    def test_the_client_reads_backups_and_tolerates_an_api_without_them(self) -> None:
+        api = FakeApi(gone(1, backup_urls=[BACKUP, 7]) + gone(2))
+
+        with api.client() as client:
+            first, second = client.pending_posters(limit=10)
+
+        assert first.backup_urls == (BACKUP,)
+        assert second.backup_urls == ()

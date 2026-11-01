@@ -211,6 +211,22 @@ const ICONS = {
   manage: ["M12 3.5l7 2.6v5.4c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6.1z"],
   // A door with the arrow leaving through it.
   signOut: ["M9.5 20.5H6a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2h3.5", "M15.5 16.5 20 12l-4.5-4.5M20 12H9.5"],
+  // The note's toolbar. Two links of a chain.
+  link: [
+    "M10 13.5a4 4 0 0 0 5.7.3l3-3a4 4 0 0 0-5.7-5.6l-1.2 1.2",
+    "M14 10.5a4 4 0 0 0-5.7-.3l-3 3a4 4 0 0 0 5.7 5.6l1.2-1.2",
+  ],
+  // Lines held to the right edge, and an arrow leaving leftward: right to
+  // left. Its mirror is left to right. Neither flips with the page, because
+  // each one means a direction rather than "forward".
+  rtl: ["M8 5h12M12 9h8M8 13h12", "M20 19H5M8 16l-3 3 3 3"],
+  ltr: ["M4 5h12M4 9h8M4 13h12", "M4 19h15M16 16l3 3-3 3"],
+  smile: [
+    "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z",
+    "M8.5 14.5c.9 1.2 2.1 1.8 3.5 1.8s2.6-.6 3.5-1.8",
+    "M9 9.5h.01M15 9.5h.01",
+  ],
+  download: ["M12 4v11M7.5 10.5 12 15l4.5-4.5", "M5 19.5h14"],
 };
 
 /**

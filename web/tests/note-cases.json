@@ -1,0 +1,158 @@
+{
+  "about": "How a note is written out. The server (eifo_core/notes.py) and the browser (web/js/note.js) both read each input and must both write exactly the output, and count the same length. Inputs are well-formed: the two read HTML with different parsers, and what each does with broken markup is tested on its own side.",
+  "cases": [
+    { "name": "a paragraph", "in": "<p>Hello</p>", "out": "<p>Hello</p>", "length": 5 },
+    {
+      "name": "every mark",
+      "in": "<p>a <b>bold</b> <i>it</i> <u>un</u> <s>st</s></p>",
+      "out": "<p>a <b>bold</b> <i>it</i> <u>un</u> <s>st</s></p>",
+      "length": 15
+    },
+    {
+      "name": "other names for the same marks",
+      "in": "<p><strong>x</strong><em>y</em><strike>z</strike><del>w</del></p>",
+      "out": "<p><b>x</b><i>y</i><s>zw</s></p>",
+      "length": 4
+    },
+    {
+      "name": "marks nest in one order",
+      "in": "<p><s><u><i><b>x</b></i></u></s></p>",
+      "out": "<p><b><i><u><s>x</s></u></i></b></p>",
+      "length": 1
+    },
+    {
+      "name": "a link goes outside its marks",
+      "in": "<p><b><a href=\"https://x.com\">go</a></b></p>",
+      "out": "<p><a href=\"https://x.com\"><b>go</b></a></p>",
+      "length": 2
+    },
+    {
+      "name": "headings, and a direction",
+      "in": "<h1 dir=\"rtl\">כותרת</h1><h6 dir=\"LTR\">small</h6><h3>three</h3>",
+      "out": "<h1 dir=\"rtl\">כותרת</h1><h6 dir=\"ltr\">small</h6><h3>three</h3>",
+      "length": 17
+    },
+    {
+      "name": "a direction that is neither is none",
+      "in": "<p dir=\"auto\">x</p>",
+      "out": "<p>x</p>",
+      "length": 1
+    },
+    {
+      "name": "a direction passes down from around a block",
+      "in": "<div dir=\"rtl\"><p>x</p><p dir=\"ltr\">y</p></div>",
+      "out": "<p dir=\"rtl\">x</p><p dir=\"ltr\">y</p>",
+      "length": 3
+    },
+    {
+      "name": "divs and list items become paragraphs",
+      "in": "<div>one</div><ul><li>two</li><li>three</li></ul>",
+      "out": "<p>one</p><p>two</p><p>three</p>",
+      "length": 13
+    },
+    {
+      "name": "text outside any block",
+      "in": "hello <b>you</b>",
+      "out": "<p>hello <b>you</b></p>",
+      "length": 9
+    },
+    {
+      "name": "empty lines between are kept, at the ends are not",
+      "in": "<p><br></p><p>a</p><p><br></p><p></p><p>b</p><p><br></p>",
+      "out": "<p>a</p><p><br></p><p><br></p><p>b</p>",
+      "length": 5
+    },
+    { "name": "a line break", "in": "<p>a<br>b</p>", "out": "<p>a<br>b</p>", "length": 3 },
+    {
+      "name": "a break that ends a block, kept as one",
+      "in": "<p>a<br><br></p>",
+      "out": "<p>a<br><br></p>",
+      "length": 2
+    },
+    {
+      "name": "spaces collapse the way a page shows them",
+      "in": "<p>  a   <b> b </b>  c  </p>",
+      "out": "<p>a <b>b </b>c</p>",
+      "length": 5
+    },
+    {
+      "name": "text is escaped, quotes are not",
+      "in": "<p>&lt;3 &amp; &quot;q&quot; 'r'</p>",
+      "out": "<p>&lt;3 &amp; \"q\" 'r'</p>",
+      "length": 12
+    },
+    {
+      "name": "a link's address is escaped",
+      "in": "<p><a href=\"https://x.com/?a=1&amp;b='2'\">q</a></p>",
+      "out": "<p><a href=\"https://x.com/?a=1&amp;b=&#x27;2&#x27;\">q</a></p>",
+      "length": 1
+    },
+    {
+      "name": "a space in an address is encoded",
+      "in": "<p><a href=\" https://x.com/a b \">q</a></p>",
+      "out": "<p><a href=\"https://x.com/a%20b\">q</a></p>",
+      "length": 1
+    },
+    {
+      "name": "mailto is a link",
+      "in": "<p><a href=\"mailto:me@example.com\">me</a></p>",
+      "out": "<p><a href=\"mailto:me@example.com\">me</a></p>",
+      "length": 2
+    },
+    {
+      "name": "a script link is only its text",
+      "in": "<p><a href=\"javascript:alert(1)\">x</a> <a href=\"JavaScript:alert(1)\">y</a></p>",
+      "out": "<p>x y</p>",
+      "length": 3
+    },
+    {
+      "name": "data and relative links are only their text",
+      "in": "<p><a href=\"data:text/html,hi\">x</a><a href=\"/admin\">y</a><a>z</a></p>",
+      "out": "<p>xyz</p>",
+      "length": 3
+    },
+    {
+      "name": "non-breaking spaces are kept",
+      "in": "<p>a&nbsp;&nbsp;b</p>",
+      "out": "<p>a\u00a0\u00a0b</p>",
+      "length": 4
+    },
+    {
+      "name": "runs that look alike merge",
+      "in": "<p><b>a</b><b>b</b></p>",
+      "out": "<p><b>ab</b></p>",
+      "length": 2
+    },
+    {
+      "name": "an emoji is one character",
+      "in": "<p>😀 🎬</p>",
+      "out": "<p>😀 🎬</p>",
+      "length": 3
+    },
+    {
+      "name": "unknown elements give up their text",
+      "in": "<p><span class=\"x\">a</span><font color=\"red\">b</font><mark>c</mark></p>",
+      "out": "<p>abc</p>",
+      "length": 3
+    },
+    {
+      "name": "attributes are not carried over",
+      "in": "<p class=\"x\" style=\"color:red\" onclick=\"go()\" id=\"y\">z</p>",
+      "out": "<p>z</p>",
+      "length": 1
+    },
+    {
+      "name": "scripts, styles and images are gone, content and all",
+      "in": "<p>a<script>alert(1)</script><style>p{}</style><img src=\"x\" onerror=\"alert(1)\">b</p><svg><text>c</text></svg><iframe src=\"https://x.com\">d</iframe>",
+      "out": "<p>ab</p>",
+      "length": 2
+    },
+    {
+      "name": "line breaks count as one between blocks too",
+      "in": "<h2>T</h2><p>a<br>b</p>",
+      "out": "<h2>T</h2><p>a<br>b</p>",
+      "length": 5
+    },
+    { "name": "nothing but formatting is no note", "in": "<p><b> </b><br></p><h1></h1>", "out": null, "length": 0 }
+  ]
+}

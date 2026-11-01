@@ -30,9 +30,18 @@ from eifo_api.schemas import (
     UserItemOut,
     UserOut,
 )
-from eifo_core import taste
+from eifo_core import notes, taste
 from eifo_core.enums import ItemStatus
-from eifo_core.models import ApiToken, Availability, Source, Title, User, UserItem
+from eifo_core.models import (
+    NOTE_MAX_LENGTH,
+    NOTE_STORED_MAX_LENGTH,
+    ApiToken,
+    Availability,
+    Source,
+    Title,
+    User,
+    UserItem,
+)
 from eifo_core.tokens import hash_token, new_api_token
 from eifo_core.types import utcnow
 
@@ -413,9 +422,23 @@ def _clean_display_name(value: str | None) -> str:
 
 
 def _clean_note(value: str | None) -> str | None:
-    """Whitespace-only is the same as no note at all."""
-    note = (value or "").strip()
-    return note or None
+    """The note as it is stored: rewritten from scratch, never as it was sent.
+
+    A note with no words in it - whitespace, or formatting around nothing - is
+    the same as no note at all.
+    """
+    note = notes.clean(value)
+    if note is None:
+        return None
+    if note.length > NOTE_MAX_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"A note can be at most {NOTE_MAX_LENGTH:,} characters; this one is "
+            f"{note.length:,}.",
+        )
+    if len(note.html) > NOTE_STORED_MAX_LENGTH:
+        raise HTTPException(status_code=422, detail="This note has too much formatting to save.")
+    return note.html
 
 
 def _claim_handle(session: Session, user: User, handle: str | None) -> str | None:

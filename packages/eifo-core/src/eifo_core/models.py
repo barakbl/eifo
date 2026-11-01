@@ -628,7 +628,12 @@ class EnrichAttempt(Base):
 #: two can never disagree about what a valid value is.
 DISPLAY_NAME_MAX_LENGTH = 100
 HANDLE_MAX_LENGTH = 30
-NOTE_MAX_LENGTH = 2000
+#: A note's length as its author counts it: characters of text, whatever the
+#: formatting (see eifo_core.notes).
+NOTE_MAX_LENGTH = 10_000
+#: The same note as stored, markup and all. Room for the text five times over,
+#: which no real formatting comes near; it is only there so a row has a ceiling.
+NOTE_STORED_MAX_LENGTH = 50_000
 RATING_MIN = 1
 RATING_MAX = 10
 
@@ -897,7 +902,7 @@ class UserItem(Base):
             name="ck_user_items_rating_range",
         ),
         CheckConstraint(
-            f"note IS NULL OR length(note) <= {NOTE_MAX_LENGTH}",
+            f"note IS NULL OR length(note) <= {NOTE_STORED_MAX_LENGTH}",
             name="ck_user_items_note_length",
         ),
         # One index per list: the two are queried separately, and a title can
@@ -914,6 +919,7 @@ class UserItem(Base):
     watched: Mapped[bool] = mapped_column(default=False, server_default=false())
     rating: Mapped[int | None]
     #: Private always, including on a public profile - a memo, not a review.
+    #: HTML, and only ever the HTML eifo_core.notes writes.
     note: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[dt.datetime] = mapped_column(default=utcnow)

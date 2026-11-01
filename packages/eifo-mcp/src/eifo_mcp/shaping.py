@@ -12,6 +12,7 @@ and the server's instructions tell the model to treat it so.
 
 from __future__ import annotations
 
+from html.parser import HTMLParser
 from typing import Any
 
 #: Where the overview is cut. Enough to tell a thriller from a comedy; the
@@ -101,7 +102,7 @@ def item(entry: dict[str, Any], link: str) -> dict[str, Any]:
             "watched": entry.get("watched") or None,
             "want_to_watch": entry.get("want_to_watch") or None,
             "my_rating": entry.get("rating"),
-            "my_note": entry.get("note"),
+            "my_note": note_text(entry.get("note")),
         }
     )
 
@@ -238,3 +239,51 @@ def pick(card: dict[str, Any], link: str) -> dict[str, Any]:
             ),
         }
     )
+
+
+def note_text(note: str | None) -> str | None:
+    """A note as words: a line per paragraph, a link's address after its text.
+
+    The API holds a note as HTML so the app can show its formatting. A model
+    reads the words, and markup would only be noise in its context.
+    """
+    if not note:
+        return None
+    reader = _NoteReader()
+    reader.feed(note)
+    reader.close()
+    text = "\n".join(line.strip() for line in "".join(reader.parts).split("\n")).strip()
+    return text or None
+
+
+_NOTE_BLOCKS = frozenset({"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"})
+
+
+class _NoteReader(HTMLParser):
+    """Text out of a note's HTML; every tag but a line break or a link is ignored."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._links: list[tuple[str | None, int]] = []
+        self._after_break = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "br":
+            self.parts.append("\n")
+            self._after_break = True
+        elif tag == "a":
+            self._links.append((dict(attrs).get("href"), len(self.parts)))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _NOTE_BLOCKS and not self._after_break:
+            self.parts.append("\n")
+        elif tag == "a" and self._links:
+            href, start = self._links.pop()
+            if href and "".join(self.parts[start:]).strip() != href:
+                self.parts.append(f" ({href})")
+        self._after_break = False
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(" ".join(data.split("\n")))
+        self._after_break = False

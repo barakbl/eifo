@@ -219,4 +219,4 @@ class TestNotesStayPrivate:
 
         page = client.get("/api/v1/me/items").json()
 
-        assert page["items"][0]["note"] == "לצפות עם אמא"
+        assert page["items"][0]["note"] == "<p>לצפות עם אמא</p>"

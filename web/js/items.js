@@ -13,8 +13,9 @@ export const WANT_TO_WATCH = "want_to_watch";
 
 export const RATING_MIN = 1;
 export const RATING_MAX = 10;
-/* Matches the server's validation; the client's copy only shapes the input. */
-export const NOTE_MAX_LENGTH = 2000;
+/* Characters of text, formatting aside - the server's NOTE_MAX_LENGTH. The
+ * client's copy only shapes the editor; the server is what refuses. */
+export const NOTE_MAX_LENGTH = 10_000;
 
 /** Whether an entry still says anything worth keeping. */
 export function isEmptyEntry(entry) {

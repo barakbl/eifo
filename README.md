@@ -94,7 +94,10 @@ people actually trust, and puts a search box in front of it.
 - **Personal lists.** Sign in with Google or X to keep watched and want-to-watch lists -
   a title can be on both, because something seen and worth seeing again is not a
   contradiction - rate in five stars and their halves, and write private notes. Notes are
-  private always, including on a public profile.
+  private always, including on a public profile, and formatted: headings, bold, italic,
+  underline, strikethrough, links, emoji and a direction per paragraph, and each one
+  downloads as an RTF file. The server rewrites every note from scratch before storing it,
+  so only that formatting can ever reach the page.
 - **Filed from the grid, not from a page each.** Both list buttons sit on the poster in the
   catalog, so a page of results can be worked through without opening any of it - and
   because the state is drawn on every card, what you have already seen reads across the

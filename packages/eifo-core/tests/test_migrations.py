@@ -9,6 +9,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from eifo_core.migrate import (
     alembic_config,
@@ -21,6 +22,7 @@ from eifo_core.migrate import (
     upgrade,
 )
 from eifo_core.models import Base
+from eifo_core.notes import clean as clean_note
 
 EXPECTED_TABLES = {
     "availability",
@@ -321,6 +323,124 @@ class TestMemberAdditions:
 
         assert found == [(1,)]
         assert "added_at" not in columns
+
+
+class TestFormattedNotes:
+    """0032 turns plain notes into HTML and gives them room to be formatted."""
+
+    NOW = "'2026-11-01 00:00:00'"
+
+    def _seed(self, db_url: str, notes: dict[int, str]) -> Engine:
+        upgrade(db_url, "0031_poster_backups")
+        engine = create_engine(db_url)
+        with engine.begin() as connection:
+            for row_id, note in notes.items():
+                connection.execute(
+                    text(
+                        "INSERT INTO user_items "
+                        "(id, user_id, title_id, want_to_watch, watched, note, created_at, "
+                        f"updated_at) VALUES (:id, 1, :id, 0, 1, :note, {self.NOW}, {self.NOW})"
+                    ),
+                    {"id": row_id, "note": note},
+                )
+        return engine
+
+    @staticmethod
+    def _notes(engine: Engine) -> dict[int, str | None]:
+        with engine.connect() as connection:
+            rows = connection.execute(text("SELECT id, note FROM user_items ORDER BY id")).all()
+        return {row_id: note for row_id, note in rows}
+
+    def test_a_plain_note_keeps_its_lines_and_its_symbols(self, tmp_path: Path) -> None:
+        db_url = f"sqlite:///{tmp_path / 'notes.db'}"
+        engine = self._seed(db_url, {1: "Tom & Jerry\n\nI <3 it", 2: "לצפות עם אמא"})
+        try:
+            upgrade(db_url)
+            notes = self._notes(engine)
+        finally:
+            engine.dispose()
+
+        assert notes == {
+            1: "<p>Tom &amp; Jerry</p><p><br></p><p>I &lt;3 it</p>",
+            2: "<p>לצפות עם אמא</p>",
+        }
+
+    def test_the_converted_note_is_what_the_cleaner_would_write(self, tmp_path: Path) -> None:
+        """Otherwise the first save of an untouched note would change it."""
+        plain = "first line\n\n  second   line & more  \nthird <3"
+        db_url = f"sqlite:///{tmp_path / 'notes-clean.db'}"
+        engine = self._seed(db_url, {1: plain})
+        try:
+            upgrade(db_url)
+            stored = self._notes(engine)[1]
+        finally:
+            engine.dispose()
+
+        cleaned = clean_note(plain)
+        assert cleaned is not None
+        assert stored == cleaned.html
+        assert clean_note(stored) == cleaned
+
+    def test_a_long_formatted_note_now_fits_and_a_huge_one_does_not(self, tmp_path: Path) -> None:
+        db_url = f"sqlite:///{tmp_path / 'notes-long.db'}"
+        engine = self._seed(db_url, {})
+        try:
+            upgrade(db_url)
+            with engine.begin() as connection:
+                insert = text(
+                    "INSERT INTO user_items (id, user_id, title_id, want_to_watch, watched, note, "
+                    f"created_at, updated_at) VALUES (:id, 1, :id, 0, 0, :note, {self.NOW}, "
+                    f"{self.NOW})"
+                )
+                connection.execute(insert, {"id": 1, "note": "<p>" + "א" * 10_000 + "</p>"})
+            with pytest.raises(IntegrityError), engine.begin() as connection:
+                connection.execute(insert, {"id": 2, "note": "א" * 50_001})
+        finally:
+            engine.dispose()
+
+    def test_the_rebuilt_table_keeps_its_keys_and_indexes(self, tmp_path: Path) -> None:
+        db_url = f"sqlite:///{tmp_path / 'notes-keys.db'}"
+        engine = self._seed(db_url, {})
+        try:
+            upgrade(db_url)
+            with engine.connect() as connection:
+                inspector = inspect(connection)
+                deletes = {
+                    key["referred_table"]: key["options"].get("ondelete")
+                    for key in inspector.get_foreign_keys("user_items")
+                }
+                indexes = {index["name"] for index in inspector.get_indexes("user_items")}
+        finally:
+            engine.dispose()
+
+        assert deletes == {"users": "CASCADE", "titles": "CASCADE"}
+        assert {"ix_user_items_user_watched", "ix_user_items_user_want"} <= indexes
+
+    def test_downgrade_brings_back_plain_text_within_the_old_limit(self, tmp_path: Path) -> None:
+        db_url = f"sqlite:///{tmp_path / 'notes-down.db'}"
+        engine = self._seed(db_url, {})
+        try:
+            upgrade(db_url)
+            with engine.begin() as connection:
+                for row_id, note in {
+                    1: "<h2>Why</h2><p><b>Tom</b> &amp; Jerry<br>again</p><p><br></p><p>end</p>",
+                    2: "<p>" + "a" * 3000 + "</p>",
+                    3: "<p><br></p>",
+                }.items():
+                    connection.execute(
+                        text(
+                            "INSERT INTO user_items (id, user_id, title_id, want_to_watch, "
+                            "watched, note, created_at, updated_at) VALUES "
+                            f"(:id, 1, :id, 0, 1, :note, {self.NOW}, {self.NOW})"
+                        ),
+                        {"id": row_id, "note": note},
+                    )
+            downgrade(db_url, "0031_poster_backups")
+            notes = self._notes(engine)
+        finally:
+            engine.dispose()
+
+        assert notes == {1: "Why\nTom & Jerry\nagain\n\nend", 2: "a" * 2000, 3: None}
 
 
 def test_downgrade_removes_the_schema(tmp_path: Path) -> None:

@@ -2085,17 +2085,271 @@ img {
   cursor: pointer;
 }
 
-.note {
-  display: block;
-  inline-size: 100%;
+/* The note opens as a page to write on - a dozen lines - and grows with what is
+   written until it would push its own toolbar off the screen; past that it
+   scrolls inside. */
+.note-editor__body {
   margin-block-start: var(--space-2);
-  padding: var(--space-3);
   background: var(--surface-sunken);
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.note-editor__body:focus-within {
+  border-color: var(--line-strong);
+}
+
+.note-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  background: var(--surface);
+  border-block-end: 1px solid var(--line);
+}
+
+.note-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-inline-size: 2rem;
+  block-size: 2rem;
+  padding: 0 var(--space-1);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.note-tool:hover:not(:disabled) {
+  background: var(--surface-raised);
+  color: var(--fg);
+}
+
+.note-tool:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.note-tool[aria-pressed="true"],
+.note-tool[aria-expanded="true"] {
+  background: var(--accent-quiet);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.note-tool .icon {
+  inline-size: 1.1rem;
+  block-size: 1.1rem;
+}
+
+/* Each mark's button is drawn in its own mark. */
+.note-tool--bold {
+  font-weight: var(--weight-bold);
+}
+
+.note-tool--italic {
+  font-style: italic;
+  font-family: Georgia, serif;
+}
+
+.note-tool--underline {
+  text-decoration: underline;
+}
+
+.note-tool--strikeThrough {
+  text-decoration: line-through;
+}
+
+.note-tool--block {
+  padding-inline: var(--space-2);
+  background: var(--surface-sunken);
+  border-color: var(--line);
+  color: var(--fg);
+}
+
+/* The file is not formatting: it sits apart, at the row's far end. */
+.note-tool--file {
+  margin-inline-start: auto;
+  padding-inline: var(--space-2);
+  border-color: var(--line);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-bold);
+}
+
+.note-tool__separator {
+  align-self: stretch;
+  inline-size: 1px;
+  margin-inline: var(--space-1);
+  background: var(--line);
+}
+
+.note-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  background: var(--surface);
+  border-block-end: 1px solid var(--line);
+}
+
+.note-link[hidden],
+.note-emoji[hidden] {
+  display: none;
+}
+
+.note-link__input {
+  flex: 1 1 14rem;
+  min-inline-size: 0;
+  padding: var(--space-1) var(--space-3);
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
   color: var(--fg);
   font: inherit;
-  resize: vertical;
+  font-size: var(--text-sm);
+}
+
+.note-link__open {
+  color: var(--accent);
+  font-size: var(--text-sm);
+}
+
+.note-link__problem {
+  flex-basis: 100%;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+}
+
+.note-link__problem:empty {
+  display: none;
+}
+
+.note-emoji {
+  background: var(--surface);
+  border-block-end: 1px solid var(--line);
+}
+
+.note-emoji__tabs {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2) 0;
+  border-block-end: 1px solid var(--line);
+}
+
+.note-emoji__tab {
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  border: none;
+  border-block-end: 2px solid transparent;
+  font-size: 1.15rem;
+  line-height: 1.4;
+  cursor: pointer;
+  filter: grayscale(0.7);
+}
+
+.note-emoji__tab[aria-selected="true"] {
+  border-block-end-color: var(--accent);
+  filter: none;
+}
+
+.note-emoji__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(2.25rem, 1fr));
+  max-block-size: 11rem;
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+
+.note-emoji__pick {
+  block-size: 2.25rem;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.note-emoji__pick:hover,
+.note-emoji__pick:focus-visible {
+  background: var(--surface-raised);
+}
+
+.note {
+  position: relative;
+  min-block-size: calc(12 * 1.6em + 2 * var(--space-3));
+  max-block-size: 70vh;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-4);
+  color: var(--fg);
+  font-size: var(--text-md);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  outline: none;
+  /* A paragraph with no direction of its own reads the way its first letter
+     does, so Hebrew and English lines sit in one note without a button. */
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+
+.note :is(p, h1, h2, h3, h4, h5, h6) {
+  margin: 0 0 var(--space-2);
+}
+
+.note :is(p, h1, h2, h3, h4, h5, h6):not([dir]) {
+  unicode-bidi: plaintext;
+}
+
+.note :is(h1, h2, h3, h4, h5, h6) {
+  line-height: 1.25;
+  font-weight: var(--weight-bold);
+}
+
+.note h1 {
+  font-size: 1.75em;
+}
+
+.note h2 {
+  font-size: 1.5em;
+}
+
+.note h3 {
+  font-size: 1.3em;
+}
+
+.note h4 {
+  font-size: 1.15em;
+}
+
+.note h5 {
+  font-size: 1em;
+}
+
+.note h6 {
+  font-size: 0.9em;
+  color: var(--fg-muted);
+}
+
+.note a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.note[data-empty]::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  inset-block-start: var(--space-3);
+  inset-inline: var(--space-4);
+  color: var(--fg-faint);
+  pointer-events: none;
 }
 
 .note-editor__row {
@@ -2108,6 +2362,18 @@ img {
 .note__status {
   color: var(--fg-muted);
   font-size: var(--text-xs);
+}
+
+.note__count {
+  margin-inline-start: auto;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.note__count--over {
+  color: var(--danger);
+  font-weight: var(--weight-bold);
 }
 
 /* -- settings ------------------------------------------------------------- */
@@ -3363,6 +3629,16 @@ input {
   .note-editor summary,
   .components summary {
     padding-block: var(--space-3);
+  }
+
+  .note-tool,
+  .note-emoji__pick {
+    min-inline-size: var(--tap-compact);
+    block-size: var(--tap-compact);
+  }
+
+  .note-link__input {
+    font-size: max(1rem, 16px);
   }
 
   /* Names in a credit run sit close together; the padding reaches for the

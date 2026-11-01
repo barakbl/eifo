@@ -152,6 +152,7 @@ def to_item(entry: Any) -> RawItem | None:
     if not title or not web_url or kind is None:
         return None
 
+    posters = _posters(entry.get("images"))
     return RawItem(
         source_key=SOURCE_KEY,
         kind=kind,
@@ -159,7 +160,8 @@ def to_item(entry: Any) -> RawItem | None:
         year=_year(entry.get("year")),
         offer_type=OfferType.STREAM,
         deep_link_url=web_url,
-        poster_url=_poster(entry.get("images")),
+        poster_url=posters[0] if posters else None,
+        poster_backups=posters[1:],
         extra={"content_id": entry.get("id"), "public_uid": entry.get("publicUid")},
     )
 
@@ -169,22 +171,27 @@ def _year(value: Any) -> int | None:
     return value if isinstance(value, int) else None
 
 
-def _poster(images: Any) -> str | None:
-    """The best available poster URL, made absolute.
+def _posters(images: Any) -> tuple[str, ...]:
+    """Every poster URL, best first, made absolute.
+
+    The first is the poster; the rest are backups, because one size can be a
+    dead link while the others load - one film in 2026 had a 2x3 that answered
+    404 and a 3x4 and a 16x9 that did not.
 
     Artwork URLs are protocol-relative (``//host/...``); the image pipeline
     needs a scheme to fetch them.
     """
     if not isinstance(images, dict):
-        return None
+        return ()
 
+    found: list[str] = []
     for ratio in _POSTER_RATIOS:
         variants = images.get(ratio)
-        if isinstance(variants, list) and variants:
-            url = str((variants[0] or {}).get("url") or "").strip()
+        if isinstance(variants, list) and variants and isinstance(variants[0], dict):
+            url = str(variants[0].get("url") or "").strip()
             if url:
-                return f"https:{url}" if url.startswith("//") else url
-    return None
+                found.append(f"https:{url}" if url.startswith("//") else url)
+    return tuple(found)
 
 
 def _max_pages(ctx: FetchContext) -> int:

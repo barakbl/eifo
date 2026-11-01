@@ -82,6 +82,9 @@ class PendingPoster:
 
     title_id: int
     source_url: str
+    #: The listing's other artwork, best first: tried when ``source_url`` is
+    #: gone, before TMDB's.
+    backup_urls: tuple[str, ...] = ()
     #: TMDB's name for the title, when it has one: the fallback when the
     #: source's own artwork is gone (:class:`eifo_fetcher.images.ImageFetcher`).
     kind: TitleKind | None = None
@@ -167,6 +170,10 @@ class IngestClient:
             PendingPoster(
                 title_id=row["title_id"],
                 source_url=row["source_url"],
+                # An API from before backups existed sends none.
+                backup_urls=tuple(
+                    url for url in row.get("backup_urls") or () if isinstance(url, str)
+                ),
                 kind=_kind(row.get("kind")),
                 tmdb_id=row.get("tmdb_id") if isinstance(row.get("tmdb_id"), int) else None,
             )

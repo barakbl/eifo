@@ -345,6 +345,14 @@ def _match_chunk(
 
         if item.poster_url and not match.title.poster_source_url:
             match.title.poster_source_url = item.poster_url
+        if item.poster_url and item.poster_url == match.title.poster_source_url:
+            # Refreshed from the listing whose poster the title has, and only
+            # from that one: another service's sizes are not backups of it.
+            # Compared first so an unchanged list writes nothing, and does not
+            # touch updated_at on every title of every sync.
+            backups = list(item.poster_backups) or None
+            if match.title.poster_backup_urls != backups:
+                match.title.poster_backup_urls = backups
         if item.origin_countries and not match.title.origin_countries:
             match.title.origin_countries = item.origin_countries
         if item.credits:

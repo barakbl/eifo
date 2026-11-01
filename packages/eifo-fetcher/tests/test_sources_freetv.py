@@ -226,6 +226,53 @@ class TestToItem:
         assert to_item("nope") is None
 
 
+class TestPosterBackups:
+    """One film's 2x3 was a dead link while its 3x4 and 16x9 loaded."""
+
+    def test_the_other_sizes_are_backups_best_first(self) -> None:
+        item = to_item(
+            dict(
+                _movie(1),
+                images={
+                    "16x9": [{"url": "//img.example/p169.jpg"}],
+                    "3x4": [{"url": "//img.example/p34.jpg"}],
+                    "2x3": [{"url": "//img.example/p23.jpg"}],
+                },
+            )
+        )
+
+        assert item is not None
+        assert item.poster_url == "https://img.example/p23.jpg"
+        assert item.poster_backups == (
+            "https://img.example/p34.jpg",
+            "https://img.example/p169.jpg",
+        )
+
+    def test_one_size_has_no_backups(self) -> None:
+        item = to_item(_movie(1))
+
+        assert item is not None
+        assert item.poster_url == "https://img.example/p34.jpg"
+        assert item.poster_backups == ()
+
+    def test_a_size_repeating_the_poster_is_not_a_backup(self) -> None:
+        same = [{"url": "//img.example/p.jpg"}]
+        item = to_item(dict(_movie(1), images={"2x3": same, "3x4": same, "16x9": [None]}))
+
+        assert item is not None
+        assert item.poster_backups == ()
+
+    @respx.mock
+    def test_the_recorded_page_carries_backups(self, freetv_ctx: FetchContext) -> None:
+        mock_catalog()
+
+        by_name = {i.name: i for i in FreetvPlugin().fetch(freetv_ctx)}
+        backups = by_name["10 דברים להספיק לפני שנפרד"].poster_backups
+
+        assert len(backups) == 2
+        assert all(url.startswith("https://") for url in backups)
+
+
 def _movie(content_id: int) -> dict:
     return {
         "id": content_id,

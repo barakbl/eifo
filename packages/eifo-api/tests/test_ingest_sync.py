@@ -311,6 +311,61 @@ class TestOfferingAChunk:
         assert offer(client, operator, other_id, {"item": listing()}).status_code == 404
 
 
+POSTER = "https://img.example/p23.jpg"
+BACKUPS = ["https://img.example/p34.jpg", "https://img.example/p169.jpg"]
+
+
+class TestPosterBackups:
+    """A listing's other sizes, kept for when its poster is a dead link."""
+
+    def _title(self, session_factory: sessionmaker[Session]) -> Title:
+        with session_factory() as session:
+            title = session.scalars(select(Title)).one()
+            session.expunge(title)
+            return title
+
+    def test_a_new_title_keeps_them(
+        self, client: TestClient, operator: str, run: int, session_factory: sessionmaker[Session]
+    ) -> None:
+        item = listing(poster_url=POSTER, poster_backups=BACKUPS)
+        offer(client, operator, run, {"item": item, "resolved": True})
+
+        title = self._title(session_factory)
+        assert (title.poster_source_url, title.poster_backup_urls) == (POSTER, BACKUPS)
+
+    def test_the_next_sync_refreshes_them(
+        self, client: TestClient, operator: str, run: int, session_factory: sessionmaker[Session]
+    ) -> None:
+        """The title predates backups, as every FreeTV title does today."""
+        offer(client, operator, run, {"item": listing(poster_url=POSTER), "resolved": True})
+        assert self._title(session_factory).poster_backup_urls is None
+
+        item = listing(poster_url=POSTER, poster_backups=BACKUPS[:1])
+        offer(client, operator, run, {"item": item, "resolved": True})
+        assert self._title(session_factory).poster_backup_urls == BACKUPS[:1]
+
+        offer(client, operator, run, {"item": listing(poster_url=POSTER), "resolved": True})
+        assert self._title(session_factory).poster_backup_urls is None
+
+    def test_a_listing_whose_poster_the_title_does_not_have_leaves_them(
+        self, client: TestClient, operator: str, run: int, session_factory: sessionmaker[Session]
+    ) -> None:
+        """Another listing's sizes are not backups of this poster."""
+        offer(client, operator, run, {"item": listing(poster_url=POSTER), "resolved": True})
+        with session_factory() as session:
+            title = session.scalars(select(Title)).one()
+            title.poster_source_url = "https://image.tmdb.org/t/p/w500/x.jpg"
+            title.poster_backup_urls = ["https://elsewhere.example/b.jpg"]
+            session.commit()
+
+        item = listing(poster_url=POSTER, poster_backups=BACKUPS)
+        offer(client, operator, run, {"item": item, "resolved": True})
+
+        title = self._title(session_factory)
+        assert title.poster_source_url == "https://image.tmdb.org/t/p/w500/x.jpg"
+        assert title.poster_backup_urls == ["https://elsewhere.example/b.jpg"]
+
+
 class TestFinishingARun:
     def _finish(self, client: TestClient, operator: str, run_id: int, **body: Any) -> Any:
         return client.post(

@@ -15,7 +15,7 @@ statement about the world as one catalog describes it; what to do about it is
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -87,6 +87,10 @@ class RawItem:
     #: apart when a catalogue names them identically.
     source_ref: str | None = None
     poster_url: str | None = None
+    #: Other artwork for the same listing, best first, for when ``poster_url``
+    #: is a dead link. FreeTV lists most films in two or three sizes, and one
+    #: of them can be gone while the others load.
+    poster_backups: tuple[str, ...] = ()
     #: What the offer costs, in the currency's minor unit (1990 = 19.90 ILS),
     #: with its ISO-4217 code. Only a source that charges per title sets these.
     price_minor: int | None = None
@@ -109,10 +113,34 @@ class RawItem:
         # Every source passes through here, so this is the one place a
         # placeholder year can be stopped rather than each parser's business.
         object.__setattr__(self, "year", plausible_year(self.year))
+        object.__setattr__(
+            self, "poster_backups", backup_posters(self.poster_url, self.poster_backups)
+        )
         if (self.price_minor is None) != (self.price_currency is None):
             raise ValueError("RawItem price needs both an amount and a currency, or neither")
         if self.price_minor is not None and self.price_minor < 0:
             raise ValueError("RawItem.price_minor must not be negative")
+
+
+#: Backup artwork a listing may carry. A source has two or three sizes; the cap
+#: only stops a broken one from filling the column.
+MAX_POSTER_BACKUPS = 5
+
+
+def backup_posters(primary: str | None, candidates: Iterable[str]) -> tuple[str, ...]:
+    """The backup URLs worth keeping, in the order given.
+
+    Drops what cannot be fetched - a blank, a URL with no scheme - and anything
+    already in the list, the primary included: trying the dead link a second
+    time is not a backup.
+    """
+    kept: list[str] = []
+    for candidate in candidates:
+        url = candidate.strip() if isinstance(candidate, str) else ""
+        if not url.startswith(("http://", "https://")) or url == primary or url in kept:
+            continue
+        kept.append(url)
+    return tuple(kept[:MAX_POSTER_BACKUPS])
 
 
 #: How TMDB spells each kind in a URL path.

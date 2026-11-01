@@ -79,6 +79,8 @@ class ImageResult:
     failed: int = 0
     #: Titles whose own artwork was gone and whose TMDB poster was used.
     from_tmdb: int = 0
+    #: Titles whose own artwork was gone and another size of it was used.
+    from_backup: int = 0
     #: What the server would not take, in its words. Kept on the result so it
     #: reaches the run's stats: a poster rejected at the far end is invisible
     #: here otherwise, and "downloaded 100, stored 98" with no reason is the
@@ -93,6 +95,8 @@ class ImageResult:
         }
         if self.from_tmdb:
             stats["from_tmdb"] = self.from_tmdb
+        if self.from_backup:
+            stats["from_backup"] = self.from_backup
         if self.rejected:
             stats["rejected"] = self.rejected[:50]
         return stats
@@ -225,29 +229,59 @@ class ImageFetcher:
         )
 
     def _download(self, poster: PendingPoster, result: ImageResult) -> tuple[bytes, str]:
-        """The artwork's bytes and where they came from, falling back to TMDB.
+        """The artwork's bytes and where they came from.
 
-        Only a *gone* image falls back. A timeout or a 5xx is the host having a
-        bad night, and the source's own artwork is still the one wanted - so
-        those raise as before, and the title is offered again next run.
+        Only a *gone* image falls back: first to the listing's other sizes,
+        then to TMDB's. A timeout or a 5xx is the host having a bad night, and
+        the source's own artwork is still the one wanted - so those raise as
+        before, and the title is offered again next run.
         """
         try:
             return self._http.get(poster.source_url).content, poster.source_url
         except httpx.HTTPStatusError as exc:
             if not _is_gone(exc.response.status_code):
                 raise
-            fallback = self._tmdb_poster(poster)
-            if fallback is None or fallback == poster.source_url:
-                raise
-            logger.info(
-                "poster for title %s is gone (%s from %s); using TMDB's",
-                poster.title_id,
-                exc.response.status_code,
-                httpx.URL(poster.source_url).host,
-            )
-            data = self._http.get(fallback).content
-            result.from_tmdb += 1
-            return data, fallback
+            gone = exc
+
+        status = gone.response.status_code
+        host = httpx.URL(poster.source_url).host
+        for backup in poster.backup_urls:
+            data = self._gone_or_bytes(backup)
+            if data is not None:
+                logger.info(
+                    "poster for title %s is gone (%s from %s); using another size",
+                    poster.title_id,
+                    status,
+                    host,
+                )
+                result.from_backup += 1
+                return data, backup
+
+        fallback = self._tmdb_poster(poster)
+        if fallback is None or fallback == poster.source_url or fallback in poster.backup_urls:
+            raise gone
+        logger.info(
+            "poster for title %s is gone (%s from %s); using TMDB's",
+            poster.title_id,
+            status,
+            host,
+        )
+        data = self._http.get(fallback).content
+        result.from_tmdb += 1
+        return data, fallback
+
+    def _gone_or_bytes(self, url: str) -> bytes | None:
+        """A backup's bytes, or None when it is gone too.
+
+        Anything else raises, as the primary would: a backup that timed out may
+        be there tomorrow, and TMDB's poster should not replace it for good.
+        """
+        try:
+            return self._http.get(url).content
+        except httpx.HTTPStatusError as exc:
+            if _is_gone(exc.response.status_code):
+                return None
+            raise
 
     def _tmdb_poster(self, poster: PendingPoster) -> str | None:
         """TMDB's poster for this title, English first as the enricher picks it."""

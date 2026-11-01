@@ -28,6 +28,7 @@ from sqlalchemy import Float, Select, func, select
 from sqlalchemy.orm import Session
 
 from eifo_core.enums import MatchDecision, OfferType, TitleKind
+from eifo_core.items import backup_posters
 from eifo_core.models import MatchReview, Source, Title
 from eifo_core.naming import split_by_script
 from eifo_core.offers import Offer, record_offer
@@ -176,6 +177,11 @@ def title_from(review: MatchReview) -> Title:
         name_en=english,
         year=payload.get("year"),
         poster_source_url=payload.get("poster_url"),
+        # A review parked before backups existed has none.
+        poster_backup_urls=list(
+            backup_posters(payload.get("poster_url"), payload.get("poster_backups") or ())
+        )
+        or None,
     )
 
 

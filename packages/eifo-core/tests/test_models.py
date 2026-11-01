@@ -18,6 +18,7 @@ from eifo_core.enums import (
     TitleKind,
 )
 from eifo_core.models import (
+    NOTE_STORED_MAX_LENGTH,
     Availability,
     FetchRun,
     Genre,
@@ -317,7 +318,9 @@ class TestUserItem:
     def test_rejects_an_over_long_note(self, session: Session) -> None:
         """Validation also lives in the schema, so no writer can bypass it."""
         user, title = _user_and_title(session)
-        session.add(UserItem(user_id=user.id, title_id=title.id, note="א" * 2001))
+        session.add(
+            UserItem(user_id=user.id, title_id=title.id, note="א" * (NOTE_STORED_MAX_LENGTH + 1))
+        )
 
         with pytest.raises(IntegrityError):
             session.commit()

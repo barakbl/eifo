@@ -234,10 +234,82 @@ class TestItems:
         catalog: Seeded,
     ) -> None:
         response = client.put(
-            f"/api/v1/me/items/{catalog.fauda}", json={"note": "א" * 2001}, headers=headers
+            f"/api/v1/me/items/{catalog.fauda}", json={"note": "א" * 10_001}, headers=headers
         )
 
         assert response.status_code == 422
+        assert "10,000" in response.json()["detail"]
+
+    def test_formatting_does_not_count_against_the_length(
+        self,
+        client: TestClient,
+        headers: dict[str, str],
+        catalog: Seeded,
+    ) -> None:
+        """Ten thousand characters is what a person counts, not the markup around them."""
+        words = "<b>" + "א" * 5_000 + "</b><i>" + "ב" * 5_000 + "</i>"
+
+        response = client.put(
+            f"/api/v1/me/items/{catalog.fauda}", json={"note": words}, headers=headers
+        )
+
+        assert response.status_code == 200
+        assert response.json()["note"].startswith("<p><b>אאא")
+
+    def test_a_note_is_stored_as_the_cleaner_writes_it(
+        self,
+        client: TestClient,
+        headers: dict[str, str],
+        catalog: Seeded,
+    ) -> None:
+        """Nothing a client sends is kept as sent: no scripts, handlers or strange links."""
+        sent = (
+            '<h2 dir="rtl" style="color:red">מה <script>alert(1)</script>חשבתי</h2>'
+            '<p onclick="steal()">Worth it <img src=x onerror=alert(1)>'
+            '<a href="javascript:alert(1)">really</a> - '
+            '<a href="https://www.imdb.com/title/tt0123">IMDb</a></p>'
+        )
+
+        response = client.put(
+            f"/api/v1/me/items/{catalog.fauda}", json={"note": sent}, headers=headers
+        )
+        page = client.get("/api/v1/me/items").json()
+
+        expected = (
+            '<h2 dir="rtl">מה חשבתי</h2>'
+            '<p>Worth it really - <a href="https://www.imdb.com/title/tt0123">IMDb</a></p>'
+        )
+        assert response.json()["note"] == expected
+        assert page["items"][0]["note"] == expected
+
+    def test_a_plain_note_keeps_its_lines(
+        self,
+        client: TestClient,
+        headers: dict[str, str],
+        catalog: Seeded,
+    ) -> None:
+        """What every client sent before notes had formatting, and some still will."""
+        response = client.put(
+            f"/api/v1/me/items/{catalog.fauda}",
+            json={"note": "Tom & Jerry\n\nI <3 it"},
+            headers=headers,
+        )
+
+        assert response.json()["note"] == "<p>Tom &amp; Jerry</p><p><br></p><p>I &lt;3 it</p>"
+
+    def test_formatting_around_nothing_is_no_note(
+        self,
+        client: TestClient,
+        headers: dict[str, str],
+        catalog: Seeded,
+    ) -> None:
+        response = client.put(
+            f"/api/v1/me/items/{catalog.fauda}",
+            json={"watched": True, "note": "<h1> </h1><p><b><br></b></p>"},
+            headers=headers,
+        )
+
+        assert response.json()["note"] is None
 
     def test_a_whitespace_note_is_no_note(
         self,

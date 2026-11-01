@@ -7,7 +7,6 @@
 
 import { deleteMyItem, listMyItems, loginUrl, putMyItem, returnAfterSignIn } from "./api.js";
 import {
-  NOTE_MAX_LENGTH,
   RATING_MAX,
   RATING_MIN,
   STARS,
@@ -291,43 +290,6 @@ function cardToggle(list, key, iconName, entry, t, commit) {
     },
     icon(iconName),
   );
-}
-
-/**
- * The private note.
- *
- * Saved on demand rather than as it is typed: a half-finished sentence is not
- * a state worth showing back to anyone, including its author.
- */
-export function noteEditor({ titleId, items, t }) {
-  const field = el("textarea", {
-    class: "note",
-    rows: "3",
-    maxlength: String(NOTE_MAX_LENGTH),
-    placeholder: t("item.notePlaceholder"),
-    "aria-label": t("item.note"),
-  });
-  field.value = items.get(titleId)?.note ?? "";
-
-  const status = el("span", { class: "note__status", role: "status" });
-
-  const save = el("button", {
-    class: "button button--quiet",
-    type: "button",
-    text: t("item.noteSave"),
-    onClick: async () => {
-      status.textContent = "";
-      const saved = await commitItem(titleId, items, { note: field.value.trim() || null });
-      field.value = items.get(titleId)?.note ?? "";
-      status.textContent = t(saved ? "item.noteSaved" : "item.saveFailed");
-    },
-  });
-
-  return el("details", { class: "note-editor" }, [
-    el("summary", { text: t("item.note") }),
-    field,
-    el("div", { class: "note-editor__row" }, [save, status]),
-  ]);
 }
 
 /* The same icon as the poster toggle, beside the words that name it. Seeing

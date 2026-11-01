@@ -28,7 +28,7 @@ from eifo_core.ingest import MAX_IMDB_WRITE_CHUNK, MAX_SERET_WRITE_CHUNK
 from eifo_core.models import (
     DISPLAY_NAME_MAX_LENGTH,
     HANDLE_MAX_LENGTH,
-    NOTE_MAX_LENGTH,
+    NOTE_STORED_MAX_LENGTH,
     RATING_MAX,
     RATING_MIN,
 )
@@ -537,7 +537,8 @@ class UserItemOut(BaseModel):
     want_to_watch: bool = False
     watched: bool = False
     rating: int | None = None
-    #: Private always, even on a public profile.
+    #: Private always, even on a public profile. HTML, in the small dialect
+    #: described on ItemUpsert.note, and nothing outside it.
     note: str | None = None
     updated_at: dt.datetime
     #: Populated when the list is being browsed, absent on a write's echo.
@@ -580,7 +581,11 @@ class ItemUpsert(BaseModel):
     want_to_watch: bool | None = None
     watched: bool | None = None
     rating: int | None = Field(default=None, ge=RATING_MIN, le=RATING_MAX)
-    note: str | None = Field(default=None, max_length=NOTE_MAX_LENGTH)
+    #: HTML: paragraphs and h1-h6 (each may carry dir="rtl" or "ltr"), with
+    #: b, i, u, s, br, and links to http, https or mailto. Anything else is
+    #: dropped and its text kept. Text with no tags in it is plain text, one
+    #: paragraph per line. At most 10,000 characters of text, markup aside.
+    note: str | None = Field(default=None, max_length=NOTE_STORED_MAX_LENGTH)
 
 
 class FoundMovieOut(BaseModel):

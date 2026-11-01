@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from mcp import Client
@@ -16,6 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from eifo_core.models import ApiToken, User
 from eifo_mcp.client import EifoClient
 from eifo_mcp.server import build_server
+from eifo_mcp.shaping import note_text
 
 EXPECTED_TOOLS = {
     "search_titles",
@@ -422,3 +424,25 @@ class TestTasteAndSimilar:
         assert "Unknown genre Western" in call_error(
             server, "recommendations", {"genres": ["Western"]}
         )
+
+
+class TestNotesAsWords:
+    """A note is HTML in the API; a model gets the words."""
+
+    def test_formatting_goes_and_lines_and_links_stay(self) -> None:
+        note = (
+            "<h2>Why</h2><p><b>Tom</b> &amp; Jerry<br>again "
+            '<a href="https://www.imdb.com/title/tt1">IMDb</a></p><p><br></p>'
+            '<p dir="rtl">אמא <a href="https://a.com">https://a.com</a></p>'
+        )
+
+        assert note_text(note) == (
+            "Why\nTom & Jerry\nagain IMDb (https://www.imdb.com/title/tt1)\n\nאמא https://a.com"
+        )
+
+    def test_a_plain_note_is_itself(self) -> None:
+        assert note_text("loved it") == "loved it"
+
+    @pytest.mark.parametrize("empty", [None, "", "<p><br></p>"])
+    def test_an_empty_note_is_none(self, empty: str | None) -> None:
+        assert note_text(empty) is None

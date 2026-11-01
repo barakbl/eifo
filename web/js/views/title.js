@@ -1,7 +1,7 @@
 /* One title in full: ratings with their sources, and where to watch it. */
 
 import { getTitle, listMyItems } from "../api.js";
-import { noteEditor, titleActions } from "../account.js";
+import { titleActions } from "../account.js";
 import {
   RUNTIME_BANDS,
   countryFlag,
@@ -16,6 +16,7 @@ import {
   sourceColorVar,
 } from "../format.js";
 import { displayName, secondaryName } from "../i18n.js";
+import { noteEditor } from "../noteeditor.js";
 import { fillMoreLikeThis } from "../picks.js";
 import { el, ratingChip, replace, scorePill, stateBlock } from "../ui.js";
 
@@ -105,7 +106,7 @@ function buildDetail(title, { t, language, user, items, sources = [] }) {
         // "where?" answered only for somebody who scrolled far enough to
         // wonder whether it would.
         offersSection(title, { t, language, mine: myServices(user, sources) }),
-        userSection(title, { t, user, items }),
+        userSection(title, { t, language, user, items }),
       ]),
       creditsSection(title, { t, language }),
     ]),
@@ -266,7 +267,7 @@ function personLink(credit, { language }) {
 }
 
 /** Lists, rating and note - or an invitation to sign in and have them. */
-function userSection(title, { t, user, items }) {
+function userSection(title, { t, language, user, items }) {
   if (!user) {
     return el("p", { class: "actions__prompt", text: t("item.signInToTrack") });
   }
@@ -285,7 +286,13 @@ function userSection(title, { t, user, items }) {
         problem.textContent = "";
       },
     }),
-    noteEditor({ titleId: title.id, items, t }),
+    noteEditor({
+      titleId: title.id,
+      items,
+      t,
+      titleName: displayName(title, language),
+      language,
+    }),
     problem,
   ]);
 }

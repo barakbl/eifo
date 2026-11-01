@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.35.0](https://github.com/barakbl/eifo/compare/v0.34.0...v0.35.0) (2026-11-01)
+
+
+### Features
+
+* a dead poster falls back to the listing's other sizes ([#167](https://github.com/barakbl/eifo/issues/167)) ([a49ed90](https://github.com/barakbl/eifo/commit/a49ed90a6ca4b2ddefdd59913ab4da3d1d56f7e4))
+
 ## [0.34.0](https://github.com/barakbl/eifo/compare/v0.33.0...v0.34.0) (2026-10-14)
 
 

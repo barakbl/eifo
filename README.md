@@ -863,6 +863,64 @@ be, with three answers of one tap each and `1`/`2`/`3` plus `j`/`k` for working 
 backlog at speed. A ruling takes effect immediately. The same three rulings are available
 from the CLI (`eifo-fetch review`), which is still the right tool over SSH.
 
+### Dashboards: Prometheus and Grafana
+
+`monitoring/` is a second, optional compose project that sits beside a server
+install: Prometheus, Grafana, and two exporters for the machine and its containers. It
+draws four dashboards:
+
+- **Plugins.** Every run, from whichever machine ran it: the share that failed, how long
+  each plugin takes, when the fetcher last ran, and how many movies and series each
+  service holds.
+- **Enrichment & matching.** Ratings found per provider, time spent and failed lookups
+  per enricher, posters, how listings were matched, and the review queue.
+- **API traffic.** Requests, response times and errors by route.
+- **Server & containers.** CPU, memory, disk and swap, and each container on the box.
+
+It needs nothing from the fetcher's machine. A fetcher on a laptop records every run
+through the API, so the API's own `/api/v1/metrics` already has them. Prometheus reads
+that endpoint from inside the server with a token (`EIFO_METRICS_TOKEN`; the endpoint
+does not exist without one).
+
+Grafana is served at `/grafana/` on Eifo's own address, and nobody signs in to it.
+Before each request the reverse proxy asks Eifo whether the browser behind it is signed
+in as an administrator, and passes along the address Eifo vouches for. Anyone else is
+sent to Eifo's sign-in page. Grafana sits on a network of its own, which only the proxy
+can reach.
+
+Try it locally first, against an API run from this checkout:
+
+```bash
+monitoring/dev.sh up         # then start the API as it says, sign in, open /grafana/
+monitoring/dev.sh history    # import the runs already recorded
+```
+
+On a server that runs Eifo with Docker and a Caddy proxy:
+
+```bash
+monitoring/deploy.sh --host ubuntu@203.0.113.7 --key ~/.ssh/id_ed25519
+```
+
+It generates the secrets, starts the stack, puts the proxy on Grafana's network, adds
+the `/grafana` rules to the Caddyfile (Caddy checks them before anything is reloaded),
+and once only, imports every run since the first into Prometheus. Running it again is
+safe. `--dry-run` shows the Caddyfile change and does nothing.
+
+Two things to know:
+
+- **The proxy's extra network has to survive Eifo's own deploys.** Whatever runs
+  `docker compose up` for Eifo must include `docker-compose.monitoring.yml`, which the
+  script writes beside Eifo's compose files, whenever that file exists. Otherwise the
+  proxy comes back without the network and `/grafana` answers 502 until the script runs
+  again.
+- **The alert rules are there, but paused**: a plugin failing, no fetcher run for two
+  days, a service unsynced for three, server errors, disk and memory. Add a contact point
+  in Grafana and unpause the rules you want.
+
+Dashboards are written by `monitoring/grafana/build.py` rather than by hand. Change that
+file, run it, and commit both; a test fails if the two disagree, or if a dashboard draws
+a figure the API does not serve.
+
 ### Who can sign in
 
 By default anybody with a Google account can, and they get a viewer's account and nothing

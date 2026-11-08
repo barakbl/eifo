@@ -21,6 +21,8 @@ dependencies = [
     # with Eifo", and the same tools the local eifo-mcp serves.
     "mcp>=2.3,<3",
     "eifo-mcp",
+    # /api/v1/metrics, read by the Prometheus in monitoring/.
+    "prometheus-client>=0.26,<1",
 ]
 
 [project.scripts]

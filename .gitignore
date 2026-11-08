@@ -32,3 +32,8 @@ coverage.xml
 
 # Local-only files: private notes, scratch configs, anything ending .local
 *.local
+
+# The monitoring stack's own secrets and scratch, wherever it runs
+monitoring/.env
+monitoring/secrets/
+monitoring/history/

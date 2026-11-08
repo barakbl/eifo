@@ -536,6 +536,23 @@ class TestEnrichTitles:
         assert run.stats["titles_seen"] == 1
         assert run.stats["by_enricher"] == {"fake": 1}
 
+    def test_records_what_each_provider_cost(
+        self, api: IngestClient, session: Session, settings: Settings, http: Any
+    ) -> None:
+        """Time and failures per provider reach the run row, for the dashboards."""
+        add_title(session)
+        broken = FakeEnricher(error=RuntimeError("site down"), key="broken")
+        working = FakeEnricher(
+            EnrichResult(ratings=[Rating(RatingProvider.SERET_VIEWERS, 8.0)]), key="working"
+        )
+
+        run_enrich(session, api, [broken, working], self._ctx(http, settings), settings)
+
+        run = session.scalars(select(FetchRun).where(FetchRun.phase == FetchPhase.ENRICH)).one()
+        assert set(run.stats["seconds_by_enricher"]) == {"broken", "working"}
+        assert all(seconds >= 0 for seconds in run.stats["seconds_by_enricher"].values())
+        assert run.stats["errors_by_enricher"] == {"broken": 1}
+
 
 class TestMetadataPatch:
     def _ctx(self, http: Any, settings: Settings) -> FetchContext:

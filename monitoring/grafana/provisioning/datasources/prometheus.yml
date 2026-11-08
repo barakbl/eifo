@@ -1,0 +1,17 @@
+# The one data source: this stack's Prometheus. Its uid is what the dashboards
+# and alert rules name, so it is fixed rather than generated.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # The scrape interval, so $__rate_interval never asks for less than two
+      # samples.
+      timeInterval: 60s
+      httpMethod: POST

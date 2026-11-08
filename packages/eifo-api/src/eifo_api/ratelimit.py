@@ -20,7 +20,8 @@ catalog loads dozens of them, and they cost nothing to serve.
 
 The fetcher's ingest calls carry an administrator's token and are exempt: a
 sync sends chunks as fast as it can work them out, and an instance's own
-fetcher is not who this is for.
+fetcher is not who this is for. So is the check the proxy makes before each
+request to Grafana, once somebody is signed in.
 
 Memory, not the database, so a limit costs nothing to check and nothing to
 forget. With several worker processes each keeps its own buckets, which
@@ -56,6 +57,11 @@ READS = frozenset({"GET", "HEAD", "OPTIONS"})
 SIGN_IN_PREFIXES = ("/api/v1/auth/login/", "/api/v1/auth/callback/")
 
 INGEST_PREFIX = "/api/v1/ingest/"
+#: What the reverse proxy asks before each request it passes to Grafana
+#: (``monitoring/``). One dashboard is dozens of requests at once, each asked
+#: about, all from somebody already signed in; how often they may load a
+#: dashboard is Grafana's business.
+GATE_PATH = "/api/v1/monitoring/gate"
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +191,10 @@ def draws_for(method: str, path: str, *, credential: str | None, address: str) -
     if path.startswith(INGEST_PREFIX) and credential is not None:
         # The fetcher. A stranger without a token still meets the address
         # limits below, and then the 404 that every ingest route gives them.
+        return []
+    if path == GATE_PATH and credential is not None:
+        # Not signed in, it is limited like anybody else: the address limits
+        # below, then a redirect to the sign-in page.
         return []
 
     caller = f"cred:{credential}" if credential is not None else f"addr:{address}"

@@ -1,0 +1,30 @@
+	# >>> eifo-monitoring - managed by monitoring/deploy.sh; edits in here are overwritten
+	# Prometheus reads the metrics from inside, with a token. From outside
+	# there is nothing to see.
+	handle /api/v1/metrics* {
+		respond 404
+	}
+	redir /grafana /grafana/ 308
+	# Grafana's own scripts, styles and fonts: the same for everyone, dozens to
+	# a page, and nothing private in them. Not worth asking Eifo about each.
+	handle /grafana/public/* {
+		request_header -X-Eifo-User
+		reverse_proxy grafana:3000
+	}
+	# Everything else is Grafana itself. Before each request, ask Eifo whether
+	# the browser behind it is an administrator. If so, pass along the address
+	# Eifo vouched for. If not, Eifo's answer (a redirect to sign in, or a
+	# refusal) goes back to the browser instead. Whatever X-Eifo-User the
+	# browser sent is deleted first: Grafana trusts that header, and only this
+	# proxy may write it. A route block, so the steps run in this order.
+	handle /grafana/* {
+		route {
+			request_header -X-Eifo-User
+			forward_auth api:3436 {
+				uri /api/v1/monitoring/gate
+				copy_headers X-Eifo-User
+			}
+			reverse_proxy grafana:3000
+		}
+	}
+	# <<< eifo-monitoring

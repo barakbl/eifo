@@ -1,0 +1,310 @@
+# Written by monitoring/grafana/build.py - edit that, not this.
+# Every rule starts paused. Unpause one in Grafana (Alerting > Alert rules)
+# once a contact point is set up to receive it.
+{
+  "apiVersion": 1,
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "eifo",
+      "folder": "Eifo",
+      "interval": "5m",
+      "rules": [
+        {
+          "uid": "eifo-plugin-failed",
+          "title": "A plugin's latest run failed",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "1 - eifo_fetch_last_run_ok",
+                "instant": true
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "0s",
+          "isPaused": true,
+          "annotations": {
+            "summary": "{{ $labels.source }} ({{ $labels.phase }}) did not end well on its latest run."
+          },
+          "labels": {
+            "service": "eifo"
+          }
+        },
+        {
+          "uid": "eifo-fetcher-silent",
+          "title": "No fetcher has run for two days",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "time() - max(eifo_fetch_last_start_timestamp_seconds)",
+                "instant": true
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        172800
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "0s",
+          "isPaused": true,
+          "annotations": {
+            "summary": "No fetcher has started a run in two days. Is the laptop's schedule running?"
+          },
+          "labels": {
+            "service": "eifo"
+          }
+        },
+        {
+          "uid": "eifo-sync-stale",
+          "title": "A service has not synced for three days",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "(time() - eifo_fetch_last_success_timestamp_seconds{phase=\"sync\"}) * on (source) group_left eifo_source_enabled",
+                "instant": true
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        259200
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "0s",
+          "isPaused": true,
+          "annotations": {
+            "summary": "{{ $labels.source }} has not finished a sync in three days."
+          },
+          "labels": {
+            "service": "eifo"
+          }
+        },
+        {
+          "uid": "eifo-api-errors",
+          "title": "The API is answering with server errors",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "sum(rate(eifo_http_requests_total{status=\"5xx\"}[15m])) / sum(rate(eifo_http_requests_total[15m]))",
+                "instant": true
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.05
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "10m",
+          "isPaused": true,
+          "annotations": {
+            "summary": "More than 5% of requests in the past 15 minutes ended in a server error."
+          },
+          "labels": {
+            "service": "eifo"
+          }
+        },
+        {
+          "uid": "eifo-disk",
+          "title": "The disk is filling up",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "1 - node_filesystem_avail_bytes{mountpoint=\"/\"} / node_filesystem_size_bytes{mountpoint=\"/\"}",
+                "instant": true
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.85
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "30m",
+          "isPaused": true,
+          "annotations": {
+            "summary": "The server's disk is over 85% full."
+          },
+          "labels": {
+            "service": "eifo"
+          }
+        },
+        {
+          "uid": "eifo-memory",
+          "title": "Memory is running out",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "prometheus",
+              "model": {
+                "refId": "A",
+                "expr": "1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes",
+                "instant": true
+              }
+            },
+            {
+              "refId": "C",
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0.9
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "15m",
+          "isPaused": true,
+          "annotations": {
+            "summary": "The server has less than 10% of its memory available, and no swap."
+          },
+          "labels": {
+            "service": "eifo"
+          }
+        }
+      ]
+    }
+  ]
+}

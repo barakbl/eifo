@@ -14,6 +14,7 @@ from eifo_api.caching import CatalogCacheMiddleware
 from eifo_api.deps import require_membership
 from eifo_api.errors import install_error_handlers
 from eifo_api.logging_privacy import install_log_filters
+from eifo_api.metrics.traffic import TrafficMiddleware
 from eifo_api.oauth import configured_providers, redirect_uri
 from eifo_api.ratelimit import Buckets, RateLimitMiddleware
 from eifo_api.remote_mcp import mount_remote_mcp
@@ -27,6 +28,7 @@ from eifo_api.routers import (
     ingest,
     me,
     meta,
+    monitoring,
     reviews,
     stats,
     syncing,
@@ -139,6 +141,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # turned away before anything else spends time on it.
     app.state.rate_buckets = Buckets()
     app.add_middleware(RateLimitMiddleware)
+    # Outermost of all, so a request the limiter turns away is counted too.
+    app.add_middleware(TrafficMiddleware)
     # The catalog surface, closed on a members-only instance. `auth` is not
     # here and must never be: a gate somebody cannot reach the sign-in through
     # is a locked building with the key inside.
@@ -159,6 +163,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(syncing.router, prefix=API_PREFIX)
     app.include_router(enriching.router, prefix=API_PREFIX)
     app.include_router(reviews.router, prefix=API_PREFIX, dependencies=gated)
+    # Not gated either: /metrics answers only to its own token, and the gate
+    # is how a browser signed in to Eifo gets into Grafana.
+    app.include_router(monitoring.router, prefix=API_PREFIX)
 
     # Before the client: its catch-all would otherwise answer /mcp and the
     # OAuth endpoints with the web app.

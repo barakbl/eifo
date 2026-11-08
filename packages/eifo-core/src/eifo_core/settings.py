@@ -359,6 +359,10 @@ class Settings(BaseSettings):
     #: (healthchecks.io, Uptime Kuma's push monitors); the URL embeds a token,
     #: which is why it belongs with the secrets. Unset means no pinging.
     healthcheck_url: SecretStr | None = None
+    #: What Prometheus must present to read ``/api/v1/metrics``, as a Bearer
+    #: token. Unset, the endpoint is not there at all. ``monitoring/deploy.sh``
+    #: generates one and hands the same value to Prometheus.
+    metrics_token: SecretStr | None = None
     google_client_id: SecretStr | None = None
     google_client_secret: SecretStr | None = None
     x_client_id: SecretStr | None = None

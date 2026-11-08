@@ -1,0 +1,17 @@
+# The dashboards in monitoring/grafana/dashboards, kept in an "Eifo" folder.
+#
+# Edits made in Grafana are kept until the file changes: a deploy with a newer
+# dashboard replaces them. To keep a change, export the dashboard's JSON and
+# move it into monitoring/grafana/build_dashboards.py.
+apiVersion: 1
+
+providers:
+  - name: eifo
+    folder: Eifo
+    folderUid: eifo
+    type: file
+    allowUiUpdates: true
+    disableDeletion: true
+    updateIntervalSeconds: 60
+    options:
+      path: /etc/grafana/dashboards

@@ -61,7 +61,17 @@ class EnrichResultTally:
     metadata_updated: int = 0
     aggregates_computed: int = 0
     by_enricher: dict[str, int] = field(default_factory=dict)
+    #: Wall-clock seconds each enricher spent, preparing its batch and looking
+    #: titles up. What tells a slow provider from a slow night.
+    seconds_by_enricher: dict[str, float] = field(default_factory=dict)
+    #: Lookups each enricher failed outright, as opposed to finding nothing.
+    errors_by_enricher: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+
+    def timed(self, enricher: str, began: float) -> None:
+        """Add the time since ``began`` to what ``enricher`` has spent."""
+        spent = time.monotonic() - began
+        self.seconds_by_enricher[enricher] = self.seconds_by_enricher.get(enricher, 0.0) + spent
 
     def as_stats(self) -> dict[str, Any]:
         return {
@@ -72,6 +82,10 @@ class EnrichResultTally:
             "metadata_updated": self.metadata_updated,
             "aggregates_computed": self.aggregates_computed,
             "by_enricher": self.by_enricher,
+            "seconds_by_enricher": {
+                key: round(seconds, 3) for key, seconds in self.seconds_by_enricher.items()
+            },
+            "errors_by_enricher": self.errors_by_enricher,
             "errors": self.errors,
             "error_count": len(self.errors),
         }
@@ -140,7 +154,7 @@ def enrich_titles(
             # whether to wait for this or go to bed: a run with nine titles due
             # and a run with five thousand look identical until it is over.
             logger.info("%d title(s) due for enrichment", len(due))
-            _prepare(enrichers, due, ctx)
+            _prepare(enrichers, due, ctx, tally)
             ticker = ProgressTicker()
             began = time.monotonic()
 
@@ -204,6 +218,8 @@ def enrich_titles(
                 "by_enricher": tally.by_enricher,
                 "ratings_found": tally.ratings_found,
                 "prices_found": tally.prices_found,
+                "seconds_by_enricher": tally.as_stats()["seconds_by_enricher"],
+                "errors_by_enricher": tally.errors_by_enricher,
             },
             log=captured.text(),
         )
@@ -297,7 +313,12 @@ def _due(api: IngestClient, wanted: int, *, force: bool) -> list[TitleView]:
     return api.titles_due(limit=min(wanted, wire.MAX_DUE_PAGE), force=force)
 
 
-def _prepare(enrichers: list[Enricher], due: list[TitleView], ctx: FetchContext) -> None:
+def _prepare(
+    enrichers: list[Enricher],
+    due: list[TitleView],
+    ctx: FetchContext,
+    tally: EnrichResultTally,
+) -> None:
     """Hand each enricher the worklist, so a batching one can fetch it at once.
 
     A failure costs that enricher its head start, not the run: whatever it
@@ -307,12 +328,15 @@ def _prepare(enrichers: list[Enricher], due: list[TitleView], ctx: FetchContext)
     if not due:
         return
     for enricher in enrichers:
+        began = time.monotonic()
         try:
             enricher.prepare(due, ctx)
         except TooManyErrorsError:
             raise
         except Exception as exc:
             ctx.record_error(f"{enricher.key} could not prepare the batch", exc=exc)
+        finally:
+            tally.timed(enricher.key, began)
 
 
 def _findings_for(
@@ -383,13 +407,17 @@ def _run_one(
     decided where the catalog is. Counting still happens here, because the
     per-enricher tally is about this run rather than about the rows.
     """
+    began = time.monotonic()
     try:
         result = enricher.enrich(view, ctx)
     except TooManyErrorsError:
         raise
     except Exception as exc:
         ctx.record_error(f"{enricher.key} failed for title {view.id}", exc=exc)
+        tally.errors_by_enricher[enricher.key] = tally.errors_by_enricher.get(enricher.key, 0) + 1
         return None
+    finally:
+        tally.timed(enricher.key, began)
 
     if result is None or result.is_empty:
         # A provider having nothing on a title is ordinary, not a failure.

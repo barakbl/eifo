@@ -1,0 +1,12 @@
+# The production proxy, reduced to what trying the stack locally needs: Eifo's
+# API running on this machine (api resolves to the host), and the same rules
+# deploy.sh puts on the server, imported from the same file.
+{
+	admin off
+	auto_https off
+}
+
+:80 {
+	import /etc/caddy/eifo-monitoring.caddy
+	reverse_proxy api:3436
+}

@@ -1,0 +1,41 @@
+# What Prometheus reads, once a minute. The fetcher's runs arrive through
+# Eifo's API wherever the fetcher runs, so scraping the API is enough to see
+# them; nothing is scraped from the fetcher's machine.
+
+global:
+  scrape_interval: 60s
+  scrape_timeout: 20s
+  evaluation_interval: 60s
+
+scrape_configs:
+  - job_name: eifo
+    metrics_path: /api/v1/metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/eifo-metrics-token
+    static_configs:
+      # Eifo's API by its compose service name, on Eifo's own network.
+      - targets: ["api:3436"]
+
+  - job_name: node
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+    metric_relabel_configs:
+      # Only what the dashboards draw. cAdvisor reports far more, and every
+      # container multiplies it.
+      - source_labels: [__name__]
+        regex: container_(cpu_usage_seconds_total|memory_working_set_bytes|memory_rss|spec_memory_limit_bytes|network_(receive|transmit)_bytes_total|start_time_seconds|last_seen|oom_events_total)
+        action: keep
+      # The cgroups that are not containers (the machine's own slices) have
+      # no name; node-exporter already speaks for the machine.
+      - source_labels: [name]
+        regex: ""
+        action: drop
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

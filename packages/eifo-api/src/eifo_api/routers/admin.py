@@ -128,9 +128,9 @@ def toggle_source(
     if source is None:
         raise HTTPException(status_code=404, detail=f"No source with key {key!r}")
 
-    was_on = _effective(source, settings)
+    was_on = source_switched_on(source, settings)
     source.enabled = body.enabled
-    now_on = _effective(source, settings)
+    now_on = source_switched_on(source, settings)
 
     if now_on and not was_on:
         source.backfill_requested_at = utcnow()
@@ -623,7 +623,7 @@ def _to_admin_source(
         website_url=source.website_url,
         active=source.active,
         enabled=source.enabled,
-        effective_enabled=_effective(source, settings),
+        effective_enabled=source_switched_on(source, settings),
         title_count=coverage.titles,
         titles_with_poster=coverage.with_poster,
         titles_with_score=coverage.with_score,
@@ -636,7 +636,7 @@ def _to_admin_source(
     )
 
 
-def _effective(source: Source, settings: Settings) -> bool:
+def source_switched_on(source: Source, settings: Settings) -> bool:
     """Whether this source is actually being collected.
 
     The same three answers the fetcher consults, in the same order: an

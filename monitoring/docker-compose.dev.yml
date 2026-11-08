@@ -1,0 +1,30 @@
+# Layered on docker-compose.yml by dev.sh, to try the stack on this machine
+# against an Eifo API started with `uv run eifo-api` (port 3436).
+#
+#   http://localhost:3480/grafana/   Grafana, through the same proxy rules
+#   http://localhost:9090/           Prometheus, directly
+#
+# "api" points at this machine instead of Eifo's container, and a Caddy stands
+# in for the server's.
+
+services:
+  prometheus:
+    extra_hosts:
+      - "api:host-gateway"
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  proxy:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    extra_hosts:
+      - "api:host-gateway"
+    ports:
+      - "127.0.0.1:3480:80"
+    volumes:
+      - ./caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - ./caddy/eifo-monitoring.caddy:/etc/caddy/eifo-monitoring.caddy:ro
+    networks:
+      - eifo
+      - monitoring

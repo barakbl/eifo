@@ -8,11 +8,19 @@ still works; it just falls back to uvicorn's own default of 8000.
 from __future__ import annotations
 
 import argparse
+import os
+import tempfile
 from collections.abc import Sequence
+from pathlib import Path
 
 import uvicorn
 
 from eifo_core.settings import get_settings
+
+#: Mirrors eifo_api.metrics.traffic.MULTIPROCESS_ENV. Not imported from there:
+#: importing prometheus_client in this process before the variable is set
+#: would fix it in single-process mode for good.
+MULTIPROCESS_ENV = "PROMETHEUS_MULTIPROC_DIR"
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -50,6 +58,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             "EIFO_AUTO_MIGRATE=false (the Docker image already has a migrate step)."
         )
 
+    if args.workers > 1:
+        _share_request_counts()
+
     uvicorn.run(
         "eifo_api.main:app",
         host=args.host,
@@ -64,6 +75,23 @@ def main(argv: Sequence[str] | None = None) -> None:
         proxy_headers=True,
         forwarded_allow_ips=settings.trusted_proxies,
     )
+
+
+def _share_request_counts() -> None:
+    """Give the workers somewhere to add up the requests they serve.
+
+    Each worker counts its own requests; without a shared directory a scrape
+    of /api/v1/metrics would report whichever worker answered it. Set before
+    uvicorn starts them, so every worker inherits it. Emptied first: counts a
+    previous run left behind belong to processes that no longer exist.
+    """
+    if os.environ.get(MULTIPROCESS_ENV):
+        directory = Path(os.environ[MULTIPROCESS_ENV])
+        directory.mkdir(parents=True, exist_ok=True)
+        for leftover in directory.glob("*.db"):
+            leftover.unlink()
+        return
+    os.environ[MULTIPROCESS_ENV] = tempfile.mkdtemp(prefix="eifo-metrics-")
 
 
 if __name__ == "__main__":

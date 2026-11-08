@@ -1,0 +1,157 @@
+# Prometheus and Grafana for an Eifo deployment, beside it on the same machine.
+#
+#   monitoring/deploy.sh                # put it on the server (see that file)
+#   monitoring/dev.sh up                # or try it on this machine first
+#
+# Its own compose project, so that it can be started, stopped or removed
+# without touching Eifo's. It meets Eifo on two networks:
+#
+#   eifo_default      Eifo's own. Prometheus joins it to scrape the API at
+#                     api:3436, inside the server, with the metrics token.
+#   eifo-monitoring   This stack's. Grafana sits only here; the one way in from
+#                     outside is the reverse proxy, which deploy.sh attaches to
+#                     it. Nothing else on Eifo's network (the blog next door,
+#                     say) can reach Grafana and claim to be somebody.
+#
+# Grafana trusts the address the proxy puts in X-Eifo-User, which the proxy
+# gets from Eifo's /api/v1/monitoring/gate. Being signed in to Eifo as an
+# administrator is being signed in here. There is no Grafana password to use.
+#
+# Read from .env next to this file (deploy.sh and dev.sh write it):
+#   EIFO_ORIGIN               https://eifo.example.com - where Grafana is served
+#   GRAFANA_ADMIN_PASSWORD    Grafana's built-in admin. Unusable through the
+#                             proxy, which offers no login form; set so it is
+#                             not admin/admin.
+#   GRAFANA_COOKIE_SECURE     true unless the origin is plain http (dev)
+#   EIFO_NETWORK              Eifo's network, if not eifo_default
+#
+# And from secrets/eifo-metrics-token: the same value as EIFO_METRICS_TOKEN in
+# Eifo's .env.
+
+name: eifo-monitoring
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # A year, or 8GB, whichever comes first. Eifo's figures are a few
+      # hundred series; the server's and the containers' are most of it.
+      - --storage.tsdb.retention.time=1y
+      - --storage.tsdb.retention.size=8GB
+      # How far back a query looks for a series' latest value. The history
+      # imported from Eifo's run records has a point an hour, not a minute,
+      # and would otherwise read as gaps between them. Live series are
+      # unaffected: Prometheus marks one stale the moment it stops appearing.
+      - --query.lookback-delta=90m
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./secrets/eifo-metrics-token:/etc/prometheus/eifo-metrics-token:ro
+      - prometheus:/prometheus
+    networks:
+      - eifo
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  grafana:
+    image: grafana/grafana:13.2.4
+    restart: unless-stopped
+    environment:
+      GF_SERVER_ROOT_URL: ${EIFO_ORIGIN:?set EIFO_ORIGIN in monitoring/.env}/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in monitoring/.env}
+      GF_SECURITY_COOKIE_SECURE: ${GRAFANA_COOKIE_SECURE:-true}
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+      # Signed in by the proxy, and only by the proxy.
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: X-Eifo-User
+      GF_AUTH_PROXY_HEADER_PROPERTY: email
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_BASIC_ENABLED: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Only Eifo's administrators get past the gate, so whoever arrives may
+      # edit dashboards and silence alerts.
+      GF_USERS_AUTO_ASSIGN_ORG_ROLE: Admin
+      # Its network has no way out, and nothing here should try.
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/eifo-plugins.json
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana:/var/lib/grafana
+    networks:
+      - monitoring
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # The machine: CPU, memory, disk, load. Reads the host's /proc and /sys
+  # through a read-only mount. It cannot see the host's network interfaces from
+  # its own network namespace; cAdvisor reports traffic per container instead.
+  node-exporter:
+    image: prom/node-exporter:v1.12.1
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|run|sys|var/lib/docker/.+|var/snap/.+)($$|/)
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - monitoring
+
+  # Each container: CPU, memory, network. Eifo, the blog, Caddy and this stack.
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.5
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=30s
+      - --enable_metrics=cpu,memory,network,oom_event
+      - --store_container_labels=false
+      - --whitelisted_container_labels=com.docker.compose.project,com.docker.compose.service
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - monitoring
+
+networks:
+  eifo:
+    name: ${EIFO_NETWORK:-eifo_default}
+    external: true
+  monitoring:
+    name: eifo-monitoring
+    # No route out: Grafana and the exporters have nobody to talk to but
+    # Prometheus and the proxy.
+    internal: true
+
+volumes:
+  prometheus:
+  grafana:

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.0](https://github.com/barakbl/eifo/compare/v0.36.0...v0.37.0) (2026-11-08)
+
+
+### Features
+
+* Prometheus and Grafana dashboards for plugins, catalog, traffic and the server ([#171](https://github.com/barakbl/eifo/issues/171)) ([92d6df2](https://github.com/barakbl/eifo/commit/92d6df2bc3b58849e1e851df7af78a1e13ccdd8e))
+
 ## [0.36.0](https://github.com/barakbl/eifo/compare/v0.35.0...v0.36.0) (2026-11-01)
 
 

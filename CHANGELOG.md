@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.36.0](https://github.com/barakbl/eifo/compare/v0.35.0...v0.36.0) (2026-11-01)
+
+
+### Features
+
+* formatted private notes, with links, emoji and an RTF download ([#169](https://github.com/barakbl/eifo/issues/169)) ([9dc7bfe](https://github.com/barakbl/eifo/commit/9dc7bfecc58f05475fa2430eb343455c768aac5b))
+
 ## [0.35.0](https://github.com/barakbl/eifo/compare/v0.34.0...v0.35.0) (2026-11-01)
 
 

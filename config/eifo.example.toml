@@ -154,6 +154,24 @@ rate_limit_rps = 1.0
 enabled = true
 rate_limit_rps = 1.0
 
+# Cellcom TV - the operator's "world of content" showcase, a dozen or so
+# titles read from its public content API (the HTML page renders nothing
+# without JavaScript). A showcase, not the library.
+[sources.cellcom_tv]
+enabled = true
+rate_limit_rps = 1.0
+
+# yes - the titles on the yes.co.il movies and series lobby pages, two
+# requests. No public API exists; this is what the marketing site lists.
+[sources.yes]
+enabled = true
+rate_limit_rps = 1.0
+
+# HOT - declared but empty: HOT publishes no catalog without a login, so a
+# sync fails with a message saying so. Left off.
+[sources.hot]
+enabled = false
+
 # Israeli Film Archive (Jerusalem Cinematheque) - the national archive's own
 # digitised collection, about 940 films: roughly half free to watch, the
 # rest sold per title, each offer carrying the price its page quotes. The

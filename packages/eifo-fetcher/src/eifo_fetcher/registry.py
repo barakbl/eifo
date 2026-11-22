@@ -32,26 +32,32 @@ __all__ = [
 
 def _builtin_plugins() -> list[SourcePlugin]:
     # Imported lazily so a broken optional dependency cannot break the CLI.
+    from eifo_fetcher.sources.cellcom_tv import CellcomTvPlugin
     from eifo_fetcher.sources.cinematheque_vod import CinemathequeVodPlugin
     from eifo_fetcher.sources.disney_plus import DisneyPlusPlugin
     from eifo_fetcher.sources.freetv import FreetvPlugin
+    from eifo_fetcher.sources.hot import HotPlugin
     from eifo_fetcher.sources.israel_film_archive import IsraelFilmArchivePlugin
     from eifo_fetcher.sources.kan import KanPlugin
     from eifo_fetcher.sources.lev_vod import LevVodPlugin
     from eifo_fetcher.sources.mako import MakoPlugin
     from eifo_fetcher.sources.reshet13 import Reshet13Plugin
     from eifo_fetcher.sources.tmdb_providers import TmdbProvidersPlugin
+    from eifo_fetcher.sources.yes import YesPlugin
 
     return [
         TmdbProvidersPlugin(),
+        CellcomTvPlugin(),
         CinemathequeVodPlugin(),
         DisneyPlusPlugin(),
         FreetvPlugin(),
+        HotPlugin(),
         IsraelFilmArchivePlugin(),
         KanPlugin(),
         LevVodPlugin(),
         MakoPlugin(),
         Reshet13Plugin(),
+        YesPlugin(),
     ]
 
 

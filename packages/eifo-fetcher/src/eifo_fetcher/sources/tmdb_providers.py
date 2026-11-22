@@ -67,6 +67,8 @@ class ProviderSource:
     verified_offer_types: tuple[OfferType, ...] = ()
     #: See :attr:`~eifo_fetcher.sources.base.SourceInfo.default_enabled`.
     default_enabled: bool = True
+    #: See :attr:`~eifo_fetcher.sources.base.SourceInfo.partial`.
+    partial: bool = False
     #: Read this catalog one release year at a time rather than in one listing.
     #:
     #: TMDB stops paging at 500 pages, which is 10,000 titles - a limit on the
@@ -131,6 +133,9 @@ PROVIDER_SOURCES: tuple[ProviderSource, ...] = (
         # and nobody upgrading should discover that by watching their nightly
         # run get longer. One toggle in the Manage tab turns it on.
         default_enabled=False,
+        # TMDB lists only what it knows of the storefront; Apple publishes no
+        # catalog of its own that we can read.
+        partial=True,
     ),
     ProviderSource(
         key="hbo_max_il",
@@ -184,6 +189,7 @@ class TmdbProvidersPlugin(SourcePlugin):
                 kind=source.kind,
                 website_url=source.website_url,
                 default_enabled=source.default_enabled,
+                partial=source.partial,
             )
             for source in PROVIDER_SOURCES
         ]

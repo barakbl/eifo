@@ -302,6 +302,9 @@ const STRINGS = {
     "mylist.where": "איפה אפשר לראות את אלה",
     "mylist.whereOf": "{count} מתוך {total}",
 
+    "source.partial": "קטלוג חלקי",
+    "source.partialHint": "הפלאגין קורא רק חלק מהקטלוג של השירות, ולכן כותר שחסר כאן אינו בהכרח חסר בשירות.",
+
     "settings.title": "הגדרות",
     "settings.services": "השירותים שלי",
     "settings.servicesHelp": "משמש לסינון ״השירותים שלי״ בקטלוג.",
@@ -776,6 +779,9 @@ const STRINGS = {
     "mylist.browse": "Browse the catalog",
     "mylist.where": "Where you could watch these",
     "mylist.whereOf": "{count} of {total}",
+
+    "source.partial": "Partial catalog",
+    "source.partialHint": "The plugin reads only part of this service's catalog, so a title missing here is not necessarily missing from the service.",
 
     "settings.title": "Settings",
     "settings.services": "My services",

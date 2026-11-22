@@ -41,6 +41,11 @@ class SourceInfo:
     #: "absent means on" would then hand an existing deployment a much longer
     #: nightly run for upgrading.
     default_enabled: bool = True
+    #: True when the plugin can read only part of the service's catalog - a
+    #: "top now" chart rather than the whole library. Such a source is useful
+    #: for what it lists, but the absence of a title from it proves nothing,
+    #: and the UI and README say so.
+    partial: bool = False
 
 
 #: Near enough to cinema's first year. The Israeli Film Archive holds material

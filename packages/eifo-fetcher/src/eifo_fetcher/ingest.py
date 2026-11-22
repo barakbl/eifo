@@ -351,6 +351,7 @@ class IngestClient:
                         "website_url": info.website_url,
                         "logo_path": info.logo_path,
                         "default_enabled": info.default_enabled,
+                        "partial": info.partial,
                     }
                     for info in declared.values()
                 ],
@@ -380,6 +381,7 @@ class IngestClient:
                 "website_url": info.website_url,
                 "logo_path": info.logo_path,
                 "default_enabled": info.default_enabled,
+                "partial": info.partial,
                 "started_at": started_at.isoformat(),
             },
         )

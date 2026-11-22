@@ -16,6 +16,19 @@ import {
 import { displayName } from "./i18n.js";
 
 /**
+ * The mark on a service that lists only part of its catalog: nothing absent
+ * from it can be taken to be missing from the service. Null when complete.
+ */
+export function partialBadge(source, t) {
+  if (!source?.partial) return null;
+  return el("span", {
+    class: "badge badge--partial",
+    text: t("source.partial"),
+    title: t("source.partialHint"),
+  });
+}
+
+/**
  * Create an element.
  *
  * `text` is assigned as a text node, so any markup in it stays literal.

@@ -125,6 +125,7 @@ class SourceOut(BaseModel):
     kind: SourceKind
     website_url: str
     logo_url: str | None = None
+    partial: bool = False
     active: bool
     deactivated_at: dt.datetime | None = None
     title_count: int = 0
@@ -651,6 +652,8 @@ class AdminSource(BaseModel):
     name: str
     kind: SourceKind
     website_url: str
+    #: The plugin reads only part of this service's catalog.
+    partial: bool = False
     active: bool
     #: The operator's override, or None when the config file decides.
     enabled: bool | None = None
@@ -738,6 +741,7 @@ class DeclaredSource(BaseModel):
     website_url: str = Field(max_length=1000)
     logo_path: str | None = Field(default=None, max_length=500)
     default_enabled: bool = True
+    partial: bool = False
 
 
 class SourceDeclaration(BaseModel):
@@ -781,6 +785,7 @@ class SyncStart(BaseModel):
     website_url: str = Field(max_length=1000)
     logo_path: str | None = Field(default=None, max_length=500)
     default_enabled: bool = True
+    partial: bool = False
     #: The fetcher's clock. The work began on its machine, which is no longer
     #: guaranteed to be this one.
     started_at: dt.datetime | None = None

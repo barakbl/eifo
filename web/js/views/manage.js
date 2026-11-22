@@ -26,7 +26,7 @@ import {
 } from "../api.js";
 import { formatDate } from "../format.js";
 import { displayName } from "../i18n.js";
-import { el, replace, stateBlock } from "../ui.js";
+import { el, partialBadge, replace, stateBlock } from "../ui.js";
 import { createReviewView } from "./review.js";
 
 const RUNS_PAGE_SIZE = 25;
@@ -467,6 +467,7 @@ function sourceRow(source, { t, language }) {
     // has no coverage yet, and every other figure on it reads as alarming
     // until this says why.
     queued,
+    partialBadge(source, t),
     source.stale ? el("span", { class: "badge badge--warn", text: t("manage.source.stale") }) : null,
     source.active ? null : el("span", { class: "badge", text: t("manage.source.retired") }),
   ].filter(Boolean);

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.1](https://github.com/barakbl/eifo/compare/v0.37.0...v0.37.1) (2026-11-22)
+
+
+### Documentation
+
+* update CLAUDE.md (mifal knowledge) ([#178](https://github.com/barakbl/eifo/issues/178)) ([8a2f9e1](https://github.com/barakbl/eifo/commit/8a2f9e159c6ff34e6fea48509de6e86261c96da7))
+
 ## [0.37.0](https://github.com/barakbl/eifo/compare/v0.36.0...v0.37.0) (2026-11-08)
 
 

@@ -317,6 +317,9 @@ class Source(TimestampMixin, Base):
     #: the fetcher was skipping it because its plugin declares itself off - the
     #: screen and the run disagreeing about the same source.
     default_enabled: Mapped[bool] = mapped_column(default=True)
+    #: The plugin reads only part of this service's catalog (see
+    #: ``SourceInfo.partial``). Written by the fetcher, shown by the web UI.
+    partial: Mapped[bool] = mapped_column(default=False)
     #: When an operator asked for this source's catalog to be pulled in full.
     #:
     #: Switching a source on is a request for its titles, not merely permission

@@ -621,6 +621,7 @@ def _to_admin_source(
         name=source.name,
         kind=source.kind,
         website_url=source.website_url,
+        partial=source.partial,
         active=source.active,
         enabled=source.enabled,
         effective_enabled=source_switched_on(source, settings),

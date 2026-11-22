@@ -207,6 +207,7 @@ def register_declared_sources(
             # A plugin that changes its own default has to be able to say so:
             # the API reads this column and cannot ask the plugin directly.
             existing.default_enabled = info.default_enabled
+            existing.partial = info.partial
             continue
         session.add(
             Source(
@@ -216,6 +217,7 @@ def register_declared_sources(
                 website_url=info.website_url,
                 logo_path=info.logo_path,
                 default_enabled=info.default_enabled,
+                partial=info.partial,
                 active=key in switched_on,
                 deactivated_at=None if key in switched_on else utcnow(),
             )

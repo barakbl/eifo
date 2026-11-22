@@ -162,6 +162,7 @@ class KanPlugin(SourcePlugin):
                 name="Kan Box (Kan 11)",
                 kind=SourceKind.FREE,
                 website_url=CATALOG_URL,
+                partial=True,
             )
         ]
 

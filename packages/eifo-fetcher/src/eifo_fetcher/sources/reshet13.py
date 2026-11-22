@@ -93,6 +93,7 @@ class Reshet13Plugin(SourcePlugin):
                 name="Reshet 13",
                 kind=SourceKind.FREE,
                 website_url=CATALOG_URL,
+                partial=True,
             )
         ]
 

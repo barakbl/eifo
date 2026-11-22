@@ -3853,3 +3853,11 @@ input {
 .connections__name {
   font-family: inherit;
 }
+
+/* A service whose plugin reads only part of its catalog. */
+.badge--partial {
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+  color: var(--fg-muted);
+  margin-inline-start: var(--space-2);
+}

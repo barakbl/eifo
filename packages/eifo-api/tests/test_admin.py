@@ -620,6 +620,7 @@ class TestTheTabAgreesWithTheFetcher:
         key: str = "apple_tv_store",
         default_enabled: bool = False,
         enabled: bool | None = None,
+        partial: bool = False,
     ) -> None:
         with factory() as session:
             session.add(
@@ -629,6 +630,7 @@ class TestTheTabAgreesWithTheFetcher:
                     kind=SourceKind.RENT_BUY,
                     website_url="https://tv.apple.com/il",
                     default_enabled=default_enabled,
+                    partial=partial,
                     enabled=enabled,
                 )
             )
@@ -665,6 +667,15 @@ class TestTheTabAgreesWithTheFetcher:
         row = self._row(client)
         assert row["enabled"] is True
         assert row["effective_enabled"] is True
+
+    def test_a_partial_catalog_says_so(
+        self, client: TestClient, admin: dict[str, str], session_factory: sessionmaker[Session]
+    ) -> None:
+        self._source(session_factory, key="top_chart", partial=True)
+        self._source(session_factory, key="whole")
+
+        assert self._row(client, "top_chart")["partial"] is True
+        assert self._row(client, "whole")["partial"] is False
 
     def test_an_ordinary_source_still_defaults_to_on(
         self, client: TestClient, admin: dict[str, str], session_factory: sessionmaker[Session]

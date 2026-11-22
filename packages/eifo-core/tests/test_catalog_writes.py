@@ -368,6 +368,21 @@ class TestDeclaringWhatThePluginsHave:
 
         assert all(row.default_enabled is False for row in session.scalars(select(Source)).all())
 
+    def test_partial_is_stored_on_create_and_follows_the_plugin(self, session: Session) -> None:
+        declared = self._declared()
+        first = next(iter(declared))
+        declared[first] = replace(declared[first], partial=True)
+        register_declared_sources(session, declared, enabled=[])
+        session.commit()
+
+        rows = {row.key: row for row in session.scalars(select(Source)).all()}
+        assert rows[first].partial is True
+        assert all(row.partial is False for key, row in rows.items() if key != first)
+
+        register_declared_sources(session, self._declared(), enabled=[])
+        session.commit()
+        assert all(row.partial is False for row in session.scalars(select(Source)).all())
+
     def test_running_it_twice_writes_nothing_the_second_time(self, session: Session) -> None:
         register_declared_sources(session, self._declared(), enabled=["on_one"])
         session.commit()

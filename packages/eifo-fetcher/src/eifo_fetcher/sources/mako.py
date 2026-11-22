@@ -57,6 +57,7 @@ class MakoPlugin(SourcePlugin):
                 name="Mako VOD (Keshet 12)",
                 kind=SourceKind.FREE,
                 website_url=f"{BASE_URL}{CATALOG_PATH}",
+                partial=True,
             )
         ]
 

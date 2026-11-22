@@ -46,8 +46,8 @@ people actually trust, and puts a search box in front of it.
   Prime Video, Apple TV, HBO Max, MUBI and Crunchyroll, the free broadcaster VODs from
   Mako, Kan Box and Reshet 13, the Tel Aviv Cinematheque's rentals, and the Israeli Film
   Archive - whose 940-film collection is half free to watch. The other Israeli operators
-  (yes+, Sting TV, HOT, Cellcom TV, Partner TV) publish nothing an honest client can
-  read - [Coverage](#coverage) says why.
+  (yes+, Sting TV, HOT, Partner TV) publish nothing an honest client can
+  read, and Cellcom TV shows only a "top now" chart (a partial catalog, plugin planned) - [Coverage](#coverage) says why.
 - **Filter by what you already pay for.** Tick your services once; the catalog narrows to
   what you can watch tonight without buying anything new. "Everything" stays one tap away.
 - **Picks for you, with the reason.** Rate what you loved and the **For you** tab offers
@@ -182,7 +182,9 @@ everyone with no sign-in at all.
 
 Which services Eifo can read, and how, grouped by what kind of service it is. **✅** has its
 own catalog surface and per-title data; **◐** is tracked but with a caveat (coverage or
-freshness); **❌** has a real catalog but no surface an honest client can reach without a
+freshness; a service whose plugin declares itself `partial` - it reads only part of the
+catalog - is also flagged **Partial catalog** in the services filter and the Manage tab);
+**❌** has a real catalog but no surface an honest client can reach without a
 paying subscriber's login - so Eifo leaves it alone rather than spoof a browser or ride
 someone's subscription ([why](#data-attribution-and-fair-use)).
 
@@ -190,7 +192,7 @@ someone's subscription ([why](#data-attribution-and-fair-use)).
 |---|---|---|---|
 | **Israeli operators** | | | *Paid subscriptions, sold here* |
 | **FreeTV** | ✅ Yes | `freetv` | Public RedGalaxy JSON API - no key needed to read the catalog. The largest single source. `platform=BROWSER` is an undocumented convention, so a portal change could break it. |
-| **Cellcom TV** | ❌ No | - | Real VOD library, but only inside the subscriber app - no honest public surface. |
+| **Cellcom TV** | ◐ Partial (planned) | `cellcom_tv` (not built yet) | Real VOD library, but only inside the subscriber app. The one public surface is the "top now in VOD" chart on [cellcom.co.il](https://cellcom.co.il/production/Private/cellcomtv/content/); a plugin would read only that chart, so it would be a **partial catalog** - a title missing from Eifo may still be on Cellcom. No plugin exists yet. |
 | **HOT / NEXT** | ❌ No | - | Catalog API is reachable, but returns nothing without a paying subscriber's credential. |
 | **yes+** | ❌ No | - | Host resets honest clients at the TLS handshake, and the catalog needs subscriber auth. |
 | **Sting+** | ❌ No | - | Sibling of yes+ - same wall. |

@@ -309,6 +309,13 @@ class TestWhatASourceDoesWhenTheFileSaysNothing:
         assert declared["apple_tv_store"].default_enabled is False
         assert declared["netflix_il"].default_enabled is True
 
+    def test_partial_catalogs_are_declared_as_such(self) -> None:
+        declared = declared_sources(discover_plugins())
+
+        assert declared["apple_tv_store"].partial is True
+        assert declared["mako"].partial is True
+        assert declared["netflix_il"].partial is False
+
 
 class _DeclaringPlugin(SourcePlugin):
     """A plugin whose sources carry their own default_enabled."""

@@ -8,7 +8,7 @@ import {
   paramsToFilters,
   sourceColorVar,
 } from "../format.js";
-import { el, replace, skeletonCards, stateBlock, titleCard } from "../ui.js";
+import { el, partialBadge, replace, skeletonCards, stateBlock, titleCard } from "../ui.js";
 
 const PAGE_SIZE = 24;
 
@@ -693,6 +693,7 @@ function serviceCombo({ state, sources, user, t, onChange, onSaveMine }) {
           box,
           el("span", { class: "combo__dot", "aria-hidden": "true" }),
           el("span", { class: "combo__name", text: source.name }),
+          partialBadge(source, t),
           source.title_count
             ? el("span", { class: "combo__count", text: String(source.title_count) })
             : null,

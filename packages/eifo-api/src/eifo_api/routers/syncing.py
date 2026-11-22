@@ -165,6 +165,7 @@ def register(
             website_url=entry.website_url,
             logo_path=entry.logo_path,
             default_enabled=entry.default_enabled,
+            partial=entry.partial,
         )
         for entry in body.sources
     }
@@ -225,6 +226,7 @@ def begin(
         website_url=body.website_url,
         logo_path=body.logo_path,
         default_enabled=body.default_enabled,
+        partial=body.partial,
     )
     source = upsert_source(session, info)
     session.flush()

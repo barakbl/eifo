@@ -426,6 +426,7 @@ def to_source(
         kind=source.kind,
         website_url=source.website_url,
         logo_url=image_url(source.logo_path),
+        partial=source.partial,
         active=source.active,
         deactivated_at=source.deactivated_at,
         title_count=title_count,

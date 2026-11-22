@@ -140,7 +140,7 @@ def parse_block_ids(page: Any) -> list[int]:
     Raises:
         CellcomCatalogError: if the page has no ``mainContentArea`` list.
     """
-    area = page.get("mainContentArea") if isinstance(page, Mapping) else None
+    area = _prop(page, "mainContentArea")
     if not isinstance(area, list):
         raise CellcomCatalogError("no 'mainContentArea' on the Cellcom page; the API changed")
     ids = [
@@ -157,7 +157,7 @@ def _is_items_block(block: Any) -> bool:
 
 
 def _entries(block: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    items = block.get("items")
+    items = _prop(block, "items", expanded=True)
     return (
         [entry for entry in items if isinstance(entry, Mapping)] if isinstance(items, list) else []
     )
@@ -165,7 +165,7 @@ def _entries(block: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 def _to_item(content: Mapping[str, Any]) -> RawItem | None:
     """Convert one ``InternalTvContentBlock``, or None if it names nothing."""
-    title = _text(content.get("title")) or _text(content.get("name"))
+    title = _text(_prop(content, "title")) or _text(content.get("name"))
     if not title:
         return None
     image = content.get("image")
@@ -188,9 +188,25 @@ def _to_item(content: Mapping[str, Any]) -> RawItem | None:
         extra={
             "kind_guessed": True,
             "image_name": file_name,
-            "summary": _text(content.get("summary")),
+            "summary": _text(_prop(content, "summary")),
         },
     )
+
+
+def _prop(obj: Any, key: str, *, expanded: bool = False) -> Any:
+    """A property's value, unwrapped from the API's ``{"value": ...}`` envelope.
+
+    The v2.0 content API wraps every property as ``{"value": ...,
+    "propertyDataType": ...}``, and a content area asked for with
+    ``expand=*`` also carries the referenced content under ``expandedValue``.
+    ``expanded`` prefers that. A bare (flat) property is returned as it is.
+    """
+    raw = obj.get(key) if isinstance(obj, Mapping) else None
+    if isinstance(raw, Mapping) and "propertyDataType" in raw:
+        if expanded and raw.get("expandedValue") is not None:
+            return raw["expandedValue"]
+        return raw.get("value")
+    return raw
 
 
 def _absolute(path: str | None) -> str | None:

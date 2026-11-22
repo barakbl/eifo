@@ -179,3 +179,61 @@ def test_source_is_a_partial_subscription() -> None:
 
     assert info.key == "cellcom_tv"
     assert info.partial is True
+
+
+def _wrapped(value: object, data_type: str, expanded: object = None) -> dict:
+    """A property the way the live v2.0 API sends it."""
+    prop: dict = {"value": value, "propertyDataType": data_type}
+    if expanded is not None:
+        prop["expandedValue"] = expanded
+    return prop
+
+
+@respx.mock
+def test_reads_the_live_apis_wrapped_properties(cellcom_ctx: FetchContext) -> None:
+    """Shaped as contentepi.cellcom.co.il answered on 2026-11-23."""
+    _mock()
+    refs = [{"displayOption": "", "tag": None, "contentLink": {"id": i}} for i in (10, 20)]
+    respx.get(f"{API_URL}/1158").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "contentType": ["Page", "TVContentsPage"],
+                "mainContentArea": _wrapped(refs, "PropertyContentArea"),
+            },
+        )
+    )
+    item = {
+        "contentLink": {"id": 26800},
+        "name": "דו קרב",
+        "contentType": ["Block", "InternalTvContentBlock"],
+        "title": _wrapped("דו קרב", "PropertyLongString"),
+        "summary": _wrapped("", "PropertyXhtmlString"),
+        "image": {
+            "value": {"id": 186855, "url": "/globalassets/tv/2.jpg"},
+            "expandedValue": {"name": "סדרות_דו-קרב.jpg", "url": "/globalassets/tv/2.jpg"},
+            "propertyDataType": "PropertyContentReference",
+        },
+    }
+    respx.get(f"{API_URL}/10", params={"expand": "*"}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "contentType": ITEMS_TYPE,
+                "items": _wrapped(
+                    [{"contentLink": {"id": 26800}}], "PropertyContentArea", expanded=[item]
+                ),
+            },
+        )
+    )
+    respx.get(f"{API_URL}/20", params={"expand": "*"}).mock(
+        return_value=httpx.Response(200, json={"contentType": ["Block", "ExternalTvContentsBlock"]})
+    )
+
+    items = _run(cellcom_ctx)
+
+    assert [i.name for i in items] == ["דו קרב"]
+    assert items[0].kind is TitleKind.SERIES
+    assert items[0].source_ref == "26800"
+    assert items[0].poster_url == "https://contentepi.cellcom.co.il/globalassets/tv/2.jpg"
+    assert items[0].extra["summary"] is None

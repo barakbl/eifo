@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.2](https://github.com/barakbl/eifo/compare/v0.37.1...v0.37.2) (2026-11-22)
+
+
+### Bug Fixes
+
+* **cellcom_tv:** unwrap the content API's property envelopes ([#181](https://github.com/barakbl/eifo/issues/181)) ([e607df7](https://github.com/barakbl/eifo/commit/e607df7bd1eab30e0b0ad272c54befdd7cf790f4))
+
 ## [0.37.1](https://github.com/barakbl/eifo/compare/v0.37.0...v0.37.1) (2026-11-22)
 
 

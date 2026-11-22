@@ -322,6 +322,9 @@ pretty() {
     reshet13) echo "Reshet 13 - needs a headless browser" ;;
     cinematheque_vod) echo "Cinematheque VOD (Tel Aviv)" ;;
     lev_vod) echo "Lev VOD (Lev cinemas)" ;;
+    cellcom_tv) echo "Cellcom TV (showcase only)" ;;
+    yes) echo "yes (lobby pages only)" ;;
+    hot) echo "HOT (no public catalog)" ;;
     israel_film_archive) echo "Israel Film Archive (Jerusalem)" ;;
     *) echo "$1" ;;
   esac

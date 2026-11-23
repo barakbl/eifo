@@ -314,7 +314,7 @@ class TestWhatASourceDoesWhenTheFileSaysNothing:
 
         assert declared["apple_tv_store"].partial is True
         assert declared["mako"].partial is True
-        for key in ("cellcom_tv", "yes", "hot"):
+        for key in ("cellcom_tv", "yes", "hot", "sting_tv"):
             assert declared[key].partial is True
             assert declared[key].kind is SourceKind.SUBSCRIPTION
         assert declared["hot"].default_enabled is False

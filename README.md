@@ -46,8 +46,8 @@ people actually trust, and puts a search box in front of it.
   Prime Video, Apple TV, HBO Max, MUBI and Crunchyroll, the free broadcaster VODs from
   Mako, Kan Box and Reshet 13, the Tel Aviv Cinematheque's rentals, and the Israeli Film
   Archive - whose 940-film collection is half free to watch. The other Israeli operators
-  (yes+, Sting TV, HOT, Partner TV) publish nothing an honest client can
-  read, and Cellcom TV shows only a "top now" chart (a partial catalog, plugin planned) - [Coverage](#coverage) says why.
+  (yes+, HOT, Partner TV) publish nothing an honest client can
+  read (Sting TV's public section pages are read as a partial catalog), and Cellcom TV shows only a "top now" chart (a partial catalog, plugin planned) - [Coverage](#coverage) says why.
 - **Filter by what you already pay for.** Tick your services once; the catalog narrows to
   what you can watch tonight without buying anything new. "Everything" stays one tap away.
 - **Picks for you, with the reason.** Rate what you loved and the **For you** tab offers
@@ -195,7 +195,7 @@ someone's subscription ([why](#data-attribution-and-fair-use)).
 | **Cellcom TV** | ◐ Partial (planned) | `cellcom_tv` (not built yet) | Real VOD library, but only inside the subscriber app. The one public surface is the "top now in VOD" chart on [cellcom.co.il](https://cellcom.co.il/production/Private/cellcomtv/content/); a plugin would read only that chart, so it would be a **partial catalog** - a title missing from Eifo may still be on Cellcom. No plugin exists yet. |
 | **HOT / NEXT** | ❌ No | - | Catalog API is reachable, but returns nothing without a paying subscriber's credential. |
 | **yes+** | ❌ No | - | Host resets honest clients at the TLS handshake, and the catalog needs subscriber auth. |
-| **Sting+** | ❌ No | - | Sibling of yes+ - same wall. |
+| **Sting TV** | ◐ Partial | `sting_tv` | The public section pages on stingtv.co.il (movies, series, kids, docu, israeli) list a few hundred titles as server-rendered tiles: five requests. Tiles carry a Hebrew name and a poster only - no year, no per-title page (links go to the section) - and the kind comes from the section. Overlaps `yes`. |
 | **Partner TV** | ❌ No | - | App host is closed to honest clients; the web player is login-gated. |
 | **Global streamers** | | | *Israeli catalogs* |
 | **Netflix** (IL) | ✅ Yes | `tmdb-providers` | Availability from JustWatch via the [TMDB API](#install) - **free key required**. The "watch" link goes to TMDB's per-title page, not the service's player; refreshed daily. |

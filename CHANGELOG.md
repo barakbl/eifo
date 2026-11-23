@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.37.3](https://github.com/barakbl/eifo/compare/v0.37.2...v0.37.3) (2026-11-23)
+
+
+### Documentation
+
+* catalog safety rules for source plugins in CLAUDE.md ([#186](https://github.com/barakbl/eifo/issues/186)) ([4ced5aa](https://github.com/barakbl/eifo/commit/4ced5aa8b73965523ed2feac23782aac8731ed3f))
+
 ## [0.37.2](https://github.com/barakbl/eifo/compare/v0.37.1...v0.37.2) (2026-11-22)
 
 

@@ -42,6 +42,7 @@ def _builtin_plugins() -> list[SourcePlugin]:
     from eifo_fetcher.sources.lev_vod import LevVodPlugin
     from eifo_fetcher.sources.mako import MakoPlugin
     from eifo_fetcher.sources.reshet13 import Reshet13Plugin
+    from eifo_fetcher.sources.sting_tv import StingTvPlugin
     from eifo_fetcher.sources.tmdb_providers import TmdbProvidersPlugin
     from eifo_fetcher.sources.yes import YesPlugin
 
@@ -57,6 +58,7 @@ def _builtin_plugins() -> list[SourcePlugin]:
         LevVodPlugin(),
         MakoPlugin(),
         Reshet13Plugin(),
+        StingTvPlugin(),
         YesPlugin(),
     ]
 

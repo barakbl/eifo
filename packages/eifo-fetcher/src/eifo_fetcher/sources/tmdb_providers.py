@@ -92,8 +92,8 @@ class ProviderSource:
 #: this is - does not track yes+, Sting TV, HOT, Cellcom TV or Partner TV at
 #: all: they appear nowhere in TMDB's region-IL provider list, so every one of
 #: them returned zero. Reaching them needs a dedicated plugin per operator, the
-#: way Mako has one: ``cellcom_tv``, ``yes`` and ``hot`` are those plugins (the
-#: last only declares the source, as HOT publishes nothing readable). See
+#: way Mako has one: ``cellcom_tv``, ``yes``, ``sting_tv`` and ``hot`` are those plugins
+#: (the last only declares the source, as HOT publishes nothing readable). See
 #: docs.internal/03-sources.md.
 PROVIDER_SOURCES: tuple[ProviderSource, ...] = (
     ProviderSource(

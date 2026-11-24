@@ -61,7 +61,8 @@ admin_emails = []
 # Covered by the tmdb-providers harvester (JustWatch data, region IL).
 # The Israeli operators (yes+, Sting TV, HOT, Cellcom TV, Partner TV) are NOT
 # here: JustWatch does not track them, so they would sync cleanly and stay
-# empty forever. See docs.internal/03-sources.md.
+# empty forever. The ones with a readable site have their own plugin below.
+# See docs.internal/03-sources.md.
 [sources.netflix_il]
 enabled = true
 # max_pages = 500  # pages per media type; lower to bound a run you cannot afford.
@@ -164,6 +165,13 @@ rate_limit_rps = 1.0
 # yes - the titles on the yes.co.il movies and series lobby pages, two
 # requests. No public API exists; this is what the marketing site lists.
 [sources.yes]
+enabled = true
+rate_limit_rps = 1.0
+
+# Sting TV (+STING) - the tiles on the five stingtv.co.il section pages (movies,
+# series, kids, docu, israeli): five requests. No per-title pages exist, so
+# links go to the section; the movie/series split comes from the section.
+[sources.sting_tv]
 enabled = true
 rate_limit_rps = 1.0
 

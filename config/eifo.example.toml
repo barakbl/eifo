@@ -243,7 +243,8 @@ retry_days = 30          # wait after nobody could rate a title; doubles each ti
 retry_error_days = 1     # wait after a provider failed rather than came back empty
 retry_max_days = 365     # ceiling on those doublings
 disabled = []            # enricher keys to switch off, e.g. ["rt"]
-enabled = []             # providers that are otherwise off by default
+enabled = []             # providers that are otherwise off by default; "sratim" is off
+                         # because its terms forbid scraping - enable only with permission
 
 # How hard each scraped provider leans on somebody's website, by enricher key.
 # TMDB is absent on purpose: it is an API built to be called and has its own
@@ -251,6 +252,8 @@ enabled = []             # providers that are otherwise off by default
 [enrich.rate_limits]
 rt = 1.0
 seret = 0.5
+sratim = 0.2
+timeout_tlv = 0.5
 
 # ---------------------------------------------------------------------------
 # Seret (Israeli ratings)

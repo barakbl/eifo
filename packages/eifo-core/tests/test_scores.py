@@ -132,10 +132,12 @@ class TestIsraeliAggregate:
 
         assert result.score_israeli is None
 
-    def test_only_seret_and_edb_count_as_israeli(self) -> None:
+    def test_only_israeli_providers_count_as_israeli(self) -> None:
         assert P.SERET_CRITICS.is_israeli
         assert P.SERET_VIEWERS.is_israeli
         assert P.EDB.is_israeli
+        assert P.SRATIM.is_israeli
+        assert P.TIMEOUT_TLV.is_israeli
         assert not P.IMDB.is_israeli
         assert not P.TMDB.is_israeli
         assert not P.RT_CRITICS.is_israeli

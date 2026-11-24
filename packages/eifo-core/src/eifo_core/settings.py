@@ -60,6 +60,8 @@ class ScoreWeights(BaseModel):
     seret_critics: float = 2.0
     seret_viewers: float = 1.0
     edb: float = 0.5
+    sratim: float = 0.5
+    timeout_tlv: float = 1.0
 
 
 class ScoresConfig(BaseModel):

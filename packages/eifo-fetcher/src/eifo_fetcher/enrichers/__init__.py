@@ -35,6 +35,8 @@ def _builtin_enrichers(seret_lookup: SeretLookup | None = None) -> list[Enricher
     from eifo_fetcher.enrichers.apple_prices import ApplePricesEnricher
     from eifo_fetcher.enrichers.rt import RottenTomatoesEnricher
     from eifo_fetcher.enrichers.seret import SeretEnricher
+    from eifo_fetcher.enrichers.sratim import SratimEnricher
+    from eifo_fetcher.enrichers.timeout_tlv import TimeOutTelAvivEnricher
     from eifo_fetcher.enrichers.tmdb_meta import TmdbMetadataEnricher
 
     # TMDB first: it fills the imdb_id and names the others resolve against.
@@ -42,6 +44,8 @@ def _builtin_enrichers(seret_lookup: SeretLookup | None = None) -> list[Enricher
         TmdbMetadataEnricher(),
         SeretEnricher(seret_lookup),
         RottenTomatoesEnricher(),
+        SratimEnricher(),
+        TimeOutTelAvivEnricher(),
         # Last: it adds nothing to a title, only a price and a link to an offer
         # somebody else already found, so nothing downstream waits on it.
         ApplePricesEnricher(),
@@ -50,10 +54,9 @@ def _builtin_enrichers(seret_lookup: SeretLookup | None = None) -> list[Enricher
 
 #: Providers switched off unless configuration enables them.
 #:
-#: Empty. Seret used to be here because it had no way to resolve a title to a
-#: page; it now resolves through the index built by ``eifo-fetch seret index``,
-#: and an unbuilt index costs nothing and says so rather than misbehaving.
-DISABLED_BY_DEFAULT: frozenset[str] = frozenset()
+#: Sratim only: its terms of use forbid scraping without the operators'
+#: approval, so it runs only when ``[enrich] enabled`` names it.
+DISABLED_BY_DEFAULT: frozenset[str] = frozenset({"sratim"})
 
 
 def _entry_point_enrichers() -> list[Enricher]:

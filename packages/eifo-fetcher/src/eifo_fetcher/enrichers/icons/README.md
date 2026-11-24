@@ -25,3 +25,5 @@ at that height is a stripe rather than a logo.
 If a provider's mark cannot be shipped — the terms disallow it, or there is no
 usable file — leave `icon` unset. The chip says the provider's name instead,
 which is what it did before any of this existed.
+| `sratim.svg` | סרטים | A placeholder monogram drawn for this project, not Sratim's own mark |
+| `timeout.svg` | Time Out תל אביב | A placeholder monogram drawn for this project, not Time Out's own mark |

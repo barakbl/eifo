@@ -53,6 +53,8 @@ class RatingProvider(StrEnum):
     SERET_CRITICS = "seret_critics"
     SERET_VIEWERS = "seret_viewers"
     EDB = "edb"
+    SRATIM = "sratim"
+    TIMEOUT_TLV = "timeout_tlv"
 
     @property
     def is_israeli(self) -> bool:
@@ -61,7 +63,13 @@ class RatingProvider(StrEnum):
 
 
 _ISRAELI_PROVIDERS = frozenset(
-    {RatingProvider.SERET_CRITICS, RatingProvider.SERET_VIEWERS, RatingProvider.EDB}
+    {
+        RatingProvider.SERET_CRITICS,
+        RatingProvider.SERET_VIEWERS,
+        RatingProvider.EDB,
+        RatingProvider.SRATIM,
+        RatingProvider.TIMEOUT_TLV,
+    }
 )
 
 

@@ -709,6 +709,8 @@ rt_audience = 1.0
 tmdb = 1.0
 seret_viewers = 1.0
 edb = 0.5
+sratim = 0.5
+timeout_tlv = 1.0
 
 [scores.min_votes]
 seret_viewers = 10

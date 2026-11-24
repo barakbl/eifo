@@ -874,7 +874,7 @@ class TestSkippingAnEnricherForOneRun:
         # The whole line, not a prefix of it: asserting a prefix would keep
         # passing when a fourth enricher joined and say nothing about it.
         line = caplog.text.split("enriching with: ")[1].split("\n")[0]
-        assert line == "tmdb, seret, rt, apple_prices"
+        assert line == "tmdb, seret, rt, timeout_tlv, apple_prices"
 
     def test_one_can_be_left_out(
         self, api: IngestClient, settings: Settings, http: HttpClient, caplog: Any
@@ -894,7 +894,7 @@ class TestSkippingAnEnricherForOneRun:
                 settings,
                 http,
                 skip_imdb=True,
-                skip=["RT", " tmdb ", "Seret", "Apple_Prices"],
+                skip=["RT", " tmdb ", "Seret", "Apple_Prices", "Timeout_TLV"],
             )
 
         assert "enriching with: nothing" in caplog.text
@@ -1008,7 +1008,7 @@ class TestNarrowingARunToOneEnricher:
         with caplog.at_level(logging.INFO, logger="eifo.fetch.runner"):
             self._run(api, settings, http, skip_imdb=True, only=[])
 
-        assert "enriching with: tmdb, seret, rt, apple_prices" in caplog.text
+        assert "enriching with: tmdb, seret, rt, timeout_tlv, apple_prices" in caplog.text
 
 
 class TestWhatIsOnOffer:

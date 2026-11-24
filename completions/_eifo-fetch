@@ -35,6 +35,7 @@ _eifo_enrichers() {
     'rt:Rotten Tomatoes - scraped, and by far the slowest'
     'tmdb:TMDB ratings and metadata'
     'seret:Seret - Israeli ratings'
+    'timeout_tlv:Time Out Tel Aviv'
     'apple_prices:Apple TV rental and purchase prices'
     'imdb:the IMDb dataset download'
     'seret-index:the Seret page index crawl'

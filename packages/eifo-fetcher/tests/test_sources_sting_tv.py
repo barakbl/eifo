@@ -5,12 +5,14 @@ from __future__ import annotations
 import httpx
 import pytest
 import respx
+from recorded import load_fixture
 
 from eifo_core.enums import OfferType, SourceKind, TitleKind
 from eifo_core.settings import Settings
 from eifo_fetcher.robots import RobotsDisallowedError
 from eifo_fetcher.sources.base import FetchContext, RawItem
 from eifo_fetcher.sources.sting_tv import (
+    CATALOG_URL,
     SECTION_URLS,
     StingCatalogError,
     StingTvPlugin,
@@ -172,3 +174,104 @@ def test_declares_a_partial_subscription_source() -> None:
     assert info.key == "sting_tv"
     assert info.kind is SourceKind.SUBSCRIPTION
     assert info.partial is True
+
+
+# ---- recorded pages (trimmed copies of the live sections, 2026-11-24) ----------------------
+
+
+def _recorded(section: str, kind: TitleKind) -> dict[str, RawItem]:
+    url = f"{CATALOG_URL}{section}/"
+    return {
+        i.name: i for i in parse_section(load_fixture("sting_tv", f"{section}.html"), url, kind)
+    }
+
+
+def test_recorded_movies_page() -> None:
+    items = _recorded("movies", TitleKind.MOVIE)
+
+    assert set(items) == {"אישה יפה", "הארי המזוהם", "הצלפים"}
+    assert items["אישה יפה"].source_ref == "vp000381437"
+    assert items["הצלפים"].extra["listed_as"] == "הצלפים (קלינט איסטווד)"
+    assert all(i.kind is TitleKind.MOVIE for i in items.values())
+    assert all(
+        i.poster_url and i.poster_url.startswith("https://www.stingtv.co.il/")
+        for i in items.values()
+    )
+
+
+def test_recorded_series_page_drops_the_season_from_the_name() -> None:
+    items = _recorded("series", TitleKind.SERIES)
+
+    assert set(items) == {"הבוזגלוס", "לעבור את הלילה", "יוניקורן"}  # not "הבוזגלוס - עונה 4"
+    show = items["הבוזגלוס"]
+    assert show.extra == {"listed_as": "הבוזגלוס - עונה 4", "season": 4}
+    assert show.source_ref == "הבוזגלוס"  # each season has its own poster; the show is one title
+    assert show.poster_url and show.poster_url.endswith("/vp000976258.jpg")
+    assert items["יוניקורן"].source_ref == "vp001401626"
+    assert _recorded("docu", TitleKind.SERIES)["ההיסטוריה של הקומדיה"].extra["season"] == 1
+
+
+def test_two_seasons_of_one_show_are_one_title() -> None:
+    html = _page(_tile("לה פמיליה - עונה 3", "vp7"), _tile("לה פמיליה \u2013 עונה 2", "vp8"))
+
+    (item,) = parse_section(html, SECTION_URLS[1], TitleKind.SERIES)
+
+    assert item.name == "לה פמיליה" and item.extra["season"] == 3
+
+
+def test_a_season_word_without_a_number_is_dropped_too() -> None:
+    html = _page(_tile("מתוקה שואלת ליאת הפסיכולוגית עונה", "vp9"))
+
+    (item,) = parse_section(html, SECTION_URLS[1], TitleKind.SERIES)
+
+    assert item.name == "מתוקה שואלת ליאת הפסיכולוגית" and "season" not in item.extra
+
+
+def test_a_movie_keeps_a_season_like_ending() -> None:
+    (item,) = parse_section(_page(_tile("הקיץ - עונה 1", "vp10")), SECTION_URLS[0], TitleKind.MOVIE)
+
+    assert item.name == "הקיץ - עונה 1" and item.source_ref == "vp10"
+
+
+def test_posters_are_only_taken_from_sting_itself() -> None:
+    elsewhere = _page(
+        _tile("א", None).replace(
+            "<h2", '<img itemprop="image" data-src="https://evil.example/vp1.jpg"><h2'
+        ),
+        _tile("ב", None).replace(
+            "<h2", '<img itemprop="image" data-src="http://10.0.0.1/vp2.jpg"><h2'
+        ),
+        _tile("ג", None).replace(
+            "<h2", '<img itemprop="image" data-src="http://www.stingtv.co.il/i/vp3.jpg"><h2'
+        ),
+        _tile("ד", None).replace("<h2", '<img itemprop="image" data-src="/i/vp4.jpg"><h2'),
+    )
+
+    items = {i.name: i for i in parse_section(elsewhere, SECTION_URLS[0], TitleKind.MOVIE)}
+
+    assert items["א"].poster_url is None and items["א"].source_ref == "א"
+    assert items["ב"].poster_url is None
+    assert (
+        items["ג"].poster_url == "https://www.stingtv.co.il/i/vp3.jpg"
+    )  # same site, upgraded to https
+    assert items["ד"].poster_url == "https://www.stingtv.co.il/i/vp4.jpg"
+
+
+@respx.mock
+def test_a_section_that_keeps_failing_fails_the_sync(sting_ctx: FetchContext) -> None:
+    """Never skip a failed section: an OK sync without it would retire its offers."""
+    _mock()
+    respx.get(SECTION_URLS[1]).mock(return_value=httpx.Response(503))
+
+    with pytest.raises(httpx.HTTPError):
+        _run(sting_ctx)
+
+
+@respx.mock
+def test_a_503_that_clears_on_retry_is_read(sting_ctx: FetchContext) -> None:
+    _mock()
+    respx.get(SECTION_URLS[1]).mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, text=SERIES)]
+    )
+
+    assert "vp5" in {i.source_ref for i in _run(sting_ctx)}

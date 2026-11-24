@@ -11,8 +11,11 @@ holding every title as a tile::
 Limits, stated plainly: the tiles have no link to a per-title page, so the deep link
 is the section page; the Hebrew name is all there is (no year, no English title, and
 sometimes a note in parentheses such as an actor's name); and the movie/series
-distinction comes from the section - ``movies`` is movies, the rest are series. The
-poster's file id (``vp000381437``) identifies a title across sections. Nothing says
+distinction comes from the section - ``movies`` is movies, the rest are series. A
+series tile may name its season (``הבוזגלוס - עונה 4``); the season is dropped from the
+name, which is what matches a title, and kept in ``extra``. The poster's file id
+(``vp000381437``) identifies a title across sections, except for a season tile: each
+season has its own poster, so the show's name is its reference. Nothing says
 which yes product carries a title, so every offer is a plain subscription stream.
 Hence :attr:`~eifo_core.items.SourceInfo.partial`.
 """
@@ -23,7 +26,7 @@ import logging
 import re
 from collections.abc import Iterator
 from html.parser import HTMLParser
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from eifo_core.enums import OfferType, SourceKind, TitleKind
 from eifo_fetcher.http import USER_AGENT
@@ -50,6 +53,8 @@ _TRAILING_YEAR = re.compile(r"\s*\((\d{4})\)\s*$")
 #: "(קלינט איסטווד)" - a note after the title, not part of it.
 _TRAILING_NOTE = re.compile(r"\s*\([^()]*\)\s*$")
 _POSTER_ID = re.compile(r"([^/?#]+?)\.[A-Za-z0-9]+(?:[?#].*)?$")
+#: "הבוזגלוס - עונה 4", and once "... הפסיכולוגית עונה" with the number missing.
+_TRAILING_SEASON = re.compile(r"\s+(?:[-\u2013\u2014]\s*)?עונה(?:\s+(\d{1,2}))?\s*$")
 
 
 class StingCatalogError(RuntimeError):
@@ -86,7 +91,7 @@ class _SectionParser(HTMLParser):
             self._tile.alt = " ".join((values.get("alt") or "").split())
             src = values.get("data-src") or values.get("src")
             if src and self._tile.poster is None:
-                self._tile.poster = urljoin(self._base_url, src)
+                self._tile.poster = _own_poster(urljoin(self._base_url, src))
         elif tag == "h2" and values.get("itemprop") == "name":
             self._in_name = True
 
@@ -122,6 +127,11 @@ class StingTvPlugin(SourcePlugin):
         for (_, kind), url in zip(SECTIONS, SECTION_URLS, strict=True):
             ctx.apply_rate_limit(HOST)
             robots.require_allowed(url)
+            # Deliberately not caught: a section that still fails after the client's
+            # retries must fail the sync. A sync that skipped it would end OK, and the
+            # sweep would retire that section's offers after two such nights - one
+            # section of five is too small a drop to trip the volume guard. A failed
+            # sync keeps everything (CLAUDE.md, "Catalog safety").
             html = ctx.http.get(url).text
             for item in parse_section(html, url, kind):
                 found += 1
@@ -150,15 +160,38 @@ def parse_section(html: str, page_url: str, kind: TitleKind) -> list[RawItem]:
     return list(items.values())
 
 
+def _own_poster(url: str) -> str | None:
+    """The poster URL when it is on Sting's own site, as https; None for any other host.
+
+    The page is remote input: a changed or compromised page must not be able to point the
+    image downloader at an arbitrary host.
+    """
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    if parts.scheme not in ("http", "https") or not (
+        host == "stingtv.co.il" or host.endswith(".stingtv.co.il")
+    ):
+        return None
+    return parts._replace(scheme="https").geturl()
+
+
 def _to_item(kind: TitleKind, page_url: str, tile: _Tile) -> RawItem | None:
     text = " ".join(tile.name) or tile.alt
     year_match = _TRAILING_YEAR.search(text)
     year = int(year_match.group(1)) if year_match else None
     name = _TRAILING_NOTE.sub("", text).strip()
+    season_match = _TRAILING_SEASON.search(name) if kind is not TitleKind.MOVIE else None
+    if season_match:
+        name = name[: season_match.start()].strip()
     if not name:
         return None
     poster_match = _POSTER_ID.search(tile.poster) if tile.poster else None
     poster_id = poster_match.group(1) if poster_match else None
+    extra: dict[str, object] = {"listed_as": text}
+    if season_match:
+        poster_id = None  # every season has its own poster; the show is one title
+        if season_match.group(1):
+            extra["season"] = int(season_match.group(1))
     return RawItem(
         source_key=SOURCE_KEY,
         kind=kind,
@@ -168,5 +201,5 @@ def _to_item(kind: TitleKind, page_url: str, tile: _Tile) -> RawItem | None:
         deep_link_url=page_url,
         source_ref=poster_id or name,
         poster_url=tile.poster,
-        extra={"listed_as": text},
+        extra=extra,
     )
